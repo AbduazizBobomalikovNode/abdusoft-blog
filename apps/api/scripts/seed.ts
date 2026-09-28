@@ -138,10 +138,19 @@ async function seedPosts(tagIds: Map<string, string>) {
   }
 }
 
+// Prod deploy'da 2 ta namunaviy post SHART EMAS — admin va teglar yetarli.
+// Default o'zgarmagan (true): dev/local workflow buzilmasligi uchun. Prod'da
+// server env'ida SEED_SAMPLE_POSTS=false qo'yiladi.
+const SEED_SAMPLE_POSTS = process.env.SEED_SAMPLE_POSTS !== "false";
+
 async function main() {
   await seedAdmin();
   const tagIds = await seedTags();
-  await seedPosts(tagIds);
+  if (SEED_SAMPLE_POSTS) {
+    await seedPosts(tagIds);
+  } else {
+    console.log("SEED_SAMPLE_POSTS=false — namunaviy postlar o'tkazib yuborildi.");
+  }
   console.log("Seed jarayoni yakunlandi.");
 }
 
