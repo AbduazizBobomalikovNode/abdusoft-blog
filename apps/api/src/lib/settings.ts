@@ -475,10 +475,30 @@ function validateUrlField(value: string): string | null {
   }
 }
 
-function assertNotEnvLocked(section: string, field: string, admin: SettingsAdmin, errors: Record<string, string>): boolean {
+function normalizeForCompare(value: unknown): string {
+  if (Array.isArray(value)) return value.map(String).join(",");
+  return value === null || value === undefined ? "" : String(value).trim();
+}
+
+/**
+ * Env'dan qulflangan maydonni DB'ga yozishga yo'l qo'ymaydi. UI bo'limni butunligicha
+ * yuboradi — shu sabab qulflangan maydonning O'ZGARMAGAN qiymati (yoki maska) kelsa,
+ * u jimgina e'tiborsiz qoldiriladi (xato emas). Faqat haqiqatan boshqa qiymat
+ * yuborilganda xato qaytadi.
+ */
+function assertNotEnvLocked(
+  section: string,
+  field: string,
+  admin: SettingsAdmin,
+  errors: Record<string, string>,
+  incoming?: unknown,
+): boolean {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic section lookup
-  const current = (admin as any)[section]?.[field] as { source: SettingSource; envVar: string | null } | undefined;
+  const current = (admin as any)[section]?.[field] as { source: SettingSource; envVar: string | null; value?: unknown } | undefined;
   if (current?.source === "env") {
+    if (incoming !== undefined && normalizeForCompare(incoming) === normalizeForCompare(current.value)) {
+      return false; // o'zgarmagan — yozilmaydi, xato ham emas
+    }
     errors[`${section}.${field}`] = `env'dan qulflangan (${current.envVar}) — admin panelda o'zgartirib bo'lmaydi`;
     return false;
   }
@@ -494,12 +514,12 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
   if (patch.telegram) {
     const p: TelegramSettingsPatch = patch.telegram;
     const next: TelegramRaw = { ...raw.telegram };
-    if (p.botToken !== undefined && assertNotEnvLocked("telegram", "botToken", admin, errors)) {
+    if (p.botToken !== undefined && assertNotEnvLocked("telegram", "botToken", admin, errors, p.botToken)) {
       const action = secretAction(p.botToken);
       if (action === "set") next.botToken = encryptSecret(p.botToken!);
       else if (action === "clear") next.botToken = "";
     }
-    if (p.webhookSecret !== undefined && assertNotEnvLocked("telegram", "webhookSecret", admin, errors)) {
+    if (p.webhookSecret !== undefined && assertNotEnvLocked("telegram", "webhookSecret", admin, errors, p.webhookSecret)) {
       const action = secretAction(p.webhookSecret);
       if (action === "set") {
         if (p.webhookSecret!.length < MIN_WEBHOOK_SECRET_LENGTH) {
@@ -509,20 +529,20 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
         }
       } else if (action === "clear") next.webhookSecret = "";
     }
-    if (p.adminChatId !== undefined && assertNotEnvLocked("telegram", "adminChatId", admin, errors)) {
+    if (p.adminChatId !== undefined && assertNotEnvLocked("telegram", "adminChatId", admin, errors, p.adminChatId)) {
       next.adminChatId = p.adminChatId;
     }
-    if (p.adminUserIds !== undefined && assertNotEnvLocked("telegram", "adminUserIds", admin, errors)) {
+    if (p.adminUserIds !== undefined && assertNotEnvLocked("telegram", "adminUserIds", admin, errors, p.adminUserIds)) {
       const err = validateAdminUserIds(p.adminUserIds);
       if (err) errors["telegram.adminUserIds"] = err;
       else next.adminUserIds = p.adminUserIds;
     }
-    if (p.channelId !== undefined && assertNotEnvLocked("telegram", "channelId", admin, errors)) {
+    if (p.channelId !== undefined && assertNotEnvLocked("telegram", "channelId", admin, errors, p.channelId)) {
       const err = validateChannelId(p.channelId);
       if (err) errors["telegram.channelId"] = err;
       else next.channelId = p.channelId;
     }
-    if (p.apiRoot !== undefined && assertNotEnvLocked("telegram", "apiRoot", admin, errors)) {
+    if (p.apiRoot !== undefined && assertNotEnvLocked("telegram", "apiRoot", admin, errors, p.apiRoot)) {
       const err = validateUrlField(p.apiRoot);
       if (err) errors["telegram.apiRoot"] = err;
       else next.apiRoot = p.apiRoot;
@@ -544,11 +564,11 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
   if (patch.telegraph) {
     const p: TelegraphSettingsPatch = patch.telegraph;
     const next: TelegraphRaw = { ...raw.telegraph };
-    if (p.enabled !== undefined && assertNotEnvLocked("telegraph", "enabled", admin, errors)) {
+    if (p.enabled !== undefined && assertNotEnvLocked("telegraph", "enabled", admin, errors, p.enabled)) {
       next.enabled = p.enabled;
     }
     await upsertSiteSetting(KEY_TELEGRAPH, next);
-    if (p.accessToken !== undefined && assertNotEnvLocked("telegraph", "accessToken", admin, errors)) {
+    if (p.accessToken !== undefined && assertNotEnvLocked("telegraph", "accessToken", admin, errors, p.accessToken)) {
       const action = secretAction(p.accessToken);
       if (action === "set") await storeTelegraphToken(p.accessToken!);
       else if (action === "clear") await storeTelegraphToken("");
@@ -559,15 +579,15 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
   if (patch.turnstile) {
     const p: TurnstileSettingsPatch = patch.turnstile;
     const next: TurnstileRaw = { ...raw.turnstile };
-    if (p.siteKey !== undefined && assertNotEnvLocked("turnstile", "siteKey", admin, errors)) {
+    if (p.siteKey !== undefined && assertNotEnvLocked("turnstile", "siteKey", admin, errors, p.siteKey)) {
       next.siteKey = p.siteKey;
     }
-    if (p.secretKey !== undefined && assertNotEnvLocked("turnstile", "secretKey", admin, errors)) {
+    if (p.secretKey !== undefined && assertNotEnvLocked("turnstile", "secretKey", admin, errors, p.secretKey)) {
       const action = secretAction(p.secretKey);
       if (action === "set") next.secretKey = encryptSecret(p.secretKey!);
       else if (action === "clear") next.secretKey = "";
     }
-    if (p.required !== undefined && assertNotEnvLocked("turnstile", "required", admin, errors)) {
+    if (p.required !== undefined && assertNotEnvLocked("turnstile", "required", admin, errors, p.required)) {
       next.required = p.required;
     }
     if (Object.keys(errors).filter((k) => k.startsWith("turnstile.")).length === 0) {
@@ -579,15 +599,15 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
   if (patch.r2) {
     const p: R2SettingsPatch = patch.r2;
     const next: R2Raw = { ...raw.r2 };
-    if (p.accountId !== undefined && assertNotEnvLocked("r2", "accountId", admin, errors)) next.accountId = p.accountId;
-    if (p.accessKeyId !== undefined && assertNotEnvLocked("r2", "accessKeyId", admin, errors)) next.accessKeyId = p.accessKeyId;
-    if (p.secretAccessKey !== undefined && assertNotEnvLocked("r2", "secretAccessKey", admin, errors)) {
+    if (p.accountId !== undefined && assertNotEnvLocked("r2", "accountId", admin, errors, p.accountId)) next.accountId = p.accountId;
+    if (p.accessKeyId !== undefined && assertNotEnvLocked("r2", "accessKeyId", admin, errors, p.accessKeyId)) next.accessKeyId = p.accessKeyId;
+    if (p.secretAccessKey !== undefined && assertNotEnvLocked("r2", "secretAccessKey", admin, errors, p.secretAccessKey)) {
       const action = secretAction(p.secretAccessKey);
       if (action === "set") next.secretAccessKey = encryptSecret(p.secretAccessKey!);
       else if (action === "clear") next.secretAccessKey = "";
     }
-    if (p.bucket !== undefined && assertNotEnvLocked("r2", "bucket", admin, errors)) next.bucket = p.bucket;
-    if (p.publicUrl !== undefined && assertNotEnvLocked("r2", "publicUrl", admin, errors)) {
+    if (p.bucket !== undefined && assertNotEnvLocked("r2", "bucket", admin, errors, p.bucket)) next.bucket = p.bucket;
+    if (p.publicUrl !== undefined && assertNotEnvLocked("r2", "publicUrl", admin, errors, p.publicUrl)) {
       const err = validateUrlField(p.publicUrl);
       if (err) errors["r2.publicUrl"] = err;
       else next.publicUrl = p.publicUrl;
@@ -601,24 +621,24 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
   if (patch.umami) {
     const p: UmamiSettingsPatch = patch.umami;
     const next: UmamiRaw = { ...raw.umami };
-    if (p.apiUrl !== undefined && assertNotEnvLocked("umami", "apiUrl", admin, errors)) {
+    if (p.apiUrl !== undefined && assertNotEnvLocked("umami", "apiUrl", admin, errors, p.apiUrl)) {
       const err = validateUrlField(p.apiUrl);
       if (err) errors["umami.apiUrl"] = err;
       else next.apiUrl = p.apiUrl;
     }
-    if (p.websiteId !== undefined && assertNotEnvLocked("umami", "websiteId", admin, errors)) next.websiteId = p.websiteId;
-    if (p.scriptUrl !== undefined && assertNotEnvLocked("umami", "scriptUrl", admin, errors)) {
+    if (p.websiteId !== undefined && assertNotEnvLocked("umami", "websiteId", admin, errors, p.websiteId)) next.websiteId = p.websiteId;
+    if (p.scriptUrl !== undefined && assertNotEnvLocked("umami", "scriptUrl", admin, errors, p.scriptUrl)) {
       const err = validateUrlField(p.scriptUrl);
       if (err) errors["umami.scriptUrl"] = err;
       else next.scriptUrl = p.scriptUrl;
     }
-    if (p.apiKey !== undefined && assertNotEnvLocked("umami", "apiKey", admin, errors)) {
+    if (p.apiKey !== undefined && assertNotEnvLocked("umami", "apiKey", admin, errors, p.apiKey)) {
       const action = secretAction(p.apiKey);
       if (action === "set") next.apiKey = encryptSecret(p.apiKey!);
       else if (action === "clear") next.apiKey = "";
     }
-    if (p.username !== undefined && assertNotEnvLocked("umami", "username", admin, errors)) next.username = p.username;
-    if (p.password !== undefined && assertNotEnvLocked("umami", "password", admin, errors)) {
+    if (p.username !== undefined && assertNotEnvLocked("umami", "username", admin, errors, p.username)) next.username = p.username;
+    if (p.password !== undefined && assertNotEnvLocked("umami", "password", admin, errors, p.password)) {
       const action = secretAction(p.password);
       if (action === "set") next.password = encryptSecret(p.password!);
       else if (action === "clear") next.password = "";
@@ -632,13 +652,13 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
   if (patch.github) {
     const p: GithubSettingsPatch = patch.github;
     const next: GithubRaw = { ...raw.github };
-    if (p.clientId !== undefined && assertNotEnvLocked("github", "clientId", admin, errors)) next.clientId = p.clientId;
-    if (p.clientSecret !== undefined && assertNotEnvLocked("github", "clientSecret", admin, errors)) {
+    if (p.clientId !== undefined && assertNotEnvLocked("github", "clientId", admin, errors, p.clientId)) next.clientId = p.clientId;
+    if (p.clientSecret !== undefined && assertNotEnvLocked("github", "clientSecret", admin, errors, p.clientSecret)) {
       const action = secretAction(p.clientSecret);
       if (action === "set") next.clientSecret = encryptSecret(p.clientSecret!);
       else if (action === "clear") next.clientSecret = "";
     }
-    if (p.loginEnabled !== undefined && assertNotEnvLocked("github", "loginEnabled", admin, errors)) {
+    if (p.loginEnabled !== undefined && assertNotEnvLocked("github", "loginEnabled", admin, errors, p.loginEnabled)) {
       next.loginEnabled = p.loginEnabled;
     }
     if (Object.keys(errors).filter((k) => k.startsWith("github.")).length === 0) {
@@ -650,8 +670,8 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
   if (patch.general) {
     const p: GeneralSettingsPatch = patch.general;
     const next: GeneralRaw = { ...raw.general };
-    if (p.siteName !== undefined && assertNotEnvLocked("general", "siteName", admin, errors)) next.siteName = p.siteName;
-    if (p.siteDescription !== undefined && assertNotEnvLocked("general", "siteDescription", admin, errors)) {
+    if (p.siteName !== undefined && assertNotEnvLocked("general", "siteName", admin, errors, p.siteName)) next.siteName = p.siteName;
+    if (p.siteDescription !== undefined && assertNotEnvLocked("general", "siteDescription", admin, errors, p.siteDescription)) {
       next.siteDescription = p.siteDescription;
     }
     if (Object.keys(errors).filter((k) => k.startsWith("general.")).length === 0) {

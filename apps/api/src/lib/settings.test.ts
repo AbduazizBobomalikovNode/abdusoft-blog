@@ -96,6 +96,26 @@ describe("settings precedence — env > db > none", () => {
       SettingsValidationError,
     );
   });
+
+  it("accepts a section save that resends an env-locked field UNCHANGED (UI sends the whole section)", async () => {
+    process.env.REQUIRE_TURNSTILE = "false";
+    invalidateSettingsCache();
+
+    await expect(
+      saveSettings({ turnstile: { required: false, siteKey: "0x4AAAAAAAtest", secretKey: "0x4AAAAAAAsecret" } }),
+    ).resolves.toBeUndefined();
+    const settings = await getSettings();
+    expect(settings.turnstile.siteKey).toBe("0x4AAAAAAAtest");
+    expect(settings.turnstile.secretKey).toBe("0x4AAAAAAAsecret");
+    expect(settings.turnstile.required).toBe(false);
+  });
+
+  it("still rejects a CHANGED value for an env-locked field", async () => {
+    process.env.REQUIRE_TURNSTILE = "false";
+    invalidateSettingsCache();
+
+    await expect(saveSettings({ turnstile: { required: true } })).rejects.toBeInstanceOf(SettingsValidationError);
+  });
 });
 
 describe("mask-keep semantics", () => {
