@@ -1,0 +1,28 @@
+{
+  "name": "blog",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "pnpm --filter @blog/shared build && pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @blog/shared build && pnpm -r test",
+    "api:migrate": "pnpm --filter @blog/api db:migrate",
+    "api:seed": "pnpm --filter @blog/api db:seed"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "unrs-resolver",
+      "@electric-sql/pglite"
+    ]
+  },
+  "devDependencies": {
+    "vitest": "^5.0.2"
+  }
+}

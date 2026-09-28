@@ -1,0 +1,102 @@
+/* Post tahrirlovchi (Tiptap) uchun qo'shimcha stillar — faqat /admin/postlar/[id] da yuklanadi. */
+
+.slash-menu {
+  z-index: 60;
+  display: flex;
+  min-width: 12rem;
+  max-height: 16rem;
+  flex-direction: column;
+  gap: 0.125rem;
+  overflow-y: auto;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+  font-size: 0.8125rem;
+}
+
+.slash-menu-item {
+  display: block;
+  width: 100%;
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.slash-menu-item.is-selected,
+.slash-menu-item:hover {
+  background: var(--muted);
+}
+
+.slash-menu-empty {
+  padding: 0.5rem;
+  color: var(--muted-foreground);
+}
+
+.code-block-lang-menu {
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
+.code-block-lang-menu select {
+  border: none;
+  background: transparent;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  color: var(--popover-foreground);
+  outline: none;
+}
+
+.post-editor-title {
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  border: none;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+  outline: none;
+}
+
+.post-editor-title::placeholder {
+  color: var(--muted-foreground);
+}
+
+.tiptap-editor-content .tiptap {
+  outline: none;
+  min-height: 40vh;
+}
+
+.tiptap-editor-content .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.editor-bubble-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+}

@@ -1,0 +1,2 @@
+ALTER TABLE "posts" ADD COLUMN "content_text" text DEFAULT '' NOT NULL;--> statement-breakpoint
+CREATE INDEX "posts_search_idx" ON "posts" USING gin (to_tsvector('simple', coalesce("title", '') || ' ' || coalesce("content_text", '')));

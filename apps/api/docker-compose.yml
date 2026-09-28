@@ -1,0 +1,77 @@
+# Coolify (yoki har qanday Docker Compose muhiti) uchun. VDS'da ishga tushiriladi.
+#
+# Coolify o'zi TLS (Let's Encrypt) va domenlarni (api.abdusoft.uz) boshqaradi —
+# shu sababli bu yerda hech qanday reverse-proxy/TLS konfiguratsiyasi yo'q,
+# faqat portlarni ochib qo'yamiz, Coolify ularni domenlarga bog'laydi.
+#
+# Barcha maxfiy qiymatlar (.env) Coolify'ning "Environment Variables" bo'limi
+# orqali in'ektsiya qilinadi — `env_file: .env` shu joyga mos keladi (Coolify
+# build paytida .env faylini avtomatik yaratadi).
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: blog
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blog}
+      POSTGRES_DB: blog
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Konteyner birinchi marta ishga tushganda `umami` bazasini ham yaratadi
+      # (Postgres shu papkadagi barcha .sql fayllarni avtomatik bajaradi).
+      - ./docker/init-umami-db.sql:/docker-entrypoint-initdb.d/init-umami-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blog -d blog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Faqat mahalliy tekshirish/backup uchun — Coolify orqasida bu port
+    # tashqariga ochilmaydi, xohlasangiz olib tashlashingiz mumkin.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://blog:${POSTGRES_PASSWORD:-blog}@postgres:5432/blog
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mahalliy fayl saqlash (R2 sozlanmagan holatda) — konteyner qayta
+      # yaratilganda yuklangan rasmlar yo'qolib qolmasligi uchun.
+      - api_uploads:/app/.data/uploads
+    ports:
+      - "127.0.0.1:4000:4000"
+
+  # Phase 5 — Umami analytics, asosiy Postgres instansiyasidagi alohida `umami`
+  # bazasidan foydalanadi (yuqoridagi init skript orqali yaratiladi).
+  # `UMAMI_APP_SECRET` — tasodifiy uzun satr (masalan `openssl rand -hex 32`), .env'ga qo'shing.
+  umami:
+    image: ghcr.io/umami-software/umami:postgresql-latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://blog:${POSTGRES_PASSWORD:-blog}@postgres:5432/umami
+      DATABASE_TYPE: postgresql
+      APP_SECRET: ${UMAMI_APP_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/api/heartbeat || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    ports:
+      - "127.0.0.1:3001:3000"
+
+volumes:
+  pgdata:
+  api_uploads:
