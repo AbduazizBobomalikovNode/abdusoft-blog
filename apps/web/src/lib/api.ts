@@ -17,6 +17,9 @@ import {
   PublicSiteSchema,
   SettingsAdminSchema,
   SiteSettingsAdminSchema,
+  StaffInvitePublicSchema,
+  StaffListResponseSchema,
+  StaffPostsSummarySchema,
   TagWithCountSchema,
   TelegramStatusSchema,
   type AdminCommentListResponse,
@@ -37,6 +40,9 @@ import {
   type PublicSite,
   type SettingsAdmin,
   type SiteSettingsAdmin,
+  type StaffInvitePublic,
+  type StaffListResponse,
+  type StaffPostsSummary,
   type StatsRange,
   type TagWithCount,
   type TelegramStatus,
@@ -263,13 +269,25 @@ export async function getPostStats(slug: string): Promise<PostStats | null> {
 }
 
 export async function getAdminComments(
-  params: { status?: string; postId?: string; q?: string; page?: number; limit?: number },
+  params: {
+    status?: string;
+    source?: string;
+    postId?: string;
+    q?: string;
+    from?: string;
+    to?: string;
+    page?: number;
+    limit?: number;
+  },
   cookieHeader: string | null,
 ): Promise<AdminCommentListResponse | null> {
   const search = new URLSearchParams();
   if (params.status) search.set("status", params.status);
+  if (params.source) search.set("source", params.source);
   if (params.postId) search.set("postId", params.postId);
   if (params.q) search.set("q", params.q);
+  if (params.from) search.set("from", params.from);
+  if (params.to) search.set("to", params.to);
   if (params.page) search.set("page", String(params.page));
   if (params.limit) search.set("limit", String(params.limit));
 
@@ -354,6 +372,31 @@ export async function getAdminUmamiStats(
   });
 
   return parseJson(res, AdminUmamiStatsSchema);
+}
+
+export async function getAdminStaff(cookieHeader: string | null): Promise<StaffListResponse | null> {
+  const res = await apiFetch("/admin/staff", {
+    cache: "no-store",
+    headers: authHeaders(cookieHeader),
+  });
+
+  return parseJson(res, StaffListResponseSchema);
+}
+
+/** Xodimning o'z postlari bo'yicha kichik dashboard xulosasi (`/admin` sahifasi, `staff` roli uchun). */
+export async function getStaffPostsSummary(cookieHeader: string | null): Promise<StaffPostsSummary | null> {
+  const res = await apiFetch("/admin/posts/mine/summary", {
+    cache: "no-store",
+    headers: authHeaders(cookieHeader),
+  });
+
+  return parseJson(res, StaffPostsSummarySchema);
+}
+
+/** `/taklif/[token]` sahifasi — ochiq (auth talab qilmaydigan) token tekshiruvi. */
+export async function getStaffInvitePublic(token: string): Promise<StaffInvitePublic | null> {
+  const res = await apiFetch(`/staff/invites/${encodeURIComponent(token)}`, { cache: "no-store" });
+  return parseJson(res, StaffInvitePublicSchema);
 }
 
 /** Server-side draft yaratish — `/admin/postlar/yangi` sahifasidan chaqiriladi. */

@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
-import type { CommentNode, CommentSort, CommentsMe, ReactionType } from "@blog/shared";
+import type { CommentNode, CommentSort, CommentsMe, CommentSourceValue, ReactionType } from "@blog/shared";
 import { db } from "../db/index.js";
 import { bannedDevices, comments, posts, reactions } from "../db/schema.js";
 import { user } from "../db/auth-schema.js";
@@ -32,6 +32,8 @@ interface CommentRow {
   userName: string | null;
   userImage: string | null;
   userRole: string | null;
+  source: CommentSourceValue;
+  tgUsername: string | null;
 }
 
 interface RawNode extends CommentRow {
@@ -66,6 +68,8 @@ function toNode(row: CommentRow, isMine: boolean): CommentNode {
     likes: row.likesCount,
     dislikes: row.dislikesCount,
     replies: [],
+    source: row.source,
+    tgUsername: row.tgUsername,
   };
 }
 
@@ -149,6 +153,8 @@ export interface GetCommentsParams {
   limit: number;
   deviceHash: string;
   sessionUserId: string | null;
+  /** 'all' | 'web' | 'telegram' — chaqiruvchi (route) `comments.telegramDisplay` sozlamasiga qarab tanlaydi. Majburiy — standart yo'q, chunki noto'g'ri qiymat izohlar oqib chiqishiga olib kelishi mumkin. */
+  source: "all" | "web" | "telegram";
 }
 
 export interface GetCommentsResult {
@@ -159,6 +165,11 @@ export interface GetCommentsResult {
 }
 
 export async function getCommentsForPost(params: GetCommentsParams): Promise<GetCommentsResult> {
+  const whereClause =
+    params.source === "all"
+      ? eq(comments.postId, params.postId)
+      : and(eq(comments.postId, params.postId), eq(comments.source, params.source))!;
+
   const rows = await db
     .select({
       id: comments.id,
@@ -179,10 +190,12 @@ export async function getCommentsForPost(params: GetCommentsParams): Promise<Get
       userName: user.name,
       userImage: user.image,
       userRole: user.role,
+      source: comments.source,
+      tgUsername: comments.tgUsername,
     })
     .from(comments)
     .leftJoin(user, eq(comments.authorUserId, user.id))
-    .where(eq(comments.postId, params.postId))
+    .where(whereClause)
     .orderBy(asc(comments.path));
 
   const nodeMap = new Map<string, RawNode>();
@@ -278,15 +291,19 @@ export async function nextCommentPath(
   };
 }
 
+/** Postning web va Telegram izohlar sonini (ikkalasini ham) qayta hisoblaydi — `posts.commentsCount` faqat web, `posts.tgCommentsCount` faqat Telegram manbali "visible" izohlarni sanaydi. */
 export async function recountPostComments(postId: string): Promise<void> {
   const [row] = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({
+      web: sql<number>`count(*) filter (where ${comments.status} = 'visible' and ${comments.source} = 'web')::int`,
+      tg: sql<number>`count(*) filter (where ${comments.status} = 'visible' and ${comments.source} = 'telegram')::int`,
+    })
     .from(comments)
-    .where(and(eq(comments.postId, postId), eq(comments.status, "visible")));
+    .where(eq(comments.postId, postId));
 
   await db
     .update(posts)
-    .set({ commentsCount: row?.count ?? 0 })
+    .set({ commentsCount: row?.web ?? 0, tgCommentsCount: row?.tg ?? 0 })
     .where(eq(posts.id, postId));
 }
 

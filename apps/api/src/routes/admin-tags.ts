@@ -1,9 +1,16 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { asc, eq, sql } from "drizzle-orm";
 import { CreateTagBodySchema, UpdateTagBodySchema, slugify } from "@blog/shared";
 import { db } from "../db/index.js";
 import { postTags, posts, tags } from "../db/schema.js";
-import { requireAdmin } from "../lib/require-admin.js";
+import { requireRole } from "../lib/require-admin.js";
+
+/** Bio `admin-posts.ts`dagi izohga qarang — Hono zanjiri turini saqlab qolish uchun middleware o'rniga handler ichidagi tekshiruv. */
+function forbidUnlessAdmin(c: Context): Response | null {
+  const adminUser = c.get("adminUser");
+  if (adminUser.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+  return null;
+}
 
 function tagsQuery(idFilter?: string) {
   const base = db
@@ -24,12 +31,14 @@ function tagsQuery(idFilter?: string) {
 }
 
 export const adminTagsRoute = new Hono()
-  .use("*", requireAdmin)
+  .use("*", requireRole("admin", "staff"))
   .get("/", async (c) => {
     const rows = await tagsQuery();
     return c.json(rows);
   })
   .post("/", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => null);
     const parsed = CreateTagBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
@@ -54,6 +63,8 @@ export const adminTagsRoute = new Hono()
     return c.json({ ...created, postsCount: 0 }, 201);
   })
   .patch("/:id", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => null);
     const parsed = UpdateTagBodySchema.safeParse(body);
@@ -84,6 +95,8 @@ export const adminTagsRoute = new Hono()
     return c.json(row);
   })
   .delete("/:id", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const force = c.req.query("force") === "1";
 

@@ -271,6 +271,7 @@ export const postsRoute = new Hono()
         likesCount: posts.likesCount,
         dislikesCount: posts.dislikesCount,
         commentsCount: posts.commentsCount,
+        tgCommentsCount: posts.tgCommentsCount,
       })
       .from(posts)
       .where(and(eq(posts.slug, slug), eq(posts.status, "published")))
@@ -283,6 +284,7 @@ export const postsRoute = new Hono()
       likes: post.likesCount,
       dislikes: post.dislikesCount,
       comments: post.commentsCount,
+      tgComments: post.tgCommentsCount,
     });
   })
   .get("/:slug", async (c) => {
@@ -376,6 +378,7 @@ export const postsRoute = new Hono()
         likes: post.likesCount,
         dislikes: post.dislikesCount,
         comments: post.commentsCount,
+        tgComments: post.tgCommentsCount,
       },
       adjacent: { prev, next },
       related,

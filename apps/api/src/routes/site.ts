@@ -14,6 +14,8 @@ export const siteRoute = new Hono().get("/", async (c) => {
       umamiScriptUrl: integrations.umami.scriptUrl,
       umamiWebsiteId: integrations.umami.websiteId,
       githubLoginEnabled: integrations.github.providerEnabled && integrations.github.loginEnabled,
+      githubConfigured: integrations.github.providerEnabled,
+      telegramDisplay: integrations.telegram.telegramDisplay,
     },
   });
 });

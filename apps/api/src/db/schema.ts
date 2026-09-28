@@ -19,6 +19,8 @@ import { user } from "./auth-schema.js";
 
 export const postStatusEnum = pgEnum("post_status", [
   "draft",
+  "in_review",
+  "changes_requested",
   "scheduled",
   "published",
   "archived",
@@ -30,6 +32,10 @@ export const commentStatusEnum = pgEnum("comment_status", [
   "hidden",
   "deleted",
 ]);
+
+export const commentSourceEnum = pgEnum("comment_source", ["web", "telegram"]);
+
+export const channelMessageTypeEnum = pgEnum("channel_message_type", ["text", "photo"]);
 
 export const reactionTargetEnum = pgEnum("reaction_target_type", ["post", "comment"]);
 export const reactionTypeEnum = pgEnum("reaction_type", ["like", "dislike"]);
@@ -56,6 +62,19 @@ export const posts = pgTable(
     likesCount: integer("likes_count").notNull().default(0),
     dislikesCount: integer("dislikes_count").notNull().default(0),
     commentsCount: integer("comments_count").notNull().default(0),
+    /** Telegram muhokama guruhidan olingan izohlar soni — `posts.commentsCount`dan alohida hisoblanadi (faqat web izohlar u yerda). */
+    tgCommentsCount: integer("tg_comments_count").notNull().default(0),
+    /** Postni yaratgan foydalanuvchi (admin yoki xodim/staff) — foydalanuvchi o'chirilsa `null` (post saqlanib qoladi). */
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    /** Postni oxirgi marta o'zgartirgan foydalanuvchi. */
+    updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+    /** Admin "Qaytarish" (`changes_requested`) bosganda qoldirgan izohi — xodimga ko'rinadi. */
+    reviewNote: text("review_note"),
+    /** Xodim "Ko'rib chiqishga yuborish" bosgan payt (`in_review`ga o'tganda). */
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    /** Ko'rib chiqqan (approve/request-changes) admin. */
+    reviewedBy: text("reviewed_by").references(() => user.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -108,11 +127,21 @@ export const comments = pgTable(
     likesCount: integer("likes_count").notNull().default(0),
     dislikesCount: integer("dislikes_count").notNull().default(0),
     ipHash: text("ip_hash"),
+    /** Izoh manbai — 'web' (sayt/panel) yoki 'telegram' (kanalga bog'langan muhokama guruhi). */
+    source: commentSourceEnum("source").notNull().default("web"),
+    tgChatId: bigint("tg_chat_id", { mode: "number" }),
+    tgMessageId: bigint("tg_message_id", { mode: "number" }),
+    tgUsername: text("tg_username"),
+    /** Telegram foydalanuvchi id'si — moderatsiyada `banChatMember` chaqirish uchun SHART (schema'da alohida ustun sifatida qo'shildi, spec matnidagi "author_tg_id" shuning uchun). */
+    tgUserId: bigint("tg_user_id", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     editedAt: timestamp("edited_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
-  (table) => [index("comments_post_path_idx").on(table.postId, table.path)],
+  (table) => [
+    index("comments_post_path_idx").on(table.postId, table.path),
+    uniqueIndex("comments_tg_chat_message_idx").on(table.tgChatId, table.tgMessageId),
+  ],
 );
 
 export const reactions = pgTable(
@@ -182,8 +211,33 @@ export const media = pgTable("media", {
   width: integer("width"),
   height: integer("height"),
   alt: text("alt"),
+  /** Yuklagan foydalanuvchi — xodim (staff) faqat o'z media fayllarini ko'radi/o'chiradi. */
+  createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Bir martalik xodim (staff) taklif havolalari — `/admin/xodimlar` sahifasi
+ * yaratadi, `/taklif/[token]` sahifasi GitHub orqali kirgandan keyin
+ * qabul qiladi. Xom `token` HECH QAYERDA saqlanmaydi — faqat sha256 hash.
+ */
+export const staffInvites = pgTable(
+  "staff_invites",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tokenHash: text("token_hash").notNull().unique(),
+    note: text("note"),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    usedBy: text("used_by").references(() => user.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [index("staff_invites_token_hash_idx").on(table.tokenHash)],
+);
 
 export const telegramRefs = pgTable("telegram_refs", {
   postId: uuid("post_id")
@@ -192,6 +246,11 @@ export const telegramRefs = pgTable("telegram_refs", {
   telegraphPath: text("telegraph_path"),
   telegraphUrl: text("telegraph_url"),
   channelMessageId: bigint("channel_message_id", { mode: "number" }),
+  /** Kanal xabari qanday yuborilgani — 'text' (sendMessage/editMessageText) yoki 'photo' (sendPhoto/editMessageCaption). Eski qatorlarda `null` (legacy — coverUrl bor-yo'qligiga qarab aniqlanadi). */
+  channelMessageType: channelMessageTypeEnum("channel_message_type"),
+  /** Kanalga bog'langan muhokama guruhi va shu postning o'sha guruhga avtomatik forward qilingan xabari — Telegram izohlarini shu postga bog'lash uchun. */
+  discussionChatId: bigint("discussion_chat_id", { mode: "number" }),
+  discussionMessageId: bigint("discussion_message_id", { mode: "number" }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

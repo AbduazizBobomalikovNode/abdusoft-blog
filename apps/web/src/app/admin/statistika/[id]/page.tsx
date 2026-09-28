@@ -8,6 +8,7 @@ import { StatTile } from "@/components/admin/stats/stat-tile";
 import { StatsRangeTabs, DEFAULT_STATS_RANGE, isStatsRange } from "@/components/admin/stats/stats-range-tabs";
 import { ViewsChart } from "@/components/admin/stats/views-chart";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { getAdminPostStats } from "@/lib/api";
 import { formatCompactNumber } from "@/lib/stats-format";
 
@@ -24,6 +25,7 @@ export default async function PostStatsPage({
 
   const headersList = await headers();
   const cookie = headersList.get("cookie");
+  await requireAdminPage(cookie);
 
   const data = await getAdminPostStats(id, range, cookie);
   if (!data) notFound();

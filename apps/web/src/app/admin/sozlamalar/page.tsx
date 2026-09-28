@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { DEFAULT_POST_SETTINGS, DEFAULT_SOCIAL_LINKS, DEFAULT_TELEGRAM_SETTINGS, type AdminField, type SettingsAdmin } from "@blog/shared";
 import { SiteSettingsForm } from "@/components/admin/site-settings-form";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { getAdminSettings, getAdminSiteSettings, getAdminTelegramStatus } from "@/lib/api";
 
 export const metadata: Metadata = { title: "Sozlamalar" };
@@ -21,6 +22,8 @@ const EMPTY_INTEGRATIONS: SettingsAdmin = {
     apiRoot: emptyField("https://api.telegram.org"),
     notifyComments: emptyField(true),
     digestEnabled: emptyField(false),
+    telegramDisplay: emptyField("admin_only" as const),
+    discussionGroupId: null,
     enabled: false,
     disabledReason: null,
   },
@@ -54,6 +57,7 @@ const EMPTY_INTEGRATIONS: SettingsAdmin = {
 export default async function AdminSettingsPage() {
   const headersList = await headers();
   const cookie = headersList.get("cookie");
+  await requireAdminPage(cookie);
   const [settings, integrations, telegramStatus] = await Promise.all([
     getAdminSiteSettings(cookie),
     getAdminSettings(cookie),

@@ -73,6 +73,8 @@ export const PostDetailSchema = z.object({
     likes: z.number(),
     dislikes: z.number(),
     comments: z.number(),
+    /** Kanalning muhokama guruhidan olingan (Telegram manbali) izohlar soni — `comments.telegramDisplay !== 'admin_only'` bo'lsa meta-qatorga qo'shiladi. */
+    tgComments: z.number().default(0),
   }),
   adjacent: z.object({
     prev: AdjacentPostSchema,
@@ -98,11 +100,14 @@ export const PostFeedResponseSchema = z.object({
 });
 export type PostFeedResponse = z.infer<typeof PostFeedResponseSchema>;
 
+export const RoleSchema = z.union([z.literal("admin"), z.literal("staff"), z.literal("user")]);
+export type Role = z.infer<typeof RoleSchema>;
+
 export const MeSchema = z.object({
   id: z.string(),
   email: z.string(),
   name: z.string().nullable(),
-  role: z.union([z.literal("admin"), z.literal("user")]),
+  role: RoleSchema,
 });
 export type Me = z.infer<typeof MeSchema>;
 
@@ -112,6 +117,8 @@ export type Me = z.infer<typeof MeSchema>;
 
 export const AdminPostStatusSchema = z.union([
   z.literal("draft"),
+  z.literal("in_review"),
+  z.literal("changes_requested"),
   z.literal("scheduled"),
   z.literal("published"),
   z.literal("archived"),
@@ -125,6 +132,12 @@ export const AdminPostCountsSchema = z.object({
   comments: z.number(),
 });
 
+export const PostAuthorRefSchema = z.object({
+  id: z.string(),
+  name: z.string().nullable(),
+});
+export type PostAuthorRef = z.infer<typeof PostAuthorRefSchema>;
+
 export const AdminPostListItemSchema = z.object({
   id: z.string(),
   slug: z.string(),
@@ -136,12 +149,18 @@ export const AdminPostListItemSchema = z.object({
   pinned: z.boolean(),
   counts: AdminPostCountsSchema,
   tags: z.array(TagSchema),
+  /** Postni yaratgan xodim/admin — faqat admin panelda ko'rinadi, ochiq saytda hech qachon. */
+  createdBy: PostAuthorRefSchema.nullable().default(null),
+  /** `changes_requested` holatida admin qoldirgan izoh. */
+  reviewNote: z.string().nullable().default(null),
 });
 export type AdminPostListItem = z.infer<typeof AdminPostListItemSchema>;
 
 export const AdminPostTotalsSchema = z.object({
   all: z.number(),
   draft: z.number(),
+  in_review: z.number(),
+  changes_requested: z.number(),
   scheduled: z.number(),
   published: z.number(),
   archived: z.number(),
@@ -194,6 +213,12 @@ export const AdminPostDetailSchema = z.object({
   updatedAt: z.string(),
   counts: AdminPostCountsSchema,
   telegram: TelegramRefSchema.nullable().default(null),
+  createdBy: PostAuthorRefSchema.nullable().default(null),
+  updatedBy: PostAuthorRefSchema.nullable().default(null),
+  reviewNote: z.string().nullable().default(null),
+  submittedAt: z.string().nullable().default(null),
+  reviewedBy: PostAuthorRefSchema.nullable().default(null),
+  reviewedAt: z.string().nullable().default(null),
 });
 export type AdminPostDetail = z.infer<typeof AdminPostDetailSchema>;
 
@@ -209,6 +234,33 @@ export const UpdatePostBodySchema = z.object({
   scheduledAt: z.string().nullable().optional(),
 });
 export type UpdatePostBody = z.infer<typeof UpdatePostBodySchema>;
+
+/** Fields a `staff` role account is allowed to touch via `PATCH /admin/posts/:id`. */
+export const STAFF_EDITABLE_POST_FIELDS = ["title", "slug", "excerpt", "contentJson", "coverUrl", "tagSlugs"] as const;
+
+export const SubmitPostResponseSchema = z.object({
+  id: z.string(),
+  status: AdminPostStatusSchema,
+  submittedAt: z.string().nullable(),
+});
+export type SubmitPostResponse = z.infer<typeof SubmitPostResponseSchema>;
+
+export const RequestChangesBodySchema = z.object({
+  note: z.string().trim().min(1).max(2000),
+});
+export type RequestChangesBody = z.infer<typeof RequestChangesBodySchema>;
+
+export const StaffPostsSummarySchema = z.object({
+  counts: z.object({
+    draft: z.number(),
+    in_review: z.number(),
+    changes_requested: z.number(),
+    published: z.number(),
+    archived: z.number(),
+  }),
+  recent: z.array(AdminPostListItemSchema),
+});
+export type StaffPostsSummary = z.infer<typeof StaffPostsSummarySchema>;
 
 export const UpdatePostResponseSchema = z.object({
   updatedAt: z.string(),
@@ -297,15 +349,29 @@ export const AboutContentSchema = z.object({
 });
 export type AboutContent = z.infer<typeof AboutContentSchema>;
 
+/** Telegram izohlari sahifada qayerda ko'rinishi — admin panelda /admin/sozlamalar orqali boshqariladi. */
+export const TelegramDisplayModeSchema = z.union([
+  z.literal("admin_only"),
+  z.literal("separate"),
+  z.literal("mixed"),
+]);
+export type TelegramDisplayMode = z.infer<typeof TelegramDisplayModeSchema>;
+
 export const TelegramSettingsSchema = z.object({
   notifyComments: z.boolean().default(true),
   digestEnabled: z.boolean().default(false),
+  /** Bot aniqlagan muhokama guruhi id'si — faqat o'qish uchun (admin panelda ko'rsatiladi), avtomatik to'ldiriladi. */
+  discussionGroupId: z.number().nullable().default(null),
+  /** Telegram'dan kelgan izohlar sahifada qanday ko'rsatilishi — standart: faqat admin panelda. */
+  telegramDisplay: TelegramDisplayModeSchema.default("admin_only"),
 });
 export type TelegramSettings = z.infer<typeof TelegramSettingsSchema>;
 
 export const DEFAULT_TELEGRAM_SETTINGS: TelegramSettings = {
   notifyComments: true,
   digestEnabled: false,
+  discussionGroupId: null,
+  telegramDisplay: "admin_only",
 };
 
 export const SiteSettingsAdminSchema = z.object({
@@ -355,6 +421,12 @@ export const PublicSiteConfigSchema = z.object({
   umamiScriptUrl: z.string(),
   umamiWebsiteId: z.string(),
   githubLoginEnabled: z.boolean(),
+  // `githubLoginEnabled` sharhlovchi (commenter) toggle'iga bog'liq — xodimlar
+  // uchun "GitHub bilan kirish" tugmasi shu bayroqdan MUSTAQIL, faqat
+  // clientId/clientSecret sozlanganiga qarab ko'rsatiladi.
+  githubConfigured: z.boolean().default(false),
+  // Default — eski API versiyasi bu maydonni qaytarmasa ham web ishlasin (deploy tartibi).
+  telegramDisplay: TelegramDisplayModeSchema.default("admin_only"),
 });
 export type PublicSiteConfig = z.infer<typeof PublicSiteConfigSchema>;
 
@@ -400,6 +472,9 @@ export const TelegramSettingsAdminSchema = z.object({
   apiRoot: adminField(z.string()),
   notifyComments: adminField(z.boolean()),
   digestEnabled: adminField(z.boolean()),
+  telegramDisplay: adminField(TelegramDisplayModeSchema),
+  /** Faqat o'qish uchun — bot avtomatik aniqlaydi (muhokama guruhida forward xabarini ko'rgach), UI'da patch qilinmaydi. */
+  discussionGroupId: z.number().nullable(),
   enabled: z.boolean(),
   disabledReason: z.string().nullable(),
 });
@@ -472,6 +547,7 @@ export const TelegramSettingsPatchSchema = z.object({
   apiRoot: z.string().optional(),
   notifyComments: z.boolean().optional(),
   digestEnabled: z.boolean().optional(),
+  telegramDisplay: TelegramDisplayModeSchema.optional(),
 });
 export type TelegramSettingsPatch = z.infer<typeof TelegramSettingsPatchSchema>;
 
@@ -578,6 +654,9 @@ export type CommentSort = z.infer<typeof CommentSortSchema>;
 export const ReactionTypeSchema = z.union([z.literal("like"), z.literal("dislike")]);
 export type ReactionType = z.infer<typeof ReactionTypeSchema>;
 
+export const CommentSourceSchema = z.union([z.literal("web"), z.literal("telegram")]);
+export type CommentSourceValue = z.infer<typeof CommentSourceSchema>;
+
 export interface CommentNode {
   id: string;
   parentId: string | null;
@@ -597,6 +676,10 @@ export interface CommentNode {
   likes: number;
   dislikes: number;
   replies: CommentNode[];
+  /** 'web' — sayt/panel orqali yozilgan; 'telegram' — kanalning muhokama guruhidan olingan. */
+  source: CommentSourceValue;
+  /** `source === 'telegram'` bo'lsa Telegram username (bo'lsa) — badge uchun. */
+  tgUsername: string | null;
 }
 
 export const CommentNodeSchema: z.ZodType<CommentNode> = z.lazy(() =>
@@ -619,6 +702,8 @@ export const CommentNodeSchema: z.ZodType<CommentNode> = z.lazy(() =>
     likes: z.number(),
     dislikes: z.number(),
     replies: z.array(CommentNodeSchema),
+    source: CommentSourceSchema,
+    tgUsername: z.string().nullable(),
   }),
 );
 
@@ -635,6 +720,11 @@ export const CommentsListResponseSchema = z.object({
   nextCursor: z.string().nullable(),
   total: z.number(),
   me: CommentsMeSchema,
+  /** `comments.telegramDisplay === 'separate'` bo'lsagina to'ldiriladi — Telegram daraxti web daraxtdan alohida. */
+  telegram: z.array(CommentNodeSchema).optional(),
+  telegramTotal: z.number().optional(),
+  /** Telegram muhokama guruhidagi post xabariga to'g'ridan-to'g'ri havola (izohlar ochiladi) — aniqlanmasa `null`. */
+  telegramThreadUrl: z.string().nullable().optional(),
 });
 export type CommentsListResponse = z.infer<typeof CommentsListResponseSchema>;
 
@@ -705,6 +795,10 @@ export const AdminCommentItemSchema = z.object({
   createdAt: z.string(),
   editedAt: z.string().nullable(),
   deletedAt: z.string().nullable(),
+  source: CommentSourceSchema,
+  tgUsername: z.string().nullable(),
+  /** Telegram guruhidagi ushbu izoh xabariga ochish havolasi ("Telegram'da ochish") — faqat `source==='telegram'` va aniqlansa. */
+  tgThreadUrl: z.string().nullable(),
 });
 export type AdminCommentItem = z.infer<typeof AdminCommentItemSchema>;
 
@@ -717,6 +811,20 @@ export const AdminCommentCountsSchema = z.object({
 });
 export type AdminCommentCounts = z.infer<typeof AdminCommentCountsSchema>;
 
+export const AdminCommentSourceCountsSchema = z.object({
+  all: z.number(),
+  web: z.number(),
+  telegram: z.number(),
+});
+export type AdminCommentSourceCounts = z.infer<typeof AdminCommentSourceCountsSchema>;
+
+export const AdminCommentSourceFilterSchema = z.union([
+  z.literal("all"),
+  z.literal("web"),
+  z.literal("telegram"),
+]);
+export type AdminCommentSourceFilter = z.infer<typeof AdminCommentSourceFilterSchema>;
+
 export const AdminCommentListResponseSchema = z.object({
   items: z.array(AdminCommentItemSchema),
   page: z.number(),
@@ -724,6 +832,7 @@ export const AdminCommentListResponseSchema = z.object({
   total: z.number(),
   hasMore: z.boolean(),
   counts: AdminCommentCountsSchema,
+  sourceCounts: AdminCommentSourceCountsSchema,
 });
 export type AdminCommentListResponse = z.infer<typeof AdminCommentListResponseSchema>;
 
@@ -779,6 +888,7 @@ export const PostStatsSchema = z.object({
   likes: z.number(),
   dislikes: z.number(),
   comments: z.number(),
+  tgComments: z.number().default(0),
 });
 export type PostStats = z.infer<typeof PostStatsSchema>;
 
@@ -831,6 +941,7 @@ export const StatsRecentCommentSchema = z.object({
   body: z.string(),
   status: AdminCommentStatusSchema,
   createdAt: z.string(),
+  source: CommentSourceSchema,
 });
 export type StatsRecentComment = z.infer<typeof StatsRecentCommentSchema>;
 
@@ -906,3 +1017,77 @@ export const AdminUmamiStatsSchema = z.union([
   }),
 ]);
 export type AdminUmamiStats = z.infer<typeof AdminUmamiStatsSchema>;
+
+// ---------------------------------------------------------------------------
+// Admin: Xodimlar (staff) & taklif (invite) — helper-staff review workflow
+// ---------------------------------------------------------------------------
+
+export const StaffMemberSchema = z.object({
+  id: z.string(),
+  name: z.string().nullable(),
+  email: z.string(),
+  image: z.string().nullable(),
+  addedAt: z.string(),
+  postsCount: z.number(),
+});
+export type StaffMember = z.infer<typeof StaffMemberSchema>;
+
+export const StaffInviteStatusSchema = z.union([
+  z.literal("active"),
+  z.literal("used"),
+  z.literal("expired"),
+  z.literal("revoked"),
+]);
+export type StaffInviteStatus = z.infer<typeof StaffInviteStatusSchema>;
+
+export const StaffInviteSchema = z.object({
+  id: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  usedAt: z.string().nullable(),
+  revokedAt: z.string().nullable(),
+  status: StaffInviteStatusSchema,
+});
+export type StaffInvite = z.infer<typeof StaffInviteSchema>;
+
+export const StaffListResponseSchema = z.object({
+  staff: z.array(StaffMemberSchema),
+  invites: z.array(StaffInviteSchema),
+});
+export type StaffListResponse = z.infer<typeof StaffListResponseSchema>;
+
+export const CreateStaffInviteBodySchema = z.object({
+  note: z.string().trim().max(200).optional(),
+});
+export type CreateStaffInviteBody = z.infer<typeof CreateStaffInviteBodySchema>;
+
+/** `token` faqat SHU javobda bir marta qaytadi — keyinroq hech qayerdan qayta o'qib bo'lmaydi. */
+export const CreateStaffInviteResponseSchema = z.object({
+  invite: StaffInviteSchema,
+  token: z.string(),
+  url: z.string(),
+});
+export type CreateStaffInviteResponse = z.infer<typeof CreateStaffInviteResponseSchema>;
+
+export const StaffInvitePublicStatusSchema = z.union([
+  z.literal("valid"),
+  z.literal("expired"),
+  z.literal("used"),
+  z.literal("revoked"),
+  z.literal("not_found"),
+]);
+export type StaffInvitePublicStatus = z.infer<typeof StaffInvitePublicStatusSchema>;
+
+/** `GET /staff/invites/:token` — token'ning o'zi ekspozitsiya qilinmaydi, faqat holat + note. */
+export const StaffInvitePublicSchema = z.object({
+  status: StaffInvitePublicStatusSchema,
+  note: z.string().nullable(),
+});
+export type StaffInvitePublic = z.infer<typeof StaffInvitePublicSchema>;
+
+export const AcceptStaffInviteResponseSchema = z.object({
+  ok: z.literal(true),
+  role: RoleSchema,
+});
+export type AcceptStaffInviteResponse = z.infer<typeof AcceptStaffInviteResponseSchema>;

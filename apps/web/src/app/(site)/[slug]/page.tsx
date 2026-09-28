@@ -11,7 +11,7 @@ import { RelatedPosts } from "@/components/related-posts";
 import { ShareRow } from "@/components/share-row";
 import { TableOfContents } from "@/components/table-of-contents";
 import { ViewBeacon } from "@/components/view-beacon";
-import { getPost } from "@/lib/api";
+import { getPost, getSite } from "@/lib/api";
 import { formatDate, formatReadingTime } from "@/lib/format";
 import { site } from "@/lib/site";
 
@@ -59,12 +59,14 @@ export default async function PostPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const post = await getPost(slug);
+  const [post, siteData] = await Promise.all([getPost(slug), getSite()]);
 
   if (!post) {
     notFound();
   }
 
+  const telegramDisplay = siteData?.config.telegramDisplay ?? "admin_only";
+  const includeTelegramCount = telegramDisplay !== "admin_only";
   const showToc = post.settings.showToc && (post.readingTime ?? 0) >= TOC_MIN_READING_TIME;
 
   return (
@@ -86,6 +88,8 @@ export default async function PostPage({
               slug={post.slug}
               initialViews={post.counts.views}
               initialComments={post.counts.comments}
+              initialTgComments={post.counts.tgComments}
+              includeTelegram={includeTelegramCount}
               showViews={post.settings.showViews}
               showComments={post.settings.commentsEnabled}
             />

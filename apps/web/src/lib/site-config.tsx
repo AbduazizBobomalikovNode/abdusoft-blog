@@ -12,6 +12,8 @@ const FALLBACK_CONFIG: PublicSiteConfig = {
   umamiScriptUrl: site.umamiScriptUrl,
   umamiWebsiteId: site.umamiWebsiteId,
   githubLoginEnabled: site.githubLoginEnabled,
+  githubConfigured: site.githubLoginEnabled,
+  telegramDisplay: "admin_only",
 };
 
 const SiteConfigContext = createContext<PublicSiteConfig>(FALLBACK_CONFIG);

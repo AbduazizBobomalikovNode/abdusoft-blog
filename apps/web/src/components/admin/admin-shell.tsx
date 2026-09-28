@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { site } from "@/lib/site";
 import { cn } from "@/lib/utils";
-import { ADMIN_NAV_ITEMS, isNavItemActive, titleForPath, type AdminNavItem } from "./admin-nav";
+import { isNavItemActive, navItemsForRole, titleForPath, type AdminNavItem } from "./admin-nav";
 
 // Pastki tab bar'da faqat eng ko'p ishlatiladigan 4 ta bo'lim ko'rsatiladi —
 // qolganlari "Ko'proq" sheet ichida. 7 ta elementning bittada sig'maganidan.
@@ -20,12 +20,12 @@ const MOBILE_BOTTOM_HREFS = new Set(["/admin", "/admin/postlar", "/admin/fikrlar
 function NavLinks({
   pathname,
   pendingComments,
-  items = ADMIN_NAV_ITEMS,
+  items,
   onNavigate,
 }: {
   pathname: string;
   pendingComments?: number;
-  items?: AdminNavItem[];
+  items: AdminNavItem[];
   onNavigate?: () => void;
 }) {
   return (
@@ -73,8 +73,9 @@ export function AdminShell({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const bottomNavItems = ADMIN_NAV_ITEMS.filter((item) => MOBILE_BOTTOM_HREFS.has(item.href));
-  const moreNavItems = ADMIN_NAV_ITEMS.filter((item) => !MOBILE_BOTTOM_HREFS.has(item.href));
+  const navItems = navItemsForRole(me.role);
+  const bottomNavItems = navItems.filter((item) => MOBILE_BOTTOM_HREFS.has(item.href));
+  const moreNavItems = navItems.filter((item) => !MOBILE_BOTTOM_HREFS.has(item.href));
   const moreActive = moreNavItems.some((item) => isNavItemActive(pathname, item));
 
   return (
@@ -86,7 +87,7 @@ export function AdminShell({
         </Link>
 
         <div className="mt-4 flex-1">
-          <NavLinks pathname={pathname} pendingComments={pendingComments} />
+          <NavLinks pathname={pathname} pendingComments={pendingComments} items={navItems} />
         </div>
 
         <div className="flex flex-col gap-1 border-t border-border pt-3">
@@ -110,7 +111,7 @@ export function AdminShell({
       <div className="flex min-h-svh min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
         <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background px-4 py-3 md:hidden">
-          <span className="text-sm font-semibold tracking-tight">{titleForPath(pathname)}</span>
+          <span className="text-sm font-semibold tracking-tight">{titleForPath(pathname, me.role)}</span>
           <Button variant="ghost" size="icon-sm" onClick={() => setMobileNavOpen(true)} aria-label="Menyu">
             <Menu className="size-4" />
           </Button>
@@ -124,6 +125,7 @@ export function AdminShell({
             <NavLinks
               pathname={pathname}
               pendingComments={pendingComments}
+              items={navItems}
               onNavigate={() => setMobileNavOpen(false)}
             />
             <div className="mt-auto flex flex-col gap-1 border-t border-border pt-3">

@@ -16,12 +16,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getAdminPosts } from "@/lib/api";
+import { getAdminPosts, getMe } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Postlar" };
 
-const STATUS_VALUES = ["all", "draft", "scheduled", "published", "archived"] as const;
+const STATUS_VALUES = [
+  "all",
+  "draft",
+  "in_review",
+  "changes_requested",
+  "scheduled",
+  "published",
+  "archived",
+] as const;
 type StatusFilter = (typeof STATUS_VALUES)[number];
 
 function isStatusFilter(value: string | undefined): value is StatusFilter {
@@ -38,9 +46,22 @@ export default async function AdminPostsPage({
   const page = Number(pageParam) > 0 ? Number(pageParam) : 1;
 
   const headersList = await headers();
-  const data = await getAdminPosts({ status, q, page, limit: 20 }, headersList.get("cookie"));
+  const cookie = headersList.get("cookie");
+  const [data, me] = await Promise.all([
+    getAdminPosts({ status, q, page, limit: 20 }, cookie),
+    getMe(cookie),
+  ]);
   const posts = data?.items ?? [];
-  const totals = data?.totals ?? { all: 0, draft: 0, scheduled: 0, published: 0, archived: 0 };
+  const totals = data?.totals ?? {
+    all: 0,
+    draft: 0,
+    in_review: 0,
+    changes_requested: 0,
+    scheduled: 0,
+    published: 0,
+    archived: 0,
+  };
+  const isAdmin = me?.role === "admin";
 
   return (
     <div className="flex flex-col gap-4">
@@ -84,13 +105,16 @@ export default async function AdminPostsPage({
                     {post.pinned ? "📌 " : ""}
                     {post.title}
                   </Link>
-                  <PostRowActions post={post} />
+                  <PostRowActions post={post} isAdmin={isAdmin} />
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <PostStatusBadge status={post.status} />
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
                     {formatDateTime(post.publishedAt ?? post.scheduledAt ?? post.updatedAt)}
                   </span>
+                  {isAdmin && post.createdBy ? (
+                    <span className="text-xs text-muted-foreground">· {post.createdBy.name ?? "Xodim"}</span>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1">
@@ -106,6 +130,11 @@ export default async function AdminPostsPage({
                     <MessageCircle className="size-3.5" /> {post.counts.comments}
                   </span>
                 </div>
+                {post.status === "changes_requested" && post.reviewNote ? (
+                  <p className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-700 dark:text-amber-400">
+                    {post.reviewNote}
+                  </p>
+                ) : null}
                 {post.tags.length > 0 ? (
                   <div className="flex flex-wrap gap-1">
                     {post.tags.map((tag) => (
@@ -129,6 +158,7 @@ export default async function AdminPostsPage({
               <TableRow>
                 <TableHead>Sarlavha</TableHead>
                 <TableHead>Holat</TableHead>
+                {isAdmin ? <TableHead>Yozgan</TableHead> : null}
                 <TableHead>Sana</TableHead>
                 <TableHead>Ko&apos;rsatkichlar</TableHead>
                 <TableHead>Teglar</TableHead>
@@ -151,6 +181,11 @@ export default async function AdminPostsPage({
                   <TableCell>
                     <PostStatusBadge status={post.status} />
                   </TableCell>
+                  {isAdmin ? (
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                      {post.createdBy?.name ?? "—"}
+                    </TableCell>
+                  ) : null}
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                     {formatDateTime(post.publishedAt ?? post.scheduledAt ?? post.updatedAt)}
                   </TableCell>
@@ -183,7 +218,7 @@ export default async function AdminPostsPage({
                     </div>
                   </TableCell>
                   <TableCell>
-                    <PostRowActions post={post} />
+                    <PostRowActions post={post} isAdmin={isAdmin} />
                   </TableCell>
                 </TableRow>
               ))}

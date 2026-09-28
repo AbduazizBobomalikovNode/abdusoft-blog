@@ -27,7 +27,7 @@ import {
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { site } from "@/lib/site";
 
-export function PostRowActions({ post }: { post: AdminPostListItem }) {
+export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListItem; isAdmin?: boolean }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -108,40 +108,44 @@ export function PostRowActions({ post }: { post: AdminPostListItem }) {
               Statistika
             </Link>
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          {post.status === "published" ? (
-            <DropdownMenuItem onSelect={() => run(() => adminApi.unpublishPost(post.id), "Qoralamaga qaytarildi")}>
-              <Undo2 />
-              Qoralamaga qaytarish
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem onSelect={() => run(() => adminApi.publishPost(post.id), "Chop etildi")}>
-              <Send />
-              Chop etish
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuItem
-            onSelect={() =>
-              run(
-                () => adminApi.updatePost(post.id, { pinned: !post.pinned }),
-                post.pinned ? "Muhim belgisi olib tashlandi" : "Muhim qilib belgilandi",
-              )
-            }
-          >
-            {post.pinned ? <PinOff /> : <Pin />}
-            {post.pinned ? "Muhimdan chiqarish" : "Muhim qilib belgilash"}
-          </DropdownMenuItem>
-          {post.status !== "archived" ? (
-            <DropdownMenuItem onSelect={() => run(() => adminApi.archivePost(post.id), "Arxivlandi")}>
-              <Archive />
-              Arxivlash
-            </DropdownMenuItem>
+          {isAdmin ? (
+            <>
+              <DropdownMenuSeparator />
+              {post.status === "published" ? (
+                <DropdownMenuItem onSelect={() => run(() => adminApi.unpublishPost(post.id), "Qoralamaga qaytarildi")}>
+                  <Undo2 />
+                  Qoralamaga qaytarish
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onSelect={() => run(() => adminApi.publishPost(post.id), "Chop etildi")}>
+                  <Send />
+                  Chop etish
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                onSelect={() =>
+                  run(
+                    () => adminApi.updatePost(post.id, { pinned: !post.pinned }),
+                    post.pinned ? "Muhim belgisi olib tashlandi" : "Muhim qilib belgilandi",
+                  )
+                }
+              >
+                {post.pinned ? <PinOff /> : <Pin />}
+                {post.pinned ? "Muhimdan chiqarish" : "Muhim qilib belgilash"}
+              </DropdownMenuItem>
+              {post.status !== "archived" ? (
+                <DropdownMenuItem onSelect={() => run(() => adminApi.archivePost(post.id), "Arxivlandi")}>
+                  <Archive />
+                  Arxivlash
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
+                <Trash2 />
+                O&apos;chirish
+              </DropdownMenuItem>
+            </>
           ) : null}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
-            <Trash2 />
-            O&apos;chirish
-          </DropdownMenuItem>
         </DropdownMenuContent>
         </DropdownMenu>
       </div>

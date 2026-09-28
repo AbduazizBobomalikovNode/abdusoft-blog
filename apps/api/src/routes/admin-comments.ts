@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   AdminCommentBanBodySchema,
@@ -19,11 +19,17 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
 const STATUS_VALUES = ["all", "pending", "visible", "hidden", "deleted"] as const;
+const SOURCE_VALUES = ["all", "web", "telegram"] as const;
+/** `YYYY-MM-DD` — sana input'idan (`<input type="date">`) keladi. */
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const ListQuerySchema = z.object({
   status: z.enum(STATUS_VALUES).default("all"),
+  source: z.enum(SOURCE_VALUES).default("all"),
   postId: z.string().optional(),
   q: z.string().trim().min(1).optional(),
+  from: z.string().regex(DATE_ONLY_RE).optional(),
+  to: z.string().regex(DATE_ONLY_RE).optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
@@ -47,6 +53,10 @@ const adminCommentColumns = {
   postTitle: posts.title,
   userImage: user.image,
   userRole: user.role,
+  source: comments.source,
+  tgUsername: comments.tgUsername,
+  tgChatId: comments.tgChatId,
+  tgMessageId: comments.tgMessageId,
 } as const;
 
 type AdminCommentRow = {
@@ -68,7 +78,19 @@ type AdminCommentRow = {
   postTitle: string;
   userImage: string | null;
   userRole: string | null;
+  source: "web" | "telegram";
+  tgUsername: string | null;
+  tgChatId: number | null;
+  tgMessageId: number | null;
 };
+
+/** Guruhdagi (odatda xususiy) izoh xabariga to'g'ridan-to'g'ri ochish havolasi — `t.me/c/<ichki_id>/<message_id>` (a'zo bo'lmagan brauzerda ochilmasligi mumkin, lekin Telegram ilovasida ishlaydi). */
+function tgThreadUrlFor(chatId: number | null, messageId: number | null): string | null {
+  if (!chatId || !messageId) return null;
+  const idStr = String(chatId);
+  const internal = idStr.startsWith("-100") ? idStr.slice(4) : idStr.replace(/^-/, "");
+  return `https://t.me/c/${internal}/${messageId}`;
+}
 
 function toAdminItem(row: AdminCommentRow) {
   return {
@@ -90,6 +112,9 @@ function toAdminItem(row: AdminCommentRow) {
     createdAt: row.createdAt.toISOString(),
     editedAt: row.editedAt ? row.editedAt.toISOString() : null,
     deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
+    source: row.source,
+    tgUsername: row.tgUsername,
+    tgThreadUrl: row.source === "telegram" ? tgThreadUrlFor(row.tgChatId, row.tgMessageId) : null,
   };
 }
 
@@ -107,31 +132,54 @@ async function computeCommentCounts(): Promise<Record<"all" | "pending" | "visib
   return counts;
 }
 
+async function computeSourceCounts(): Promise<{ all: number; web: number; telegram: number }> {
+  const rows = await db
+    .select({ source: comments.source, count: sql<number>`count(*)::int` })
+    .from(comments)
+    .groupBy(comments.source);
+
+  const counts = { all: 0, web: 0, telegram: 0 };
+  for (const row of rows) {
+    counts[row.source] = row.count;
+    counts.all += row.count;
+  }
+  return counts;
+}
+
 export const adminCommentsRoute = new Hono()
   .use("*", requireAdmin)
   .get("/", async (c) => {
     const parsed = ListQuerySchema.safeParse({
       status: c.req.query("status") ?? undefined,
+      source: c.req.query("source") ?? undefined,
       postId: c.req.query("postId"),
       q: c.req.query("q"),
+      from: c.req.query("from"),
+      to: c.req.query("to"),
       page: c.req.query("page"),
       limit: c.req.query("limit"),
     });
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov parametrlari" }, 400);
 
-    const { status, postId, q, page, limit } = parsed.data;
+    const { status, source, postId, q, from, to, page, limit } = parsed.data;
+    if (from && to && from > to) {
+      return c.json({ error: "'from' sanasi 'to' sanasidan keyin bo'lishi mumkin emas" }, 400);
+    }
     const offset = (page - 1) * limit;
 
     const conditions = [];
     if (status !== "all") conditions.push(eq(comments.status, status));
+    if (source !== "all") conditions.push(eq(comments.source, source));
     if (postId) conditions.push(eq(comments.postId, postId));
     if (q) {
       const like = `%${escapeLike(q)}%`;
       conditions.push(or(ilike(comments.body, like), ilike(comments.authorName, like))!);
     }
+    if (from) conditions.push(gte(comments.createdAt, new Date(`${from}T00:00:00.000Z`)));
+    if (to) conditions.push(lte(comments.createdAt, new Date(`${to}T23:59:59.999Z`)));
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const [rows, countRows, counts] = await Promise.all([
+    const [rows, countRows, counts, sourceCounts] = await Promise.all([
       db
         .select(adminCommentColumns)
         .from(comments)
@@ -146,6 +194,7 @@ export const adminCommentsRoute = new Hono()
         .from(comments)
         .where(whereClause),
       computeCommentCounts(),
+      computeSourceCounts(),
     ]);
 
     const total = countRows[0]?.count ?? 0;
@@ -157,6 +206,7 @@ export const adminCommentsRoute = new Hono()
       total,
       hasMore: page * limit < total,
       counts,
+      sourceCounts,
     });
   })
   .patch("/:id", async (c) => {

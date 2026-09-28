@@ -23,6 +23,22 @@ const calls: CallRecord[] = [];
 let messageIdCounter = 1000;
 let telegraphPageCounter = 1;
 let storedWebhook: { url: string; secret?: string } | null = null;
+const bannedMembers: { chatId: number | string; userId: number }[] = [];
+/** `sendMessage` (matn) yoki `sendPhoto` (rasm) orqali yuborilgan xabarlar — `editMessageCaption`
+ * matn-xabarga qo'llanilsa haqiqiy Telegram xatti-harakatini taqlid qilib xato qaytarish uchun. */
+const messageKinds = new Map<number, "text" | "photo">();
+
+/** `@username` -> barqaror (deterministik) manfiy raqamli chat id — `getChat` haqiqiy Telegram xatti-harakatini taqlid qiladi. */
+const channelIdCache = new Map<string, number>();
+function usernameToId(username: string): number {
+  const clean = username.replace(/^@/, "");
+  if (channelIdCache.has(clean)) return channelIdCache.get(clean)!;
+  let hash = 0;
+  for (const ch of clean) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  const id = -(1_000_000_000_000 + (hash % 900_000_000));
+  channelIdCache.set(clean, id);
+  return id;
+}
 
 const app = new Hono();
 
@@ -39,6 +55,11 @@ app.delete("/__calls", (c) => {
   calls.length = 0;
   return c.json({ ok: true });
 });
+/** Sinov skriptlari uchun qulaylik — `@username` qanday raqamli id'ga aylantirilganini tekshirish (webhook fixture'lar shu id'ni ishlatishi kerak). */
+app.get("/__chat-id/:username", (c) => c.json({ id: usernameToId(c.req.param("username")) }));
+app.get("/__banned", (c) => c.json({ items: bannedMembers }));
+/** Sinov skriptlari uchun — oxirgi yaratilgan xabar (sendMessage/sendPhoto) `message_id`si, ForceReply prompt kabi javobni "taxmin qilmasdan" bog'lash uchun. */
+app.get("/__last-message-id", (c) => c.json({ id: messageIdCounter }));
 
 app.post("/:botToken/:method", async (c) => {
   const { botToken, method } = c.req.param();
@@ -66,6 +87,7 @@ app.post("/:botToken/:method", async (c) => {
 
     case "sendMessage": {
       const id = ++messageIdCounter;
+      messageKinds.set(id, "text");
       return c.json(
         ok({
           message_id: id,
@@ -78,6 +100,7 @@ app.post("/:botToken/:method", async (c) => {
 
     case "sendPhoto": {
       const id = ++messageIdCounter;
+      messageKinds.set(id, "photo");
       return c.json(
         ok({
           message_id: id,
@@ -90,6 +113,7 @@ app.post("/:botToken/:method", async (c) => {
     }
 
     case "editMessageText":
+      messageKinds.set(body.message_id as number, "text");
       return c.json(
         ok({
           message_id: body.message_id,
@@ -99,21 +123,49 @@ app.post("/:botToken/:method", async (c) => {
         }),
       );
 
-    case "editMessageCaption":
+    case "editMessageCaption": {
+      const messageId = body.message_id as number;
+      // Haqiqiy Telegram: matn (caption'siz) xabarga editMessageCaption chaqirilsa xato qaytaradi.
+      if (messageKinds.get(messageId) === "text") {
+        return c.json(
+          { ok: false, error_code: 400, description: "Bad Request: there is no caption in the message to edit" },
+          400,
+        );
+      }
       return c.json(
         ok({
-          message_id: body.message_id,
+          message_id: messageId,
           date: Math.floor(Date.now() / 1000),
           chat: { id: body.chat_id, type: "private" },
           caption: body.caption ?? "",
         }),
       );
+    }
 
     case "deleteMessage":
       return c.json(ok(true));
 
     case "answerCallbackQuery":
       return c.json(ok(true));
+
+    case "getChat": {
+      const chatIdRaw = body.chat_id as string | number;
+      const numericId = typeof chatIdRaw === "number" ? chatIdRaw : usernameToId(String(chatIdRaw));
+      const username = typeof chatIdRaw === "string" ? chatIdRaw.replace(/^@/, "") : undefined;
+      return c.json(
+        ok({
+          id: numericId,
+          type: "channel",
+          title: String(chatIdRaw),
+          username,
+        }),
+      );
+    }
+
+    case "banChatMember": {
+      bannedMembers.push({ chatId: body.chat_id as string | number, userId: body.user_id as number });
+      return c.json(ok(true));
+    }
 
     default:
       return c.json(ok(true));

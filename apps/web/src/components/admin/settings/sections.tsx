@@ -23,6 +23,8 @@ import type {
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { SecretFieldRow, SwitchFieldRow, TextFieldRow } from "./field-row";
 import { SectionShell } from "./section-shell";
 import { useUnsavedGuard } from "./unsaved-guard";
@@ -95,6 +97,7 @@ export function TelegramSection({
   const [channelId, setChannelId] = useState(admin.channelId.value);
   const [notifyComments, setNotifyComments] = useState(admin.notifyComments.value);
   const [digestEnabled, setDigestEnabled] = useState(admin.digestEnabled.value);
+  const [telegramDisplay, setTelegramDisplay] = useState(admin.telegramDisplay.value);
   const [botTokenDraft, setBotTokenDraft] = useState<string | undefined>(undefined);
   const [webhookSecretDraft, setWebhookSecretDraft] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
@@ -118,7 +121,14 @@ export function TelegramSection({
   async function handleSave() {
     setSaving(true);
     try {
-      const patch: TelegramSettingsPatch = { adminChatId, adminUserIds, channelId, notifyComments, digestEnabled };
+      const patch: TelegramSettingsPatch = {
+        adminChatId,
+        adminUserIds,
+        channelId,
+        notifyComments,
+        digestEnabled,
+        telegramDisplay,
+      };
       if (botTokenDraft !== undefined) patch.botToken = botTokenDraft;
       if (webhookSecretDraft !== undefined) patch.webhookSecret = webhookSecretDraft;
       await onSave(patch);
@@ -201,6 +211,33 @@ export function TelegramSection({
 
       <SwitchFieldRow id="tg-notifyComments" label="Izoh bildirishnomalari" hint="Yangi izohlar admin chatga yuboriladi" field={admin.notifyComments} checked={notifyComments} onChange={setNotifyComments} />
       <SwitchFieldRow id="tg-digestEnabled" label="Kunlik hisobot" hint="Har kuni 09:00 (Toshkent) da statistika yuboriladi" field={admin.digestEnabled} checked={digestEnabled} onChange={setDigestEnabled} />
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="tg-telegramDisplay">Telegram izohlari qayerda ko&apos;rinadi</Label>
+        <p className="text-xs text-muted-foreground">
+          Kanalning muhokama guruhidan kelgan izohlar sayt sahifasida qanday ko&apos;rsatilishini belgilaydi.
+        </p>
+        <Select value={telegramDisplay} onValueChange={(v) => setTelegramDisplay(v as typeof telegramDisplay)}>
+          <SelectTrigger id="tg-telegramDisplay" size="sm" className="w-full sm:w-72">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="admin_only">Faqat admin panelda (standart) — saytda ko&apos;rinmaydi</SelectItem>
+            <SelectItem value="mixed">Web izohlar bilan aralash — bitta ro&apos;yxatda, Telegram belgisi bilan</SelectItem>
+            <SelectItem value="separate">Alohida bo&apos;lim — web izohlardan pastda, alohida ro&apos;yxatda</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label>Aniqlangan muhokama guruhi</Label>
+        <p className="text-xs text-muted-foreground">
+          Bot kanaldan avtomatik forward qilingan birinchi xabarni ko&apos;rgach o&apos;zi to&apos;ldiradi — qo&apos;lda kiritilmaydi.
+        </p>
+        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          {admin.discussionGroupId ?? "Hali aniqlanmagan — kanal postini muhokama guruhiga forward qildirib ko'ring"}
+        </div>
+      </div>
 
       <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
         <p className="font-medium text-foreground">Chat/user ID qanday olinadi?</p>

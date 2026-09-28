@@ -5,6 +5,13 @@ export interface PostEventPayload {
   slug: string;
 }
 
+export interface PostSubmittedEventPayload {
+  id: string;
+  slug: string;
+  title: string;
+  authorName: string;
+}
+
 export interface CommentCreatedEventPayload {
   post: { id: string; slug: string; title: string };
   comment: {
@@ -26,6 +33,7 @@ interface BlogEventMap {
   "post.published": [PostEventPayload];
   "post.updated": [PostEventPayload];
   "post.unpublished": [PostEventPayload];
+  "post.submitted": [PostSubmittedEventPayload];
   "comment.created": [CommentCreatedEventPayload];
 }
 

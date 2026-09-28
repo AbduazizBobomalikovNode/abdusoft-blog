@@ -68,6 +68,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
 
     expect(result.items).toHaveLength(1);
@@ -93,6 +94,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     expect(asOwner.items).toHaveLength(1);
     expect(asOwner.items[0]!.pending).toBe(true);
@@ -105,6 +107,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_B,
       sessionUserId: null,
+      source: "all",
     });
     expect(asStranger.items).toHaveLength(0);
   });
@@ -135,6 +138,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
 
     expect(result.items).toHaveLength(1);
@@ -171,6 +175,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     const deletedNode = withChild.items[0]!.replies[0]!;
     expect(deletedNode.deleted).toBe(true);
@@ -196,6 +201,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     expect(leafResult.items[0]!.replies).toHaveLength(0);
   });
@@ -227,6 +233,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     expect(byNew.items.map((i) => i.authorName)).toEqual(["Yangi", "Eski"]);
 
@@ -237,6 +244,7 @@ describe("getCommentsForPost — tree building, filtering, promotion", () => {
       limit: 20,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     expect(byTop.items.map((i) => i.authorName)).toEqual(["Eski", "Yangi"]);
   });
@@ -262,6 +270,7 @@ describe("getCommentsForPost — cursor pagination", () => {
       limit: 2,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     expect(page1.items).toHaveLength(2);
     expect(page1.total).toBe(5);
@@ -274,6 +283,7 @@ describe("getCommentsForPost — cursor pagination", () => {
       limit: 2,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     expect(page2.items).toHaveLength(2);
     expect(page2.nextCursor).toBe(page2.items[1]!.id);
@@ -287,6 +297,7 @@ describe("getCommentsForPost — cursor pagination", () => {
       limit: 2,
       deviceHash: DEVICE_A,
       sessionUserId: null,
+      source: "all",
     });
     expect(page3.items).toHaveLength(1);
     expect(page3.nextCursor).toBeNull();

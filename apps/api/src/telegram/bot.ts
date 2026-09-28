@@ -5,7 +5,9 @@ import { getSettings, onSettingsChange, type MergedSettings } from "../lib/setti
 import { bot, reconfigureBot } from "./client.js";
 import { registerCommands } from "./commands.js";
 import { registerCommentBotHandlers, registerCommentEvents } from "./comments.js";
+import { registerDiscussionHandlers } from "./discussion.js";
 import { registerTelegramPublishing } from "./publish.js";
+import { registerReviewEvents, registerReviewHandlers } from "./review.js";
 
 let initialized = false;
 /** Faqat bot buyruqlariga ruxsat berilgan Telegram user id'lar — settings o'zgarganda yangilanadi. */
@@ -27,6 +29,12 @@ const BOT_COMMANDS = [
 function attachHandlersToCurrentBot(): void {
   if (!bot) return;
 
+  // MUHIM: muhokama guruhi handler'lari admin-gate'dan OLDIN ro'yxatga
+  // olinadi — aks holda oddiy o'quvchilar (admin bo'lmagani uchun) guruhga
+  // yozgan izohlari hech qachon bu yergacha yetib kelmasdi. Bu handler'lar
+  // mos kelmagan yangilanishlarni o'zi `next()` orqali pastga o'tkazadi.
+  registerDiscussionHandlers();
+
   bot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
     if (!userId || !allowedAdminUserIds.includes(userId)) return;
@@ -34,6 +42,11 @@ function attachHandlersToCurrentBot(): void {
   });
 
   registerCommands();
+  // MUHIM: "pr:" (post review) callback'lari "c:" (izoh) prefiksidan OLDIN
+  // ro'yxatga olinishi kerak — comments.ts'dagi handler mos kelmasa `next()`
+  // chaqirmaydi (early `return`), shu sabab tartib teskari bo'lsa "pr:"
+  // callback'lari hech qachon review handler'iga yetib bormas edi.
+  registerReviewHandlers();
   registerCommentBotHandlers();
 }
 
@@ -56,6 +69,9 @@ async function applySettings(settings: MergedSettings): Promise<void> {
   try {
     await bot.api.setWebhook(`${config.API_ORIGIN}/telegram/webhook`, {
       secret_token: settings.telegram.webhookSecret,
+      // Mavjudlari (message, callback_query) + edited_message (Telegram izohlari
+      // tahrirlanganda `discussion.ts`ga yetib borishi uchun SHART).
+      allowed_updates: ["message", "edited_message", "callback_query"],
     });
     // Idempotent — xavfsiz qayta-qayta chaqirilaveradi; xatolik bo'lsa bot ishlashda davom etadi.
     await bot.api.setMyCommands(BOT_COMMANDS);
@@ -78,9 +94,11 @@ export function initTelegram(): void {
   // post.published/updated/unpublished — Telegram sozlanmagan bo'lsa ham
   // Telegraph mirror ishlashi mumkin (bot shart emas), shu sabab har doim ro'yxatga olinadi.
   registerTelegramPublishing();
-  // comment.created — bot instansiga bog'liq emas, shu sabab BIR MARTA ro'yxatga olinadi
-  // (bot qayta yaratilganda qayta ro'yxatga olinsa, bildirishnoma bir necha marta yuborilardi).
+  // comment.created / post.submitted — bot instansiga bog'liq emas, shu sabab BIR MARTA
+  // ro'yxatga olinadi (bot qayta yaratilganda qayta ro'yxatga olinsa, bildirishnoma bir
+  // necha marta yuborilardi).
   registerCommentEvents();
+  registerReviewEvents();
 
   onSettingsChange((settings) => {
     void applySettings(settings);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { JSONContent } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
@@ -13,14 +14,28 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { Settings2 } from "lucide-react";
 import { toast } from "sonner";
-import { slugify, type AdminPostDetail, type AdminPostStatus, type PostSettings, type TagWithCount, type TelegramRef, type UpdatePostBody } from "@blog/shared";
+import { slugify, type AdminPostDetail, type AdminPostStatus, type Me, type PostSettings, type TagWithCount, type TelegramRef, type UpdatePostBody } from "@blog/shared";
 import { PostEditorHeader, type SaveState } from "./post-editor-header";
 import { PostEditorSettings } from "./post-editor-settings";
+import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { CodeBlockLanguageMenu, PostEditorBubbleMenu } from "./post-editor-toolbar";
+import { AdminReviewActions, StaffReviewBanner } from "./review-banner";
 import { SlashCommand } from "./slash-command";
+import { StaffEditorPanel } from "./staff-editor-panel";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
+import { formatTime } from "@/lib/format";
 import { site } from "@/lib/site";
 
 const AUTOSAVE_DELAY_MS = 1500;
@@ -36,8 +51,9 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof AdminApiError ? error.message : fallback;
 }
 
-export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: TagWithCount[] }) {
+export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTags: TagWithCount[]; me: Me }) {
   const router = useRouter();
+  const isStaff = me.role === "staff";
   const [title, setTitle] = useState(post.title);
   const [slug, setSlug] = useState(post.slug);
   const [slugAuto, setSlugAuto] = useState(true);
@@ -47,6 +63,9 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
   const [settings, setSettings] = useState<PostSettings>(post.settings);
   const [pinned, setPinned] = useState(post.pinned);
   const [status, setStatus] = useState<AdminPostStatus>(post.status);
+  const [reviewNote, setReviewNote] = useState<string | null>(post.reviewNote);
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [scheduledAtLocal, setScheduledAtLocal] = useState(toDatetimeLocal(post.scheduledAt));
   const [scheduling, setScheduling] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -57,6 +76,11 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
   const [telegramChannel, setTelegramChannel] = useState<string | null>(null);
   const [refreshingTelegraph, setRefreshingTelegraph] = useState(false);
   const [repostingTelegram, setRepostingTelegram] = useState(false);
+
+  // Xodim (staff) uchun — post ko'rib chiqishda bo'lsa butunlay o'qish uchun
+  // (API ham shu holatda PATCH'ni 409 bilan rad etadi — bu shunchaki mos UI).
+  const readOnly = isStaff && status === "in_review";
+  const canSubmit = isStaff && (status === "draft" || status === "changes_requested");
 
   const pendingRef = useRef<UpdatePostBody>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -218,9 +242,11 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
       SlashCommand,
     ],
     content: post.contentJson as JSONContent,
+    editable: !readOnly,
     editorProps: {
       attributes: { class: "tiptap prose-article" },
       handlePaste: (view, event) => {
+        if (readOnly) return false;
         const file = event.clipboardData?.files?.[0];
         if (!file || !file.type.startsWith("image/")) return false;
         event.preventDefault();
@@ -237,7 +263,7 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
         return true;
       },
       handleDrop: (view, event, _slice, moved) => {
-        if (moved) return false;
+        if (readOnly || moved) return false;
         const file = event.dataTransfer?.files?.[0];
         if (!file || !file.type.startsWith("image/")) return false;
         event.preventDefault();
@@ -258,6 +284,24 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
     },
     onUpdate: ({ editor: ed }) => queueSave({ contentJson: ed.getJSON() }),
   });
+
+  useEffect(() => {
+    editor?.setEditable(!readOnly);
+  }, [editor, readOnly]);
+
+  async function handleSubmit() {
+    setSubmitting(true);
+    try {
+      const result = await adminApi.submitPost(post.id);
+      setStatus(result.status);
+      toast.success("Ko'rib chiqishga yuborildi");
+      setSubmitOpen(false);
+    } catch (error) {
+      toast.error(errorMessage(error, "Yuborishda xatolik"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   function handleTitleChange(value: string) {
     setTitle(value);
@@ -408,21 +452,75 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
     repostingTelegram,
   };
 
+  const staffPanelProps = {
+    allTags,
+    selectedTagSlugs: tagSlugs,
+    onTagsChange: settingsProps.onTagsChange,
+    excerpt,
+    onExcerptChange: settingsProps.onExcerptChange,
+    onExcerptAuto: settingsProps.onExcerptAuto,
+    coverUrl,
+    onCoverChange: settingsProps.onCoverChange,
+    readOnly,
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <PostEditorHeader
-        postId={post.id}
-        status={status}
-        saveState={saveState}
-        saveError={saveError}
-        lastSavedAt={lastSavedAt}
-        onPublish={handlePublish}
-        onUnpublish={handleUnpublish}
-        onArchive={handleArchive}
-        onDelete={handleDelete}
-        onRefreshTelegraph={() => void handleRefreshTelegraph()}
-        onRepostTelegram={() => void handleRepostTelegram()}
-      />
+      {isStaff ? (
+        <div className="sticky top-0 z-30 -mx-4 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur-sm md:-mx-8 md:px-8">
+          <div className="flex items-center gap-2.5">
+            <PostStatusBadge status={status} />
+            <span className="text-xs text-muted-foreground">
+              {saveState === "saving"
+                ? "Saqlanmoqda…"
+                : saveState === "error"
+                  ? `Xato: ${saveError ?? "saqlanmadi"}`
+                  : saveState === "saved" && lastSavedAt
+                    ? `Saqlandi ${formatTime(lastSavedAt)}`
+                    : ""}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button variant="ghost" size="sm" asChild>
+              <Link href={`/admin/postlar/${post.id}/preview`} target="_blank">
+                Ko&apos;rish
+              </Link>
+            </Button>
+            {canSubmit ? (
+              <Button size="sm" onClick={() => setSubmitOpen(true)}>
+                Ko&apos;rib chiqishga yuborish
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <PostEditorHeader
+          postId={post.id}
+          status={status}
+          saveState={saveState}
+          saveError={saveError}
+          lastSavedAt={lastSavedAt}
+          onPublish={handlePublish}
+          onUnpublish={handleUnpublish}
+          onArchive={handleArchive}
+          onDelete={handleDelete}
+          onRefreshTelegraph={() => void handleRefreshTelegraph()}
+          onRepostTelegram={() => void handleRepostTelegram()}
+        />
+      )}
+
+      {isStaff ? <StaffReviewBanner status={status} reviewNote={reviewNote} /> : null}
+      {!isStaff && status === "in_review" ? (
+        <AdminReviewActions
+          postId={post.id}
+          authorName={post.createdBy?.name ?? "Xodim"}
+          onApproved={(next) => setStatus(next)}
+          onChangesRequested={(next) => {
+            setStatus(next);
+            setReviewNote(null);
+          }}
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div className="flex min-w-0 flex-col gap-3">
@@ -434,6 +532,7 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
             onKeyDown={handleTitleKeyDown}
             placeholder="Sarlavha"
             rows={1}
+            disabled={readOnly}
             className="post-editor-title"
           />
 
@@ -442,17 +541,20 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
             <input
               value={slug}
               onChange={(event) => handleSlugChange(event.target.value)}
+              disabled={readOnly}
               className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 hover:border-border focus:border-border focus:outline-none"
             />
-            <button
-              type="button"
-              onClick={() => setSlugAuto((v) => !v)}
-              aria-pressed={slugAuto}
-              title={slugAuto ? "Slug sarlavhadan avtomatik yangilanadi" : "Slug qulflangan"}
-              className="rounded-md px-1.5 py-0.5 hover:bg-muted"
-            >
-              {slugAuto ? "🔓" : "🔒"}
-            </button>
+            {!readOnly ? (
+              <button
+                type="button"
+                onClick={() => setSlugAuto((v) => !v)}
+                aria-pressed={slugAuto}
+                title={slugAuto ? "Slug sarlavhadan avtomatik yangilanadi" : "Slug qulflangan"}
+                className="rounded-md px-1.5 py-0.5 hover:bg-muted"
+              >
+                {slugAuto ? "🔓" : "🔒"}
+              </button>
+            ) : null}
           </div>
 
           <Button
@@ -463,7 +565,7 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
             onClick={() => setSettingsOpen(true)}
           >
             <Settings2 className="size-4" />
-            Sozlamalar
+            {isStaff ? "Qo'shimcha" : "Sozlamalar"}
           </Button>
 
           {editor ? (
@@ -479,18 +581,36 @@ export function PostEditor({ post, allTags }: { post: AdminPostDetail; allTags: 
         </div>
 
         <aside className="hidden lg:block">
-          <PostEditorSettings {...settingsProps} />
+          {isStaff ? <StaffEditorPanel {...staffPanelProps} /> : <PostEditorSettings {...settingsProps} />}
         </aside>
       </div>
 
       <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
         <SheetContent side="right" className="overflow-y-auto p-4">
           <SheetHeader className="p-0">
-            <SheetTitle>Sozlamalar</SheetTitle>
+            <SheetTitle>{isStaff ? "Qo'shimcha" : "Sozlamalar"}</SheetTitle>
           </SheetHeader>
-          <PostEditorSettings {...settingsProps} />
+          {isStaff ? <StaffEditorPanel {...staffPanelProps} /> : <PostEditorSettings {...settingsProps} />}
         </SheetContent>
       </Sheet>
+
+      <AlertDialog open={submitOpen} onOpenChange={setSubmitOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Ko&apos;rib chiqishga yuborish</AlertDialogTitle>
+            <AlertDialogDescription>
+              Post admin tomonidan tasdiqlanmaguncha tahrirlab bo&apos;lmaydi. Admin tasdiqlagach, post saytda va
+              Telegram kanalida avtomatik chop etiladi.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Bekor qilish</AlertDialogCancel>
+            <AlertDialogAction disabled={submitting} onClick={() => void handleSubmit()}>
+              Yuborish
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <input
         ref={fileInputRef}

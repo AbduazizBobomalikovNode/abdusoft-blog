@@ -3,7 +3,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { media } from "../db/schema.js";
-import { requireAdmin } from "../lib/require-admin.js";
+import { requireRole } from "../lib/require-admin.js";
 import { deleteStoredFile, processImage, storeProcessedFile } from "../lib/media/store.js";
 
 const MAX_SIZE = 10 * 1024 * 1024;
@@ -34,8 +34,9 @@ function toMediaDto(row: typeof media.$inferSelect) {
 }
 
 export const adminMediaRoute = new Hono()
-  .use("*", requireAdmin)
+  .use("*", requireRole("admin", "staff"))
   .get("/", async (c) => {
+    const adminUser = c.get("adminUser");
     const parsed = ListQuerySchema.safeParse({
       page: c.req.query("page"),
       limit: c.req.query("limit"),
@@ -44,10 +45,12 @@ export const adminMediaRoute = new Hono()
 
     const { page, limit } = parsed.data;
     const offset = (page - 1) * limit;
+    // Xodim (staff) faqat o'zi yuklagan media fayllarni ko'radi/tanlaydi.
+    const whereClause = adminUser.role === "staff" ? eq(media.createdBy, adminUser.id) : undefined;
 
     const [rows, countRows] = await Promise.all([
-      db.select().from(media).orderBy(desc(media.createdAt)).limit(limit).offset(offset),
-      db.select({ count: sql<number>`count(*)::int` }).from(media),
+      db.select().from(media).where(whereClause).orderBy(desc(media.createdAt)).limit(limit).offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(media).where(whereClause),
     ]);
 
     const total = countRows[0]?.count ?? 0;
@@ -61,6 +64,7 @@ export const adminMediaRoute = new Hono()
     });
   })
   .post("/", async (c) => {
+    const adminUser = c.get("adminUser");
     let body: Record<string, string | File>;
     try {
       body = await c.req.parseBody();
@@ -103,6 +107,7 @@ export const adminMediaRoute = new Hono()
         width: processed.width,
         height: processed.height,
         alt,
+        createdBy: adminUser.id,
       })
       .returning();
 
@@ -111,10 +116,17 @@ export const adminMediaRoute = new Hono()
     return c.json(toMediaDto(created), 201);
   })
   .patch("/:id", async (c) => {
+    const adminUser = c.get("adminUser");
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => null);
     const parsed = UpdateMediaBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
+
+    const [existing] = await db.select({ createdBy: media.createdBy }).from(media).where(eq(media.id, id)).limit(1);
+    if (!existing) return c.json({ error: "Topilmadi" }, 404);
+    if (adminUser.role === "staff" && existing.createdBy !== adminUser.id) {
+      return c.json({ error: "Faqat o'zingiz yuklagan fayllarni o'zgartira olasiz" }, 403);
+    }
 
     const [updated] = await db
       .update(media)
@@ -126,9 +138,13 @@ export const adminMediaRoute = new Hono()
     return c.json(toMediaDto(updated));
   })
   .delete("/:id", async (c) => {
+    const adminUser = c.get("adminUser");
     const id = c.req.param("id");
     const [row] = await db.select().from(media).where(eq(media.id, id)).limit(1);
     if (!row) return c.json({ error: "Topilmadi" }, 404);
+    if (adminUser.role === "staff" && row.createdBy !== adminUser.id) {
+      return c.json({ error: "Faqat o'zingiz yuklagan fayllarni o'chira olasiz" }, 403);
+    }
 
     await deleteStoredFile(row.key);
     await db.delete(media).where(eq(media.id, id));

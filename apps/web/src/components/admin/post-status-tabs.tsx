@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 const TABS: { value: "all" | AdminPostStatus; label: string }[] = [
   { value: "all", label: "Hammasi" },
   { value: "draft", label: "Qoralama" },
+  { value: "in_review", label: "Ko'rib chiqish" },
+  { value: "changes_requested", label: "Tuzatish so'raldi" },
   { value: "scheduled", label: "Rejalashtirilgan" },
   { value: "published", label: "Chop etilgan" },
   { value: "archived", label: "Arxiv" },

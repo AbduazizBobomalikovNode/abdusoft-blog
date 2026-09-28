@@ -3,6 +3,8 @@ import { Badge } from "@/components/ui/badge";
 
 const STATUS_LABEL: Record<AdminPostStatus, string> = {
   draft: "Qoralama",
+  in_review: "Ko'rib chiqilmoqda",
+  changes_requested: "Tuzatish so'raldi",
   scheduled: "Rejalashtirilgan",
   published: "Chop etilgan",
   archived: "Arxivlangan",
@@ -10,6 +12,8 @@ const STATUS_LABEL: Record<AdminPostStatus, string> = {
 
 const STATUS_VARIANT: Record<AdminPostStatus, "default" | "secondary" | "outline"> = {
   draft: "outline",
+  in_review: "secondary",
+  changes_requested: "outline",
   scheduled: "secondary",
   published: "default",
   archived: "outline",

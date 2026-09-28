@@ -1,10 +1,12 @@
 "use client";
 
 import type {
+  AcceptStaffInviteResponse,
   AdminCommentListResponse,
   AdminPostDetail,
   BansListResponse,
   CreatePostResponse,
+  CreateStaffInviteResponse,
   CreateTagBody,
   GenerateSecretResponse,
   Media,
@@ -14,6 +16,7 @@ import type {
   SettingsSection,
   SettingsTestResult,
   SiteSettingsAdmin,
+  SubmitPostResponse,
   TagWithCount,
   TelegramStatus,
   UpdatePostBody,
@@ -209,4 +212,24 @@ export const adminApi = {
 
   repostTelegram: (postId: string) =>
     adminJson<{ channelMessageId: number | null }>(`/admin/posts/${postId}/telegram/repost`, { method: "POST" }),
+
+  // --- Xodim (staff) va ko'rib chiqish (review) ---
+
+  submitPost: (id: string) => adminJson<SubmitPostResponse>(`/admin/posts/${id}/submit`, { method: "POST" }),
+
+  approvePost: (id: string) => adminJson<LifecycleSummary>(`/admin/posts/${id}/approve`, { method: "POST" }),
+
+  requestPostChanges: (id: string, note: string) =>
+    adminJson<LifecycleSummary>(`/admin/posts/${id}/request-changes`, { method: "POST", ...jsonBody({ note }) }),
+
+  createStaffInvite: (note?: string) =>
+    adminJson<CreateStaffInviteResponse>("/admin/staff/invites", { method: "POST", ...jsonBody({ note }) }),
+
+  revokeStaffInvite: (id: string) =>
+    adminJson<{ ok: true }>(`/admin/staff/invites/${id}/revoke`, { method: "POST" }),
+
+  removeStaffMember: (userId: string) => adminJson<{ ok: true }>(`/admin/staff/${userId}`, { method: "DELETE" }),
+
+  acceptStaffInvite: (token: string) =>
+    adminJson<AcceptStaffInviteResponse>(`/staff/invites/${token}/accept`, { method: "POST" }),
 };

@@ -530,10 +530,15 @@ function CommentThread({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const now = useNow();
 
+  const isTelegram = comment.source === "telegram";
   const indentIndex = Math.min(comment.depth, MAX_VISUAL_DEPTH);
   const canEdit =
-    comment.isMine && !comment.deleted && comment.editableUntil !== null && now < new Date(comment.editableUntil).getTime();
-  const canDelete = comment.isMine && !comment.deleted;
+    !isTelegram &&
+    comment.isMine &&
+    !comment.deleted &&
+    comment.editableUntil !== null &&
+    now < new Date(comment.editableUntil).getTime();
+  const canDelete = !isTelegram && comment.isMine && !comment.deleted;
 
   const replies = comment.replies;
   const visibleReplies = expanded ? replies : replies.slice(0, MAX_VISIBLE_REPLIES);
@@ -553,6 +558,11 @@ function CommentThread({
               </Badge>
             ) : comment.authorVerified ? (
               <BadgeCheck className="size-3.5 text-muted-foreground" aria-label="Tasdiqlangan" />
+            ) : null}
+            {isTelegram ? (
+              <Badge variant="outline" className="h-4 px-1.5 text-[0.6rem] text-sky-600 dark:text-sky-400">
+                Telegram{comment.tgUsername ? ` · @${comment.tgUsername}` : ""}
+              </Badge>
             ) : null}
             <RelativeTime iso={comment.createdAt} className="text-xs text-muted-foreground" />
             {comment.editedAt ? <span className="text-xs text-muted-foreground">(tahrirlangan)</span> : null}
@@ -575,9 +585,11 @@ function CommentThread({
 
           {!comment.deleted && !editing ? (
             <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-              <button type="button" onClick={() => setReplyOpen((v) => !v)} className="rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                Javob
-              </button>
+              {!isTelegram ? (
+                <button type="button" onClick={() => setReplyOpen((v) => !v)} className="rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  Javob
+                </button>
+              ) : null}
               <ReactionButtons comment={comment} ctx={ctx} />
               {canEdit ? (
                 <button type="button" onClick={() => setEditing(true)} className="rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -594,7 +606,7 @@ function CommentThread({
                 </button>
               ) : null}
             </div>
-          ) : comment.deleted && replies.length > 0 ? (
+          ) : comment.deleted && replies.length > 0 && !isTelegram ? (
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <button type="button" onClick={() => setReplyOpen((v) => !v)} className="rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 Javob
@@ -602,7 +614,7 @@ function CommentThread({
             </div>
           ) : null}
 
-          {replyOpen ? (
+          {replyOpen && !isTelegram ? (
             <Composer
               deviceMe={ctx.deviceMe}
               allowAnonymous={ctx.allowAnonymous}
@@ -677,15 +689,22 @@ export function PostComments({ post }: { post: PostDetail }) {
 }
 
 function PostCommentsInner({ post }: { post: PostDetail }) {
+  const siteConfig = useSiteConfig();
+  const telegramDisplay = siteConfig.telegramDisplay;
   const [sort, setSort] = useState<CommentSort>("new");
   const [items, setItems] = useState<CommentNode[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [commentsCount, setCommentsCount] = useState(post.counts.comments);
+  const [commentsCount, setCommentsCount] = useState(
+    post.counts.comments + (telegramDisplay === "mixed" ? post.counts.tgComments : 0),
+  );
   const [deviceMe, setDeviceMe] = useState<DeviceMe | null>(null);
   const [meReactions, setMeReactions] = useState<Record<string, ReactionType>>({});
   const [popMap, setPopMap] = useState<Record<string, number>>({});
+  const [telegramItems, setTelegramItems] = useState<CommentNode[]>([]);
+  const [telegramTotal, setTelegramTotal] = useState(post.counts.tgComments);
+  const [telegramThreadUrl, setTelegramThreadUrl] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchDeviceMe().then(setDeviceMe);
@@ -701,6 +720,11 @@ function PostCommentsInner({ post }: { post: PostDetail }) {
         setItems(data.items);
         setNextCursor(data.nextCursor);
         setMeReactions(data.me.reactions);
+        if (telegramDisplay === "separate") {
+          setTelegramItems(data.telegram ?? []);
+          setTelegramTotal(data.telegramTotal ?? 0);
+          setTelegramThreadUrl(data.telegramThreadUrl ?? null);
+        }
       } else {
         toast.error("Fikrlarni yuklab bo'lmadi");
       }
@@ -709,7 +733,7 @@ function PostCommentsInner({ post }: { post: PostDetail }) {
     return () => {
       cancelled = true;
     };
-  }, [sort, post.slug]);
+  }, [sort, post.slug, telegramDisplay]);
 
   async function fetchComments(slug: string, targetSort: CommentSort, cursor: string | null) {
     const search = new URLSearchParams({ sort: targetSort });
@@ -922,6 +946,29 @@ function PostCommentsInner({ post }: { post: PostDetail }) {
           <Button variant="outline" size="sm" disabled={loadingMore} onClick={() => void loadMore()}>
             {loadingMore ? "Yuklanmoqda…" : "Yana yuklash"}
           </Button>
+        </div>
+      ) : null}
+
+      {telegramDisplay === "separate" && (telegramItems.length > 0 || telegramTotal > 0) ? (
+        <div className="flex flex-col gap-3 border-t border-border pt-6">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold tracking-tight">Telegram&apos;dagi fikrlar ({telegramTotal})</h3>
+            {telegramThreadUrl ? (
+              <a
+                href={telegramThreadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-medium text-primary underline underline-offset-2"
+              >
+                Telegram&apos;da javob berish →
+              </a>
+            ) : null}
+          </div>
+          <div className="flex flex-col divide-y divide-border">
+            {telegramItems.map((comment) => (
+              <CommentThread key={comment.id} comment={comment} ctx={ctx} />
+            ))}
+          </div>
         </div>
       ) : null}
     </section>

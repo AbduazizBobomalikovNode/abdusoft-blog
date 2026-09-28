@@ -1,4 +1,4 @@
-import { InlineKeyboard } from "grammy";
+import { GrammyError, InlineKeyboard } from "grammy";
 import { eq } from "drizzle-orm";
 import { DEFAULT_POST_SETTINGS, PostSettingsSchema } from "@blog/shared";
 import { config } from "../config.js";
@@ -8,10 +8,10 @@ import { events, type PostEventPayload } from "../lib/events.js";
 import { getSettings } from "../lib/settings.js";
 import { tagsForPostIds } from "../routes/posts.js";
 import { bot } from "./client.js";
-import { escapeHtml, tagsToHashtags, truncate } from "./format.js";
+import { buildChannelPost, CHANNEL_CAPTION_LIMIT, CHANNEL_TEXT_LIMIT } from "./channel-post.js";
 import { createOrUpdateTelegraphPage, tiptapToTelegraphNodes } from "./telegraph.js";
 
-const CAPTION_LIMIT = 900; // Telegram caption limiti 1024 — zaxira bilan.
+type ChannelMessageType = "text" | "photo";
 
 function postUrlFor(slug: string): string {
   return `${config.WEB_ORIGIN}/${slug}`;
@@ -24,7 +24,12 @@ async function loadTelegramRef(postId: string) {
 
 async function upsertTelegramRef(
   postId: string,
-  patch: Partial<{ telegraphPath: string | null; telegraphUrl: string | null; channelMessageId: number | null }>,
+  patch: Partial<{
+    telegraphPath: string | null;
+    telegraphUrl: string | null;
+    channelMessageId: number | null;
+    channelMessageType: ChannelMessageType | null;
+  }>,
 ) {
   const existing = await loadTelegramRef(postId);
   if (existing) {
@@ -37,21 +42,23 @@ async function upsertTelegramRef(
   await db.insert(telegramRefs).values({ postId, ...patch, updatedAt: new Date() });
 }
 
-function buildChannelText(params: {
-  title: string;
-  excerpt: string | null;
-  hashtags: string;
-}): string {
-  const parts = [`<b>${escapeHtml(params.title)}</b>`];
-  if (params.excerpt) parts.push(escapeHtml(params.excerpt));
-  if (params.hashtags) parts.push(params.hashtags);
-  return parts.join("\n\n");
-}
-
 function buildKeyboard(postUrl: string, telegraphUrl: string | null): InlineKeyboard {
   const kb = new InlineKeyboard().url("📖 Saytda o'qish", postUrl);
   if (telegraphUrl) kb.url("⚡ Telegramda o'qish", telegraphUrl);
   return kb;
+}
+
+/** grammY `GrammyError.description` "Bad Request: message is not modified" bo'lsa — muvaffaqiyat sifatida ko'riladi (log qilinmaydi). */
+function isNotModifiedError(error: unknown): boolean {
+  return error instanceof GrammyError && /message is not modified/i.test(error.description);
+}
+
+/** editMessageCaption'ni text-turdagi xabarga (caption yo'q) qo'llashga urinishda Telegram qaytaradigan xato. */
+function isCaptionTypeMismatch(error: unknown): boolean {
+  return (
+    error instanceof GrammyError &&
+    (/there is no caption/i.test(error.description) || /message can't be edited/i.test(error.description))
+  );
 }
 
 /**
@@ -93,6 +100,8 @@ async function syncPostToTelegram(postId: string): Promise<void> {
     } catch (error: unknown) {
       console.error(`Telegraph mirror xatosi (${post.slug}):`, error);
     }
+  } else {
+    telegraphUrl = (await loadTelegramRef(post.id))?.telegraphUrl ?? null;
   }
 
   const channelId = integrationSettings.telegram.channelId;
@@ -101,43 +110,93 @@ async function syncPostToTelegram(postId: string): Promise<void> {
 
   try {
     const tagMap = await tagsForPostIds([post.id]);
-    const hashtags = tagsToHashtags((tagMap.get(post.id) ?? []).map((t) => t.name));
-    const text = buildChannelText({ title: post.title, excerpt: post.excerpt, hashtags });
+    const tagNames = (tagMap.get(post.id) ?? []).map((t) => t.name);
     const keyboard = buildKeyboard(postUrl, telegraphUrl);
     const ref = await loadTelegramRef(post.id);
 
     if (ref?.channelMessageId) {
-      if (post.coverUrl) {
-        await bot.api.editMessageCaption(channelId, ref.channelMessageId, {
-          caption: truncate(text, CAPTION_LIMIT),
-          parse_mode: "HTML",
-          reply_markup: keyboard,
+      if (ref.channelMessageType === "text") {
+        const built = buildChannelPost({
+          post: { title: post.title, slug: post.slug, contentJson: post.contentJson, tags: tagNames },
+          siteUrl: config.WEB_ORIGIN,
+          telegraphUrl,
+          limit: CHANNEL_TEXT_LIMIT,
         });
-      } else {
-        await bot.api.editMessageText(channelId, ref.channelMessageId, text, {
-          parse_mode: "HTML",
-          reply_markup: keyboard,
-          link_preview_options: { url: telegraphUrl ?? postUrl, prefer_large_media: true },
-        });
+        try {
+          await bot.api.editMessageText(channelId, ref.channelMessageId, built.html, {
+            parse_mode: "HTML",
+            reply_markup: keyboard,
+            link_preview_options: {
+              url: post.coverUrl ?? postUrl,
+              prefer_large_media: true,
+              show_above_text: true,
+            },
+          });
+        } catch (error: unknown) {
+          if (!isNotModifiedError(error)) throw error;
+        }
+        return;
       }
+
+      // channelMessageType === 'photo' yoki null (legacy) — avval caption yo'li, mos kelmasa editMessageText'ga o'tamiz.
+      const captionBuilt = buildChannelPost({
+        post: { title: post.title, slug: post.slug, contentJson: post.contentJson, tags: tagNames },
+        siteUrl: config.WEB_ORIGIN,
+        telegraphUrl,
+        limit: CHANNEL_CAPTION_LIMIT,
+      });
+      try {
+        await bot.api.editMessageCaption(channelId, ref.channelMessageId, {
+          caption: captionBuilt.html,
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+        });
+        return;
+      } catch (error: unknown) {
+        if (isNotModifiedError(error)) return;
+        if (!isCaptionTypeMismatch(error)) throw error;
+      }
+
+      const textBuilt = buildChannelPost({
+        post: { title: post.title, slug: post.slug, contentJson: post.contentJson, tags: tagNames },
+        siteUrl: config.WEB_ORIGIN,
+        telegraphUrl,
+        limit: CHANNEL_TEXT_LIMIT,
+      });
+      try {
+        await bot.api.editMessageText(channelId, ref.channelMessageId, textBuilt.html, {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+          link_preview_options: {
+            url: post.coverUrl ?? postUrl,
+            prefer_large_media: true,
+            show_above_text: true,
+          },
+        });
+      } catch (error: unknown) {
+        if (!isNotModifiedError(error)) throw error;
+      }
+      await upsertTelegramRef(post.id, { channelMessageType: "text" });
       return;
     }
 
-    if (post.coverUrl) {
-      const sent = await bot.api.sendPhoto(channelId, post.coverUrl, {
-        caption: truncate(text, CAPTION_LIMIT),
-        parse_mode: "HTML",
-        reply_markup: keyboard,
-      });
-      await upsertTelegramRef(post.id, { channelMessageId: sent.message_id });
-    } else {
-      const sent = await bot.api.sendMessage(channelId, text, {
-        parse_mode: "HTML",
-        reply_markup: keyboard,
-        link_preview_options: { url: telegraphUrl ?? postUrl, prefer_large_media: true },
-      });
-      await upsertTelegramRef(post.id, { channelMessageId: sent.message_id });
-    }
+    // Yangi post — har doim sendMessage (rasm bo'lsa ham) — kover linkPreview orqali ko'rsatiladi.
+    const built = buildChannelPost({
+      post: { title: post.title, slug: post.slug, contentJson: post.contentJson, tags: tagNames },
+      siteUrl: config.WEB_ORIGIN,
+      telegraphUrl,
+      limit: CHANNEL_TEXT_LIMIT,
+    });
+    const sent = await bot.api.sendMessage(channelId, built.html, {
+      parse_mode: "HTML",
+      reply_markup: keyboard,
+      link_preview_options: {
+        url: post.coverUrl ?? postUrl,
+        prefer_large_media: true,
+        show_above_text: true,
+      },
+    });
+    await upsertTelegramRef(post.id, { channelMessageId: sent.message_id, channelMessageType: "text" });
   } catch (error: unknown) {
     console.error(`Telegram kanal post xatosi (${post.slug}):`, error);
   }
@@ -151,13 +210,16 @@ async function removeFromChannel(postId: string): Promise<void> {
   const ref = await loadTelegramRef(postId);
   if (!ref?.channelMessageId) return;
 
+  // MUHIM: kanal xabarini avtomatik o'chirib qayta yubormaymiz — bu izoh
+  // muhokamasi (discussion thread) bog'lanishini buzadi. Faqat `post.unpublished`
+  // hodisasida haqiqatan o'chiramiz (quyida), qayta chop etishda esa tahrirlanadi.
   try {
     await bot.api.deleteMessage(channelId, ref.channelMessageId);
   } catch (error: unknown) {
     console.error(`Telegram kanal xabarini o'chirishda xatolik (post ${postId}):`, error);
   }
 
-  await upsertTelegramRef(postId, { channelMessageId: null });
+  await upsertTelegramRef(postId, { channelMessageId: null, channelMessageType: null });
 }
 
 function handlePublishedOrUpdated(payload: PostEventPayload): void {
@@ -180,6 +242,13 @@ export async function refreshTelegraphMirror(postId: string): Promise<void> {
   await syncPostToTelegram(postId);
 }
 
+/**
+ * DIQQAT: bu funksiya kanal xabarini o'chirib, qaytadan yuboradi — muhokama
+ * guruhidagi eski forward/thread bog'lanishini buzadi. Faqat admin panelda
+ * foydalanuvchi ONGLI ravishda "qayta yuborish" bosgandagina chaqirilishi
+ * kerak (avtomatik update oqimida ISHLATILMAYDI — u `syncPostToTelegram`
+ * orqali xabarni JOYIDA tahrirlaydi).
+ */
 export async function repostToChannel(postId: string): Promise<void> {
   await removeFromChannel(postId);
   await syncPostToTelegram(postId);

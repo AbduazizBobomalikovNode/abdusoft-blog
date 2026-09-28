@@ -1,26 +1,31 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { and, asc, desc, eq, gt, ilike, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   CreatePostBodySchema,
   DEFAULT_POST_SETTINGS,
   PostSettingsSchema,
+  RequestChangesBodySchema,
   RESERVED_SLUGS,
   SchedulePostBodySchema,
+  STAFF_EDITABLE_POST_FIELDS,
   UpdatePostBodySchema,
   slugify,
   type AdminPostStatus,
+  type PostAuthorRef,
   type PostListItem,
   type Tag,
 } from "@blog/shared";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
+import { user } from "../db/auth-schema.js";
 import { postTags, posts, tags } from "../db/schema.js";
 import { postSelectColumns, tagsForPostIds } from "./posts.js";
-import { requireAdmin } from "../lib/require-admin.js";
+import { requireRole } from "../lib/require-admin.js";
 import { escapeLike } from "../lib/like.js";
 import { renderPost } from "../lib/content/render.js";
 import { events } from "../lib/events.js";
+import { approvePost, requestPostChanges, submitPostForReview } from "../lib/post-review.js";
 import { pathsForPost, revalidateWeb } from "../lib/revalidate.js";
 import { getTelegramRefForPost, refreshTelegraphMirror, repostToChannel } from "../telegram/publish.js";
 
@@ -29,8 +34,32 @@ const MAX_LIMIT = 100;
 const SHORT_QUERY_LENGTH = 3;
 const RELATED_LIMIT = 3;
 const SLUG_ID_LENGTH = 6;
+const RECENT_MINE_LIMIT = 8;
 
-const STATUS_VALUES = ["all", "draft", "scheduled", "published", "archived"] as const;
+/**
+ * Hono'ning fluent (zanjirlangan) marshrut tur chiqarishini buzmaslik uchun
+ * (middleware'ni `.post(path, middleware, handler)` ko'rinishida uchinchi
+ * argument sifatida berish `c.req.param()` turini `string | undefined`ga
+ * kengaytirib yuborardi) — admin-only tekshiruvi alohida middleware EMAS,
+ * handler ICHIDA chaqiriladigan oddiy tekshiruv sifatida amalga oshiriladi.
+ */
+function forbidUnlessAdmin(c: Context): Response | null {
+  const adminUser = c.get("adminUser");
+  if (adminUser.role !== "admin") {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+  return null;
+}
+
+const STATUS_VALUES = [
+  "all",
+  "draft",
+  "in_review",
+  "changes_requested",
+  "scheduled",
+  "published",
+  "archived",
+] as const;
 
 const ListQuerySchema = z.object({
   status: z.enum(STATUS_VALUES).default("all"),
@@ -44,6 +73,8 @@ const adminPostSelectColumns = {
   status: posts.status,
   scheduledAt: posts.scheduledAt,
   updatedAt: posts.updatedAt,
+  createdBy: posts.createdBy,
+  reviewNote: posts.reviewNote,
 };
 
 type AdminPostRow = {
@@ -61,9 +92,24 @@ type AdminPostRow = {
   status: AdminPostStatus;
   scheduledAt: Date | null;
   updatedAt: Date;
+  createdBy: string | null;
+  reviewNote: string | null;
 };
 
-function toAdminListItem(row: AdminPostRow, tagMap: Map<string, Tag[]>) {
+/** Ro'yxat sahifasidagi "Yozgan" ustuni uchun — bitta so'rovda barcha (sahifadagi) muallif nomlarini oldindan yuklaydi. */
+async function authorNamesForIds(ids: (string | null)[]): Promise<Map<string, string | null>> {
+  const uniqueIds = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+  if (uniqueIds.length === 0) return new Map();
+  const rows = await db.select({ id: user.id, name: user.name, email: user.email }).from(user).where(inArray(user.id, uniqueIds));
+  return new Map(rows.map((row) => [row.id, row.name || row.email]));
+}
+
+function toAuthorRef(id: string | null, authorMap: Map<string, string | null>): PostAuthorRef | null {
+  if (!id) return null;
+  return { id, name: authorMap.get(id) ?? null };
+}
+
+function toAdminListItem(row: AdminPostRow, tagMap: Map<string, Tag[]>, authorMap: Map<string, string | null>) {
   return {
     id: row.id,
     slug: row.slug,
@@ -80,16 +126,27 @@ function toAdminListItem(row: AdminPostRow, tagMap: Map<string, Tag[]>) {
       dislikes: row.dislikesCount,
       comments: row.commentsCount,
     },
+    createdBy: toAuthorRef(row.createdBy, authorMap),
+    reviewNote: row.reviewNote,
   };
 }
 
-async function computeTotals(): Promise<Record<"all" | AdminPostStatus, number>> {
+async function computeTotals(ownerId?: string): Promise<Record<"all" | AdminPostStatus, number>> {
   const rows = await db
     .select({ status: posts.status, count: sql<number>`count(*)::int` })
     .from(posts)
+    .where(ownerId ? eq(posts.createdBy, ownerId) : undefined)
     .groupBy(posts.status);
 
-  const totals = { all: 0, draft: 0, scheduled: 0, published: 0, archived: 0 };
+  const totals = {
+    all: 0,
+    draft: 0,
+    in_review: 0,
+    changes_requested: 0,
+    scheduled: 0,
+    published: 0,
+    archived: 0,
+  };
   for (const row of rows) {
     totals[row.status] = row.count;
     totals.all += row.count;
@@ -156,8 +213,35 @@ function toLifecycleSummary(post: typeof posts.$inferSelect) {
 }
 
 export const adminPostsRoute = new Hono()
-  .use("*", requireAdmin)
+  .use("*", requireRole("admin", "staff"))
+  .get("/mine/summary", async (c) => {
+    const adminUser = c.get("adminUser");
+    const [totals, recentRows] = await Promise.all([
+      computeTotals(adminUser.id),
+      db
+        .select(adminPostSelectColumns)
+        .from(posts)
+        .where(eq(posts.createdBy, adminUser.id))
+        .orderBy(desc(posts.updatedAt))
+        .limit(RECENT_MINE_LIMIT),
+    ]);
+
+    const tagMap = await tagsForPostIds(recentRows.map((row) => row.id));
+    const authorMap = await authorNamesForIds(recentRows.map((row) => row.createdBy));
+
+    return c.json({
+      counts: {
+        draft: totals.draft,
+        in_review: totals.in_review,
+        changes_requested: totals.changes_requested,
+        published: totals.published,
+        archived: totals.archived,
+      },
+      recent: recentRows.map((row) => toAdminListItem(row, tagMap, authorMap)),
+    });
+  })
   .get("/", async (c) => {
+    const adminUser = c.get("adminUser");
     const parsed = ListQuerySchema.safeParse({
       status: c.req.query("status") ?? undefined,
       q: c.req.query("q"),
@@ -175,6 +259,11 @@ export const adminPostsRoute = new Hono()
     const conditions = [];
     if (status !== "all") {
       conditions.push(eq(posts.status, status));
+    }
+    // Xodim (staff) FAQAT o'z postlarini ko'radi — bu shart har doim, so'rov
+    // parametrlaridan qat'i nazar, qo'shiladi (API — haqiqiy himoya qatlami).
+    if (adminUser.role === "staff") {
+      conditions.push(eq(posts.createdBy, adminUser.id));
     }
 
     if (q) {
@@ -199,14 +288,15 @@ export const adminPostsRoute = new Hono()
         .limit(limit)
         .offset(offset),
       db.select({ count: sql<number>`count(*)::int` }).from(posts).where(whereClause),
-      computeTotals(),
+      computeTotals(adminUser.role === "staff" ? adminUser.id : undefined),
     ]);
 
     const total = countRows[0]?.count ?? 0;
     const tagMap = await tagsForPostIds(rows.map((row) => row.id));
+    const authorMap = await authorNamesForIds(rows.map((row) => row.createdBy));
 
     return c.json({
-      items: rows.map((row) => toAdminListItem(row, tagMap)),
+      items: rows.map((row) => toAdminListItem(row, tagMap, authorMap)),
       page,
       limit,
       total,
@@ -215,6 +305,7 @@ export const adminPostsRoute = new Hono()
     });
   })
   .post("/", async (c) => {
+    const adminUser = c.get("adminUser");
     const body = await c.req.json().catch(() => ({}));
     const parsed = CreatePostBodySchema.safeParse(body);
     if (!parsed.success) {
@@ -243,6 +334,8 @@ export const adminPostsRoute = new Hono()
         readingTime: rendered.readingTime,
         status: "draft",
         settings: DEFAULT_POST_SETTINGS,
+        createdBy: adminUser.id,
+        updatedBy: adminUser.id,
       })
       .returning();
 
@@ -253,11 +346,19 @@ export const adminPostsRoute = new Hono()
     return c.json({ id: created.id, slug: created.slug }, 201);
   })
   .get("/:id", async (c) => {
+    const adminUser = c.get("adminUser");
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+    if (adminUser.role === "staff" && post.createdBy !== adminUser.id) {
+      return c.json({ error: "Faqat o'z postlaringizni ko'rishingiz mumkin" }, 403);
+    }
 
-    const [tagMap, telegramRef] = await Promise.all([tagsForPostIds([post.id]), getTelegramRefForPost(post.id)]);
+    const [tagMap, telegramRef, authorMap] = await Promise.all([
+      tagsForPostIds([post.id]),
+      getTelegramRefForPost(post.id),
+      authorNamesForIds([post.createdBy, post.updatedBy, post.reviewedBy]),
+    ]);
     const settings = PostSettingsSchema.parse({
       ...DEFAULT_POST_SETTINGS,
       ...((post.settings as Record<string, unknown>) ?? {}),
@@ -292,9 +393,17 @@ export const adminPostsRoute = new Hono()
             channelMessageId: telegramRef.channelMessageId,
           }
         : null,
+      createdBy: toAuthorRef(post.createdBy, authorMap),
+      updatedBy: toAuthorRef(post.updatedBy, authorMap),
+      reviewNote: post.reviewNote,
+      submittedAt: post.submittedAt?.toISOString() ?? null,
+      reviewedBy: toAuthorRef(post.reviewedBy, authorMap),
+      reviewedAt: post.reviewedAt?.toISOString() ?? null,
     });
   })
   .post("/:id/telegram/telegraph", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -307,6 +416,8 @@ export const adminPostsRoute = new Hono()
     return c.json({ telegraphUrl: ref?.telegraphUrl ?? null });
   })
   .post("/:id/telegram/repost", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -319,9 +430,13 @@ export const adminPostsRoute = new Hono()
     return c.json({ channelMessageId: ref?.channelMessageId ?? null });
   })
   .get("/:id/preview", async (c) => {
+    const adminUser = c.get("adminUser");
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+    if (adminUser.role === "staff" && post.createdBy !== adminUser.id) {
+      return c.json({ error: "Faqat o'z postlaringizni ko'rishingiz mumkin" }, 403);
+    }
 
     const tagMap = await tagsForPostIds([post.id]);
     const currentTags = tagMap.get(post.id) ?? [];
@@ -413,9 +528,22 @@ export const adminPostsRoute = new Hono()
     });
   })
   .patch("/:id", async (c) => {
+    const adminUser = c.get("adminUser");
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+
+    if (adminUser.role === "staff") {
+      if (post.createdBy !== adminUser.id) {
+        return c.json({ error: "Faqat o'z postlaringizni tahrirlashingiz mumkin" }, 403);
+      }
+      if (post.status !== "draft" && post.status !== "changes_requested") {
+        return c.json(
+          { error: "Post ko'rib chiqishda yoki chop etilgan — hozir tahrirlab bo'lmaydi" },
+          409,
+        );
+      }
+    }
 
     const body = await c.req.json().catch(() => null);
     const parsed = UpdatePostBodySchema.safeParse(body);
@@ -426,6 +554,18 @@ export const adminPostsRoute = new Hono()
     }
 
     const data = parsed.data;
+
+    if (adminUser.role === "staff") {
+      const disallowedKeys = Object.keys(data).filter(
+        (key) => !(STAFF_EDITABLE_POST_FIELDS as readonly string[]).includes(key),
+      );
+      if (disallowedKeys.length > 0) {
+        return c.json(
+          { error: `Xodim quyidagi maydonlarni o'zgartira olmaydi: ${disallowedKeys.join(", ")}` },
+          403,
+        );
+      }
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- drizzle partial update payload, mixed column types
     const update: Record<string, any> = {};
 
@@ -486,6 +626,7 @@ export const adminPostsRoute = new Hono()
 
     if (Object.keys(update).length > 0) {
       update.updatedAt = new Date();
+      update.updatedBy = adminUser.id;
       await db.update(posts).set(update).where(eq(posts.id, id));
     }
 
@@ -500,7 +641,7 @@ export const adminPostsRoute = new Hono()
       }
       tagSlugsForRevalidate = resolved.map((tag) => tag.slug);
       if (Object.keys(update).length === 0) {
-        await db.update(posts).set({ updatedAt: new Date() }).where(eq(posts.id, id));
+        await db.update(posts).set({ updatedAt: new Date(), updatedBy: adminUser.id }).where(eq(posts.id, id));
       }
     }
 
@@ -522,7 +663,59 @@ export const adminPostsRoute = new Hono()
 
     return c.json({ updatedAt: fresh?.updatedAt.toISOString() ?? new Date().toISOString() });
   })
+  .post("/:id/submit", async (c) => {
+    const adminUser = c.get("adminUser");
+    const id = c.req.param("id");
+    const result = await submitPostForReview(id, adminUser.id);
+
+    if (!result.ok) {
+      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      if (result.reason === "not_owner") {
+        return c.json({ error: "Faqat o'z postlaringizni ko'rib chiqishga yubora olasiz" }, 403);
+      }
+      return c.json({ error: "Post allaqachon ko'rib chiqilmoqda yoki chop etilgan" }, 409);
+    }
+
+    return c.json({
+      id: result.post.id,
+      status: result.post.status,
+      submittedAt: result.post.submittedAt?.toISOString() ?? null,
+    });
+  })
+  .post("/:id/approve", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const adminUser = c.get("adminUser");
+    const id = c.req.param("id");
+    const result = await approvePost(id, adminUser.id);
+
+    if (!result.ok) {
+      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      return c.json({ error: "Post ko'rib chiqishda emas" }, 409);
+    }
+
+    return c.json(toLifecycleSummary(result.post));
+  })
+  .post("/:id/request-changes", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const adminUser = c.get("adminUser");
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => null);
+    const parsed = RequestChangesBodySchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "Izoh (note) majburiy" }, 400);
+
+    const result = await requestPostChanges(id, adminUser.id, parsed.data.note);
+    if (!result.ok) {
+      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      return c.json({ error: "Post ko'rib chiqishda emas" }, 409);
+    }
+
+    return c.json(toLifecycleSummary(result.post));
+  })
   .post("/:id/publish", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -543,6 +736,8 @@ export const adminPostsRoute = new Hono()
     return c.json(toLifecycleSummary(fresh));
   })
   .post("/:id/unpublish", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -562,6 +757,8 @@ export const adminPostsRoute = new Hono()
     return c.json(toLifecycleSummary(fresh));
   })
   .post("/:id/archive", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -581,6 +778,8 @@ export const adminPostsRoute = new Hono()
     return c.json(toLifecycleSummary(fresh));
   })
   .post("/:id/schedule", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -614,6 +813,8 @@ export const adminPostsRoute = new Hono()
     return c.json(toLifecycleSummary(fresh));
   })
   .delete("/:id", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);

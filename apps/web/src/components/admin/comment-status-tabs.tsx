@@ -17,11 +17,17 @@ export function CommentStatusTabs({
   counts,
   postId,
   q,
+  source,
+  from,
+  to,
 }: {
   active: StatusFilter;
   counts: AdminCommentCounts;
   postId?: string;
   q?: string;
+  source?: string;
+  from?: string;
+  to?: string;
 }) {
   return (
     <div className="flex flex-wrap gap-1.5 border-b border-border pb-3">
@@ -30,6 +36,9 @@ export function CommentStatusTabs({
         if (tab.value !== "all") search.set("status", tab.value);
         if (postId) search.set("postId", postId);
         if (q) search.set("q", q);
+        if (source && source !== "all") search.set("source", source);
+        if (from) search.set("from", from);
+        if (to) search.set("to", to);
         const qs = search.toString();
         const href = qs ? `/admin/fikrlar?${qs}` : "/admin/fikrlar";
         const isActive = active === tab.value;

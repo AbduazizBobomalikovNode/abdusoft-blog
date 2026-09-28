@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Eye, EyeOff, MessageCircle, MoreHorizontal, Reply, ShieldBan, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Check, ExternalLink, Eye, EyeOff, MessageCircle, MoreHorizontal, Reply, ShieldBan, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { AdminCommentItem } from "@blog/shared";
 import {
@@ -63,6 +63,25 @@ function stripHtml(html: string): string {
 function excerpt(html: string, max = 80): string {
   const text = stripHtml(html);
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** Manba belgisi — Web/Telegram (+ @username, bo'lsa) — jadval va mobil kartada bir xil ishlatiladi. */
+function SourceBadge({ comment }: { comment: AdminCommentItem }) {
+  if (comment.source !== "telegram") {
+    return (
+      <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-[0.6rem]">
+        Web
+      </Badge>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-[0.6rem] text-sky-600 dark:text-sky-400">
+        Telegram
+      </Badge>
+      {comment.tgUsername ? <span className="text-xs text-muted-foreground">@{comment.tgUsername}</span> : null}
+    </span>
+  );
 }
 
 function CommentRowActions({ comment }: { comment: AdminCommentItem }) {
@@ -138,10 +157,18 @@ function CommentRowActions({ comment }: { comment: AdminCommentItem }) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          {comment.status === "pending" ? (
+          {comment.status === "pending" && comment.source === "web" ? (
             <DropdownMenuItem onSelect={() => run(() => adminApi.updateCommentStatus(comment.id, "visible"), "Tasdiqlandi")}>
               <Check />
               Tasdiqlash
+            </DropdownMenuItem>
+          ) : null}
+          {comment.source === "telegram" && comment.tgThreadUrl ? (
+            <DropdownMenuItem asChild>
+              <a href={comment.tgThreadUrl} target="_blank" rel="noopener noreferrer">
+                <ExternalLink />
+                Telegram&apos;da ochish
+              </a>
             </DropdownMenuItem>
           ) : null}
           {comment.status !== "hidden" ? (
@@ -367,6 +394,7 @@ export function CommentsTable({ initialItems }: { initialItems: AdminCommentItem
                       Admin
                     </Badge>
                   ) : null}
+                  <SourceBadge comment={item} />
                 </div>
                 <CommentRowActions comment={item} />
               </div>
@@ -441,13 +469,14 @@ export function CommentsTable({ initialItems }: { initialItems: AdminCommentItem
                     />
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="font-medium">{item.authorName}</span>
                       {item.authorIsAdmin ? (
                         <Badge variant="secondary" className="h-4 px-1.5 text-[0.6rem]">
                           Admin
                         </Badge>
                       ) : null}
+                      <SourceBadge comment={item} />
                     </div>
                     {item.ipHashShort ? (
                       <span className="font-mono text-[0.65rem] text-muted-foreground">{item.ipHashShort}…</span>

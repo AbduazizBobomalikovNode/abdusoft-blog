@@ -9,7 +9,7 @@ import {
   type CommentNode,
 } from "@blog/shared";
 import { db } from "../db/index.js";
-import { comments, posts, reactions } from "../db/schema.js";
+import { comments, posts, reactions, telegramRefs } from "../db/schema.js";
 import { clientIp, getDevice } from "../lib/device.js";
 import {
   getCommentsForPost,
@@ -23,6 +23,21 @@ import { checkRateLimit } from "../lib/rate-limit.js";
 import { getSessionUser } from "../lib/session.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import { events } from "../lib/events.js";
+import { getSettings } from "../lib/settings.js";
+
+const TELEGRAM_SEPARATE_LIMIT = 200;
+
+/** `t.me/<username>/<id>?comment=<id>` — kanal postining muhokama guruhidagi izohlar bo'limini ochadigan rasmiy deep-link formati (https://core.telegram.org/api/links). Aniq izoh id'i shart emas — mavjud bo'lmasa ham mijoz umumiy muhokama oynasini ochadi. */
+async function resolveTelegramThreadUrl(postId: string, channelId: string): Promise<string | null> {
+  if (!channelId.startsWith("@")) return null;
+  const [ref] = await db
+    .select({ channelMessageId: telegramRefs.channelMessageId })
+    .from(telegramRefs)
+    .where(eq(telegramRefs.postId, postId))
+    .limit(1);
+  if (!ref?.channelMessageId) return null;
+  return `https://t.me/${channelId.slice(1)}/${ref.channelMessageId}?comment=1`;
+}
 
 const COMMENT_RATE_LIMIT = 5;
 const COMMENT_RATE_WINDOW_MS = 10 * 60 * 1000;
@@ -83,6 +98,8 @@ export const postCommentsRoute = new Hono()
 
     const device = getDevice(c);
     const sessionUser = await getSessionUser(c);
+    const integrationSettings = await getSettings();
+    const displayMode = integrationSettings.telegram.telegramDisplay;
 
     const result = await getCommentsForPost({
       postId: post.id,
@@ -91,9 +108,31 @@ export const postCommentsRoute = new Hono()
       limit: parsed.data.limit,
       deviceHash: device.deviceHash,
       sessionUserId: sessionUser?.id ?? null,
+      source: displayMode === "mixed" ? "all" : "web",
     });
 
-    return c.json(result);
+    if (displayMode !== "separate") {
+      return c.json(result);
+    }
+
+    const tgResult = await getCommentsForPost({
+      postId: post.id,
+      sort: "new",
+      cursor: null,
+      limit: TELEGRAM_SEPARATE_LIMIT,
+      deviceHash: device.deviceHash,
+      sessionUserId: sessionUser?.id ?? null,
+      source: "telegram",
+    });
+
+    const telegramThreadUrl = await resolveTelegramThreadUrl(post.id, integrationSettings.telegram.channelId);
+
+    return c.json({
+      ...result,
+      telegram: tgResult.items,
+      telegramTotal: tgResult.total,
+      telegramThreadUrl,
+    });
   })
   .post("/:slug/comments", async (c) => {
     const post = await loadPublishedPost(c.req.param("slug"));
@@ -144,6 +183,8 @@ export const postCommentsRoute = new Hono()
         likes: 0,
         dislikes: 0,
         replies: [],
+        source: "web",
+        tgUsername: null,
       };
       return c.json({ comment: fakeNode }, 201);
     }
@@ -248,6 +289,8 @@ export const postCommentsRoute = new Hono()
       userName: sessionUser?.name ?? null,
       userImage: sessionUser?.image ?? null,
       userRole: sessionUser?.role ?? null,
+      source: created.source,
+      tgUsername: created.tgUsername,
     });
 
     return c.json({ comment: node }, 201);

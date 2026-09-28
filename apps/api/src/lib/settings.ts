@@ -149,6 +149,8 @@ export interface MergedSettings {
     apiRoot: string;
     notifyComments: boolean;
     digestEnabled: boolean;
+    telegramDisplay: "admin_only" | "separate" | "mixed";
+    discussionGroupId: number | null;
     /** `botToken` bor va `webhookSecret` yetarlicha uzun bo'lsa `true` — shundagina bot yaratiladi/webhook o'rnatiladi. */
     enabled: boolean;
     disabledReason: string | null;
@@ -275,6 +277,8 @@ async function computeAll(): Promise<{ merged: MergedSettings; admin: SettingsAd
       apiRoot: apiRoot.value,
       notifyComments: legacy.telegram.notifyComments,
       digestEnabled: legacy.telegram.digestEnabled,
+      telegramDisplay: legacy.telegram.telegramDisplay,
+      discussionGroupId: legacy.telegram.discussionGroupId,
       enabled: telegramEnabled,
       disabledReason,
     },
@@ -332,6 +336,8 @@ async function computeAll(): Promise<{ merged: MergedSettings; admin: SettingsAd
       apiRoot: plainField(apiRoot),
       notifyComments: { value: legacy.telegram.notifyComments, source: "db", isSet: true, envVar: null },
       digestEnabled: { value: legacy.telegram.digestEnabled, source: "db", isSet: true, envVar: null },
+      telegramDisplay: { value: legacy.telegram.telegramDisplay, source: "db", isSet: true, envVar: null },
+      discussionGroupId: legacy.telegram.discussionGroupId,
       enabled: telegramEnabled,
       disabledReason,
     },
@@ -550,12 +556,13 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
     if (Object.keys(errors).filter((k) => k.startsWith("telegram.")).length === 0) {
       await upsertSiteSetting(KEY_TELEGRAM, next);
     }
-    if (p.notifyComments !== undefined || p.digestEnabled !== undefined) {
+    if (p.notifyComments !== undefined || p.digestEnabled !== undefined || p.telegramDisplay !== undefined) {
       const legacy = await loadSiteSettings();
       await upsertSiteSetting(TELEGRAM_KEY, {
         ...legacy.telegram,
         ...(p.notifyComments !== undefined ? { notifyComments: p.notifyComments } : {}),
         ...(p.digestEnabled !== undefined ? { digestEnabled: p.digestEnabled } : {}),
+        ...(p.telegramDisplay !== undefined ? { telegramDisplay: p.telegramDisplay } : {}),
       });
     }
   }
@@ -691,4 +698,17 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
 /** `POST /admin/settings/generate-secret` — webhook secret uchun qulay tasodifiy 32 ta hex belgi. */
 export function generateRandomSecret(): string {
   return randomBytes(16).toString("hex");
+}
+
+/**
+ * `telegram/discussion.ts` — kanaldan avtomatik forward qilingan xabar birinchi
+ * marta muhokama guruhida ko'rilganda guruh id'sini aniqlab shu yerga yozadi
+ * (faqat o'qish uchun, admin panelda ko'rsatiladi). Aynan shu qiymat o'zgarmasa
+ * hech narsa yozilmaydi (keraksiz DB write'lardan qochish uchun).
+ */
+export async function setDiscussionGroupId(groupId: number): Promise<void> {
+  const legacy = await loadSiteSettings();
+  if (legacy.telegram.discussionGroupId === groupId) return;
+  await upsertSiteSetting(TELEGRAM_KEY, { ...legacy.telegram, discussionGroupId: groupId });
+  invalidateSettingsCache();
 }

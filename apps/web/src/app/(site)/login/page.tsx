@@ -10,13 +10,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn } from "@/lib/auth-client";
 import { site } from "@/lib/site";
+import { useSiteConfig } from "@/lib/site-config";
 
 export default function LoginPage() {
   const router = useRouter();
+  const config = useSiteConfig();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [githubLoading, setGithubLoading] = useState(false);
+
+  async function handleGithubLogin() {
+    setGithubLoading(true);
+    await signIn.social({ provider: "github", callbackURL: "/admin" });
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -85,6 +93,25 @@ export default function LoginPage() {
               {loading ? "Kirilmoqda…" : "Kirish"}
             </Button>
           </form>
+
+          {config.githubConfigured ? (
+            <>
+              <div className="my-4 flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                yoki
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={githubLoading}
+                className="w-full"
+                onClick={() => void handleGithubLogin()}
+              >
+                {githubLoading ? "Yo'naltirilmoqda…" : "GitHub bilan kirish (xodimlar uchun)"}
+              </Button>
+            </>
+          ) : null}
         </CardContent>
       </Card>
 

@@ -10,6 +10,7 @@ import { user as userTable } from "../db/auth-schema.js";
 import { posts } from "../db/schema.js";
 import { bot } from "./client.js";
 import { escapeHtml, stripHtml, truncate } from "./format.js";
+import { handleReviewNoteReply } from "./review.js";
 
 const EXCERPT_LIMIT = 300;
 
@@ -58,7 +59,8 @@ async function handleCommentCreated(payload: CommentCreatedEventPayload): Promis
   }
 }
 
-async function findAdminUser(): Promise<{ id: string; name: string } | null> {
+/** `telegram/review.ts` ham ishlatadi — Telegram callback bosgan admin foydalanuvchining ichki (DB) hisobini aniqlash uchun. */
+export async function findAdminUser(): Promise<{ id: string; name: string } | null> {
   const [row] = await db.select({ id: userTable.id, name: userTable.name }).from(userTable).where(eq(userTable.role, "admin")).limit(1);
   return row ? { id: row.id, name: row.name ?? "Admin" } : null;
 }
@@ -112,7 +114,7 @@ export function registerCommentBotHandlers(): void {
         reply_markup: { force_reply: true, selective: true },
         reply_parameters: message ? { message_id: message.message_id } : undefined,
       });
-      await setPendingReply(prompt.message_id, { commentId, postSlug: postRow?.slug ?? "" });
+      await setPendingReply(prompt.message_id, { kind: "comment", commentId, postSlug: postRow?.slug ?? "" });
       await ctx.answerCallbackQuery();
       return;
     }
@@ -147,6 +149,11 @@ export function registerCommentBotHandlers(): void {
 
     const pending = await takePendingReply(replyToId);
     if (!pending) return next();
+
+    if (pending.kind === "review") {
+      await handleReviewNoteReply(ctx, pending.postId, pending.chatId, pending.originalMessageId, pending.originalText);
+      return;
+    }
 
     const adminUser = await findAdminUser();
     if (!adminUser) {

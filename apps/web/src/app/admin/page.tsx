@@ -2,13 +2,14 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import type { UmamiMetricRow } from "@blog/shared";
 import { RecentCommentsList } from "@/components/admin/stats/recent-comments-list";
+import { StaffDashboard } from "@/components/admin/staff-dashboard";
 import { StatTile } from "@/components/admin/stats/stat-tile";
 import { StatsRangeTabs, DEFAULT_STATS_RANGE, isStatsRange } from "@/components/admin/stats/stats-range-tabs";
 import { TopPostsTable } from "@/components/admin/stats/top-posts-table";
 import { UmamiMetricList } from "@/components/admin/stats/umami-metric-list";
 import { ViewsChart } from "@/components/admin/stats/views-chart";
 import { NewPostButton } from "@/components/admin/new-post-button";
-import { getAdminStatsOverview, getAdminUmamiStats } from "@/lib/api";
+import { getAdminStatsOverview, getAdminUmamiStats, getMe, getStaffPostsSummary } from "@/lib/api";
 import { formatAvgDuration } from "@/lib/stats-format";
 
 export default async function AdminDashboardPage({
@@ -21,6 +22,14 @@ export default async function AdminDashboardPage({
 
   const headersList = await headers();
   const cookie = headersList.get("cookie");
+
+  // Xodim (staff) uchun statistika/Umami marshrutlari 403 qaytaradi — shu
+  // sabab alohida, soddalashtirilgan dashboard ko'rsatiladi.
+  const me = await getMe(cookie);
+  if (me?.role === "staff") {
+    const summary = await getStaffPostsSummary(cookie);
+    return <StaffDashboard summary={summary} />;
+  }
 
   const [overview, umami] = await Promise.all([
     getAdminStatsOverview(range, cookie),

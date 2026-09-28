@@ -1,12 +1,14 @@
 import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { TagsTable } from "@/components/admin/tags-table";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { getAdminTags } from "@/lib/api";
 
 export const metadata: Metadata = { title: "Teglar" };
 
 export default async function AdminTagsPage() {
   const headersList = await headers();
+  await requireAdminPage(headersList.get("cookie"));
   const tags = await getAdminTags(headersList.get("cookie"));
 
   return (

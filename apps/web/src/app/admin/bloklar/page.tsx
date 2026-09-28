@@ -1,12 +1,14 @@
 import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { BansTable } from "@/components/admin/bans-table";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { getAdminBans } from "@/lib/api";
 
 export const metadata: Metadata = { title: "Bloklar" };
 
 export default async function AdminBansPage() {
   const headersList = await headers();
+  await requireAdminPage(headersList.get("cookie"));
   const data = await getAdminBans(headersList.get("cookie"));
 
   return (

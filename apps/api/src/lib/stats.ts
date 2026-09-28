@@ -268,6 +268,7 @@ export async function recentCommentsFor(postId: string | null, limit: number): P
       body: comments.body,
       status: comments.status,
       createdAt: comments.createdAt,
+      source: comments.source,
     })
     .from(comments)
     .innerJoin(posts, eq(comments.postId, posts.id))

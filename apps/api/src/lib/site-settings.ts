@@ -86,10 +86,26 @@ export async function storeTelegraphToken(accessToken: string): Promise<void> {
  */
 const PENDING_REPLIES_KEY = "telegramPendingReplies";
 
-export interface PendingReply {
+export interface PendingCommentReply {
+  kind: "comment";
   commentId: string;
   postSlug: string;
 }
+
+/**
+ * "✏️ Qaytarish" bosilgandan keyingi ForceReply -> qaysi postga tuzatish izohi
+ * ekanligi. `chatId`/`originalMessageId`/`originalText` — javob kelganda ASL
+ * ko'rib chiqish xabarini (statusni qo'shib) tahrirlash uchun saqlanadi.
+ */
+export interface PendingReviewNoteReply {
+  kind: "review";
+  postId: string;
+  chatId: number;
+  originalMessageId: number;
+  originalText: string;
+}
+
+export type PendingReply = PendingCommentReply | PendingReviewNoteReply;
 
 async function loadPendingReplies(): Promise<Record<string, PendingReply>> {
   const [row] = await db.select().from(siteSettings).where(eq(siteSettings.key, PENDING_REPLIES_KEY)).limit(1);

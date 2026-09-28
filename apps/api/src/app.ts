@@ -13,6 +13,7 @@ import { healthRoute } from "./routes/health.js";
 import { meRoute } from "./routes/me.js";
 import { postsRoute } from "./routes/posts.js";
 import { siteRoute } from "./routes/site.js";
+import { staffInvitesRoute } from "./routes/staff-invites.js";
 import { tagsRoute } from "./routes/tags.js";
 import { mountTelegramWebhook } from "./telegram/bot.js";
 
@@ -74,6 +75,7 @@ app.route("/posts", postCommentsRoute);
 app.route("/comments", commentItemRoute);
 app.route("/tags", tagsRoute);
 app.route("/site", siteRoute);
+app.route("/staff/invites", staffInvitesRoute);
 app.route("/admin", adminRoute);
 mountTelegramWebhook(app);
 

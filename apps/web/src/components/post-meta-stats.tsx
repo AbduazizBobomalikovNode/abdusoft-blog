@@ -12,17 +12,24 @@ export function PostMetaStats({
   slug,
   initialViews,
   initialComments,
+  initialTgComments = 0,
+  includeTelegram = false,
   showViews,
   showComments,
 }: {
   slug: string;
   initialViews: number;
   initialComments: number;
+  /** Kanalning muhokama guruhidan olingan izohlar soni. */
+  initialTgComments?: number;
+  /** `comments.telegramDisplay !== 'admin_only'` bo'lsa — Telegram izohlari ham shu qatorga qo'shiladi. */
+  includeTelegram?: boolean;
   showViews: boolean;
   showComments: boolean;
 }) {
   const [views, setViews] = useState(initialViews);
   const [comments, setComments] = useState(initialComments);
+  const [tgComments, setTgComments] = useState(initialTgComments);
 
   useEffect(() => {
     if (!showViews && !showComments) return;
@@ -33,6 +40,7 @@ export function PostMetaStats({
         if (cancelled || !stats) return;
         setViews(stats.views);
         setComments(stats.comments);
+        setTgComments(stats.tgComments);
       })
       .catch(() => {
         // Jim — SSR qiymatlari ko'rsatilishda davom etadi.
@@ -43,10 +51,12 @@ export function PostMetaStats({
     };
   }, [slug, showViews, showComments]);
 
+  const totalComments = comments + (includeTelegram ? tgComments : 0);
+
   return (
     <>
       {showViews ? <span>&middot; {views} ko&apos;rishlar</span> : null}
-      {showComments ? <span>&middot; {comments} fikr</span> : null}
+      {showComments ? <span>&middot; {totalComments} fikr</span> : null}
     </>
   );
 }
