@@ -84,12 +84,21 @@ interface UmamiStatMetric {
   prev: number;
 }
 
-interface UmamiStatsRaw {
-  pageviews: UmamiStatMetric;
-  visitors: UmamiStatMetric;
-  visits: UmamiStatMetric;
-  bounces: UmamiStatMetric;
-  totaltime: UmamiStatMetric;
+type UmamiStatKey = "pageviews" | "visitors" | "visits" | "bounces" | "totaltime";
+
+/**
+ * Umami v2: `{ pageviews: { value, prev }, ... }`.
+ * Umami v3: `{ pageviews: number, ..., comparison: { pageviews: number, ... } }`.
+ * Ikkalasi ham qo'llab-quvvatlanadi.
+ */
+type UmamiStatsRaw = Partial<Record<UmamiStatKey, UmamiStatMetric | number>> & {
+  comparison?: Partial<Record<UmamiStatKey, number>>;
+};
+
+function statPair(raw: UmamiStatsRaw, key: UmamiStatKey): UmamiStatMetric {
+  const field = raw[key];
+  if (typeof field === "number") return { value: field, prev: raw.comparison?.[key] ?? 0 };
+  return { value: field?.value ?? 0, prev: field?.prev ?? 0 };
 }
 
 interface UmamiPageviewsRaw {
@@ -155,25 +164,28 @@ export async function fetchUmamiStats(range: StatsRange): Promise<AdminUmamiStat
         umamiFetch<UmamiMetricRaw>(umami, "/metrics", { startAt: String(startAt), endAt: String(endAt), type: "country" }),
         umamiFetch<UmamiMetricRaw>(umami, "/metrics", { startAt: String(startAt), endAt: String(endAt), type: "browser" }),
         umamiFetch<UmamiMetricRaw>(umami, "/metrics", { startAt: String(startAt), endAt: String(endAt), type: "device" }),
-        umamiFetch<UmamiMetricRaw>(umami, "/metrics", { startAt: String(startAt), endAt: String(endAt), type: "url" }),
+        // Umami v3 — `path`; v2 — `url`. Avval `path`, 400 bo'lsa `url`.
+        umamiFetch<UmamiMetricRaw>(umami, "/metrics", { startAt: String(startAt), endAt: String(endAt), type: "path" }).catch(
+          () => umamiFetch<UmamiMetricRaw>(umami, "/metrics", { startAt: String(startAt), endAt: String(endAt), type: "url" }),
+        ),
       ],
     );
 
     const data: AdminUmamiStats = {
       configured: true,
       stats: {
-        pageviews: statsRaw.pageviews.value,
-        visitors: statsRaw.visitors.value,
-        visits: statsRaw.visits.value,
-        bounces: statsRaw.bounces.value,
-        totaltime: statsRaw.totaltime.value,
+        pageviews: statPair(statsRaw, "pageviews").value,
+        visitors: statPair(statsRaw, "visitors").value,
+        visits: statPair(statsRaw, "visits").value,
+        bounces: statPair(statsRaw, "bounces").value,
+        totaltime: statPair(statsRaw, "totaltime").value,
       },
       previous: {
-        pageviews: statsRaw.pageviews.prev,
-        visitors: statsRaw.visitors.prev,
-        visits: statsRaw.visits.prev,
-        bounces: statsRaw.bounces.prev,
-        totaltime: statsRaw.totaltime.prev,
+        pageviews: statPair(statsRaw, "pageviews").prev,
+        visitors: statPair(statsRaw, "visitors").prev,
+        visits: statPair(statsRaw, "visits").prev,
+        bounces: statPair(statsRaw, "bounces").prev,
+        totaltime: statPair(statsRaw, "totaltime").prev,
       },
       pageviewsSeries: pageviewsRaw.pageviews.map((p) => ({ t: p.x, y: p.y })),
       referrers: toMetricRows(referrersRaw, "To'g'ridan-to'g'ri"),
