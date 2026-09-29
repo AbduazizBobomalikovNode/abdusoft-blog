@@ -1,5 +1,5 @@
 import type { Context } from "grammy";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { comments, telegramRefs } from "../db/schema.js";
 import { MAX_COMMENT_DEPTH, nextCommentPath, recountPostComments } from "../lib/comments.js";
@@ -59,13 +59,13 @@ function authorNameFrom(from: { first_name: string; last_name?: string }): strin
   return from.last_name ? `${from.first_name} ${from.last_name}` : from.first_name;
 }
 
-type ForwardLike = Pick<GroupMessage, "message_id" | "is_automatic_forward" | "forward_origin">;
+export type ForwardLike = Pick<GroupMessage, "message_id" | "is_automatic_forward" | "forward_origin">;
 
 /**
  * Guruhdagi avtomatik forward xabarini (kanal postining nusxasi) tegishli postga bog'laydi.
  * `true` — bog'landi (yoki allaqachon bog'langan edi).
  */
-async function mapForwardToPost(chatId: number, forward: ForwardLike): Promise<boolean> {
+export async function mapForwardToPost(chatId: number, forward: ForwardLike): Promise<boolean> {
   if (!forward.is_automatic_forward) return false;
 
   const origin = forward.forward_origin;
@@ -78,13 +78,24 @@ async function mapForwardToPost(chatId: number, forward: ForwardLike): Promise<b
   const numericChannelId = await resolveChannelNumericId(channelId);
   if (numericChannelId === null || origin.chat.id !== numericChannelId) return false;
 
+  // Albom (media group) bo'lsa BIR NECHTA kanal xabari bitta postga tegishli
+  // bo'ladi (`channel_message_ids`) — shu sabab forward'ning `message_id`si
+  // legacy yagona ustunga ("channel_message_id") YOKI shu jsonb massivning
+  // ICHIDA (@> containment) mos kelishi kifoya.
   const [ref] = await db
     .select({ postId: telegramRefs.postId, discussionMessageId: telegramRefs.discussionMessageId })
     .from(telegramRefs)
-    .where(eq(telegramRefs.channelMessageId, origin.message_id))
+    .where(
+      sql`${telegramRefs.channelMessageId} = ${origin.message_id} OR ${telegramRefs.channelMessageIds} @> ${JSON.stringify([origin.message_id])}::jsonb`,
+    )
     .limit(1);
   if (!ref) return false; // boshqa (bizga tegishli bo'lmagan) kanal xabarining forward'i
   if (ref.discussionMessageId === forward.message_id) return true;
+  // Albom bir nechta xabar sifatida forward qilinadi (har biri o'z
+  // `forward_origin.message_id`si bilan) — ASOSIY (thread ildizi) sifatida
+  // FAQAT BIRINCHI kelgan forward saqlanadi, keyingi albom elementlari uni
+  // qayta yozib yubormaydi (aks holda oldingi bog'lanish yo'qolib qolardi).
+  if (ref.discussionMessageId) return true;
 
   await db
     .update(telegramRefs)

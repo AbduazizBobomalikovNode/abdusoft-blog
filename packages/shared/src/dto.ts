@@ -195,6 +195,105 @@ export const TelegramRefSchema = z.object({
 });
 export type TelegramRef = z.infer<typeof TelegramRefSchema>;
 
+// ---------------------------------------------------------------------------
+// Admin: "Kanalga yuborish" (manual channel send) dialog
+// ---------------------------------------------------------------------------
+
+/** 🖼 Rasmli (kover/rasmlar bilan, caption) yoki 📝 Rasmsiz (oddiy matn xabari). */
+export const ChannelModeSchema = z.union([z.literal("media"), z.literal("text")]);
+export type ChannelMode = z.infer<typeof ChannelModeSchema>;
+
+/** Qisqa / O'rtacha / Batafsil / Maksimal — uzunlik varianti (qaysi variantlar ruxsat etilishi rejimga bog'liq, `CHANNEL_MODE_VARIANTS`ga qarang). */
+export const ChannelVariantSchema = z.union([z.literal("s"), z.literal("m"), z.literal("l"), z.literal("xl")]);
+export type ChannelVariant = z.infer<typeof ChannelVariantSchema>;
+
+/** Telegramning qattiq (haqiqiy API) chegaralari — variant byudjetlari doim shundan past. */
+export const CHANNEL_CAPTION_HARD_LIMIT = 1024;
+export const CHANNEL_TEXT_HARD_LIMIT = 4096;
+
+/** Har bir rejim uchun ruxsat etilgan variantlar (tartib — UI tugmalari tartibi bilan mos). */
+export const CHANNEL_MODE_VARIANTS: Record<ChannelMode, readonly ChannelVariant[]> = {
+  media: ["m", "l"],
+  text: ["s", "m", "l", "xl"],
+};
+
+/**
+ * Har bir rejim+variant uchun "ko'rinadigan" belgi byudjeti (builder shu
+ * qiymatgacha to'ldiradi, sig'masa shu chegarada kesadi). Web oldindan
+ * ko'rish shu jadvaldan "N / limit" hisoblagichini chizadi.
+ */
+export const CHANNEL_VARIANT_BUDGETS: Record<ChannelMode, Partial<Record<ChannelVariant, number>>> = {
+  media: { m: 650, l: CHANNEL_CAPTION_HARD_LIMIT - 20 },
+  text: { s: 400, m: 800, l: 1500, xl: CHANNEL_TEXT_HARD_LIMIT - 100 },
+};
+
+export function isChannelComboValid(mode: ChannelMode, variant: ChannelVariant): boolean {
+  return (CHANNEL_MODE_VARIANTS[mode] as readonly ChannelVariant[]).includes(variant);
+}
+
+/** `mode`+`variant` uchun belgi byudjetini qaytaradi — kombinatsiya noto'g'ri bo'lsa `undefined`. */
+export function channelVariantBudget(mode: ChannelMode, variant: ChannelVariant): number | undefined {
+  return CHANNEL_VARIANT_BUDGETS[mode][variant];
+}
+
+export const ChannelMessageTypeSchema = z.union([z.literal("text"), z.literal("photo"), z.literal("album")]);
+export type ChannelMessageTypeValue = z.infer<typeof ChannelMessageTypeSchema>;
+
+export const ChannelMediaKindSchema = z.union([z.literal("cover"), z.literal("content")]);
+export type ChannelMediaKind = z.infer<typeof ChannelMediaKindSchema>;
+
+export const ChannelMediaItemSchema = z.object({
+  url: z.string(),
+  kind: ChannelMediaKindSchema,
+  alt: z.string().nullable(),
+});
+export type ChannelMediaItem = z.infer<typeof ChannelMediaItemSchema>;
+
+export const ChannelAlreadySentSchema = z
+  .object({
+    at: z.string(),
+    mode: ChannelModeSchema,
+    variant: ChannelVariantSchema,
+    messageUrl: z.string().nullable(),
+  })
+  .nullable();
+export type ChannelAlreadySent = z.infer<typeof ChannelAlreadySentSchema>;
+
+export const ChannelPreviewRequestSchema = z.object({
+  mode: ChannelModeSchema,
+  variant: ChannelVariantSchema,
+});
+export type ChannelPreviewRequest = z.infer<typeof ChannelPreviewRequestSchema>;
+
+export const ChannelPreviewResponseSchema = z.object({
+  mode: ChannelModeSchema,
+  variant: ChannelVariantSchema,
+  captionHtml: z.string(),
+  visibleLength: z.number(),
+  limit: z.number(),
+  truncated: z.boolean(),
+  media: z.array(ChannelMediaItemSchema),
+  alreadySent: ChannelAlreadySentSchema,
+});
+export type ChannelPreviewResponse = z.infer<typeof ChannelPreviewResponseSchema>;
+
+export const ChannelSendRequestSchema = z.object({
+  mode: ChannelModeSchema,
+  variant: ChannelVariantSchema,
+  replaceExisting: z.boolean().optional(),
+});
+export type ChannelSendRequest = z.infer<typeof ChannelSendRequestSchema>;
+
+export const ChannelSendResponseSchema = z.object({
+  mode: ChannelModeSchema,
+  variant: ChannelVariantSchema,
+  messageType: ChannelMessageTypeSchema,
+  messageIds: z.array(z.number()),
+  messageUrl: z.string().nullable(),
+  sentAt: z.string(),
+});
+export type ChannelSendResponse = z.infer<typeof ChannelSendResponseSchema>;
+
 export const AdminPostDetailSchema = z.object({
   id: z.string(),
   slug: z.string(),

@@ -15,6 +15,7 @@ import { Placeholder } from "@tiptap/extension-placeholder";
 import { Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { slugify, type AdminPostDetail, type AdminPostStatus, type Me, type PostSettings, type TagWithCount, type TelegramRef, type UpdatePostBody } from "@blog/shared";
+import { ChannelSendDialog } from "./channel-send-dialog";
 import { PostEditorHeader, type SaveState } from "./post-editor-header";
 import { PostEditorSettings } from "./post-editor-settings";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
@@ -75,7 +76,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   const [telegram, setTelegram] = useState<TelegramRef | null>(post.telegram);
   const [telegramChannel, setTelegramChannel] = useState<string | null>(null);
   const [refreshingTelegraph, setRefreshingTelegraph] = useState(false);
-  const [repostingTelegram, setRepostingTelegram] = useState(false);
+  const [channelSendOpen, setChannelSendOpen] = useState(false);
 
   // Xodim (staff) uchun — post ko'rib chiqishda bo'lsa butunlay o'qish uchun
   // (API ham shu holatda PATCH'ni 409 bilan rad etadi — bu shunchaki mos UI).
@@ -183,22 +184,6 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
       toast.error(errorMessage(error, "Telegraph'ni yangilab bo'lmadi"));
     } finally {
       setRefreshingTelegraph(false);
-    }
-  }
-
-  async function handleRepostTelegram() {
-    setRepostingTelegram(true);
-    try {
-      const result = await adminApi.repostTelegram(post.id);
-      setTelegram((prev) => ({
-        ...(prev ?? { telegraphPath: null, telegraphUrl: null }),
-        channelMessageId: result.channelMessageId,
-      }));
-      toast.success("Kanalga yuborildi");
-    } catch (error) {
-      toast.error(errorMessage(error, "Kanalga yuborib bo'lmadi"));
-    } finally {
-      setRepostingTelegram(false);
     }
   }
 
@@ -448,8 +433,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     channelUrl,
     onRefreshTelegraph: () => void handleRefreshTelegraph(),
     refreshingTelegraph,
-    onRepostTelegram: () => void handleRepostTelegram(),
-    repostingTelegram,
+    onOpenChannelSend: () => setChannelSendOpen(true),
   };
 
   const staffPanelProps = {
@@ -505,9 +489,11 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
           onArchive={handleArchive}
           onDelete={handleDelete}
           onRefreshTelegraph={() => void handleRefreshTelegraph()}
-          onRepostTelegram={() => void handleRepostTelegram()}
+          onOpenChannelSend={() => setChannelSendOpen(true)}
         />
       )}
+
+      <ChannelSendDialog postId={post.id} open={channelSendOpen} onOpenChange={setChannelSendOpen} />
 
       {isStaff ? <StaffReviewBanner status={status} reviewNote={reviewNote} /> : null}
       {!isStaff && status === "in_review" ? (

@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { pathToFileURL } from "node:url";
+import { Hono, type Context } from "hono";
 
 /**
  * Telegram Bot API va Telegraph API'ning juda soddalashtirilgan mahalliy
@@ -53,19 +54,67 @@ function record(method: string, path: string, body: unknown) {
 app.get("/__calls", (c) => c.json({ calls }));
 app.delete("/__calls", (c) => {
   calls.length = 0;
+  uploadedFiles.length = 0;
   return c.json({ ok: true });
 });
+/** `Content-Type: multipart/form-data` bilan yuklangan fayllar (sendPhoto/sendMediaGroup uchun `InputFile`) — nom/hajm/qaysi so'rovga tegishli ekani shu yerda saqlanadi (sinov skriptlari tekshirishi uchun). */
+interface RecordedFile {
+  field: string;
+  filename: string;
+  size: number;
+}
+const uploadedFiles: { method: string; at: string; files: RecordedFile[] }[] = [];
+app.get("/__uploads", (c) => c.json({ uploads: uploadedFiles }));
 /** Sinov skriptlari uchun qulaylik — `@username` qanday raqamli id'ga aylantirilganini tekshirish (webhook fixture'lar shu id'ni ishlatishi kerak). */
 app.get("/__chat-id/:username", (c) => c.json({ id: usernameToId(c.req.param("username")) }));
 app.get("/__banned", (c) => c.json({ items: bannedMembers }));
 /** Sinov skriptlari uchun — oxirgi yaratilgan xabar (sendMessage/sendPhoto) `message_id`si, ForceReply prompt kabi javobni "taxmin qilmasdan" bog'lash uchun. */
 app.get("/__last-message-id", (c) => c.json({ id: messageIdCounter }));
 
+/** grammY `InputFile` yuborilganda so'rov `multipart/form-data` shaklida keladi — matn maydonlari (JSON qiymatlar
+ * bo'lsa parse qilinadi) va yuklangan fayllar (nom/hajm) shu yerda ajratib olinadi. `media` maydoni (sendMediaGroup)
+ * JSON string ko'rinishida keladi — parse qilib, ichidagi har bir `attach://<id>` ga mos faylni bog'laymiz. */
+async function parseMultipart(c: Context): Promise<{ body: Record<string, unknown>; files: RecordedFile[] }> {
+  const form = await c.req.formData();
+  const body: Record<string, unknown> = {};
+  const files: RecordedFile[] = [];
+
+  for (const [key, value] of form.entries()) {
+    if (value instanceof File) {
+      const buf = await value.arrayBuffer();
+      files.push({ field: key, filename: value.name || `${key}.jpg`, size: buf.byteLength });
+      continue;
+    }
+    body[key] = value;
+  }
+
+  if (typeof body.media === "string") {
+    try {
+      body.media = JSON.parse(body.media);
+    } catch {
+      // JSON emas — o'zgarishsiz qoldiramiz.
+    }
+  }
+
+  return { body, files };
+}
+
 app.post("/:botToken/:method", async (c) => {
   const { botToken, method } = c.req.param();
   if (!botToken.startsWith("bot")) return c.json({ ok: false, error: "Noto'g'ri token formati" }, 404);
 
-  const body = await c.req.json().catch(() => ({}));
+  const contentType = c.req.header("content-type") ?? "";
+  let body: Record<string, unknown>;
+
+  if (contentType.includes("multipart/form-data")) {
+    const parsed = await parseMultipart(c);
+    body = parsed.body;
+    if (parsed.files.length > 0) {
+      uploadedFiles.push({ method, at: new Date().toISOString(), files: parsed.files });
+    }
+  } else {
+    body = await c.req.json().catch(() => ({}));
+  }
   record(method, c.req.path, body);
 
   switch (method) {
@@ -110,6 +159,22 @@ app.post("/:botToken/:method", async (c) => {
           photo: [{ file_id: "mock-file-id", file_unique_id: "mock-unique", width: 800, height: 600 }],
         }),
       );
+    }
+
+    case "sendMediaGroup": {
+      const mediaArr = Array.isArray(body.media) ? (body.media as { type?: string; caption?: string }[]) : [];
+      const messages = mediaArr.map((item, idx) => {
+        const id = ++messageIdCounter;
+        messageKinds.set(id, "photo");
+        return {
+          message_id: id,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: body.chat_id, type: "private" },
+          caption: idx === 0 ? (item.caption ?? "") : undefined,
+          photo: [{ file_id: `mock-file-id-${id}`, file_unique_id: `mock-unique-${id}`, width: 800, height: 600 }],
+        };
+      });
+      return c.json(ok(messages));
     }
 
     case "editMessageText":
@@ -222,6 +287,22 @@ app.post("/editPage", async (c) => {
   );
 });
 
-serve({ fetch: app.fetch, port: PORT }, (info) => {
-  console.log(`Mock Telegram/Telegraph server ${info.port}-portda ishga tushdi.`);
-});
+/** Testlar uchun: mock serverni tasodifiy (bo'sh) portda ishga tushiradi. */
+export function startMockTelegram(port = 0): Promise<{ url: string; close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, (info) => {
+      resolve({
+        url: `http://127.0.0.1:${info.port}`,
+        close: () => new Promise<void>((done) => server.close(() => done())),
+      });
+    });
+  });
+}
+
+// `tsx scripts/mock-telegram.ts` sifatida to'g'ridan-to'g'ri ishga tushirilganda — 4100-port.
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]!).href;
+if (isMain) {
+  serve({ fetch: app.fetch, port: PORT }, (info) => {
+    console.log(`Mock Telegram/Telegraph server ${info.port}-portda ishga tushdi.`);
+  });
+}

@@ -24,6 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ChannelSendDialog } from "@/components/admin/post-editor/channel-send-dialog";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { site } from "@/lib/site";
 
@@ -31,6 +32,7 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [channelSendOpen, setChannelSendOpen] = useState(false);
 
   function run(action: () => Promise<unknown>, successMessage: string) {
     startTransition(async () => {
@@ -112,6 +114,12 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
             <>
               <DropdownMenuSeparator />
               {post.status === "published" ? (
+                <DropdownMenuItem onSelect={() => setChannelSendOpen(true)}>
+                  <Send />
+                  Kanalga yuborish
+                </DropdownMenuItem>
+              ) : null}
+              {post.status === "published" ? (
                 <DropdownMenuItem onSelect={() => run(() => adminApi.unpublishPost(post.id), "Qoralamaga qaytarildi")}>
                   <Undo2 />
                   Qoralamaga qaytarish
@@ -166,6 +174,10 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {isAdmin && post.status === "published" ? (
+        <ChannelSendDialog postId={post.id} open={channelSendOpen} onOpenChange={setChannelSendOpen} />
+      ) : null}
     </>
   );
 }

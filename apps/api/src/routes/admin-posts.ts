@@ -2,6 +2,8 @@ import { Hono, type Context } from "hono";
 import { and, asc, desc, eq, gt, ilike, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  ChannelPreviewRequestSchema,
+  ChannelSendRequestSchema,
   CreatePostBodySchema,
   DEFAULT_POST_SETTINGS,
   PostSettingsSchema,
@@ -27,7 +29,13 @@ import { renderPost } from "../lib/content/render.js";
 import { events } from "../lib/events.js";
 import { approvePost, requestPostChanges, submitPostForReview } from "../lib/post-review.js";
 import { pathsForPost, revalidateWeb } from "../lib/revalidate.js";
-import { getTelegramRefForPost, refreshTelegraphMirror, repostToChannel } from "../telegram/publish.js";
+import {
+  computeChannelPost,
+  editChannelCaptionForPost,
+  getChannelAlreadySent,
+  sendPostToChannel,
+} from "../telegram/channel-send.js";
+import { getTelegramRefForPost, refreshTelegraphMirror } from "../telegram/publish.js";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -415,7 +423,41 @@ export const adminPostsRoute = new Hono()
     const ref = await getTelegramRefForPost(id);
     return c.json({ telegraphUrl: ref?.telegraphUrl ?? null });
   })
-  .post("/:id/telegram/repost", async (c) => {
+  .post("/:id/channel/preview", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => null);
+    const parsed = ChannelPreviewRequestSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "mode va variant majburiy (mode: media|text)" }, 400);
+
+    const computed = await computeChannelPost(id, parsed.data.mode, parsed.data.variant);
+    if (!computed.ok) {
+      if (computed.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      if (computed.reason === "not_published") {
+        return c.json({ error: "Faqat chop etilgan post uchun kanal ko'rinishi tayyorlanadi" }, 409);
+      }
+      if (computed.reason === "invalid_combo") {
+        return c.json({ error: "Bu uzunlik ushbu rejim uchun mos emas" }, 400);
+      }
+      // no_media
+      return c.json({ error: "🖼 Rasmli rejim uchun postda kover yoki band ichida rasm bo'lishi kerak" }, 400);
+    }
+
+    const alreadySent = await getChannelAlreadySent(id);
+
+    return c.json({
+      mode: parsed.data.mode,
+      variant: parsed.data.variant,
+      captionHtml: computed.data.captionHtml,
+      visibleLength: computed.data.visibleLength,
+      limit: computed.data.limit,
+      truncated: computed.data.truncated,
+      media: computed.data.media,
+      alreadySent,
+    });
+  })
+  .post("/:id/channel/send", async (c) => {
     const forbidden = forbidUnlessAdmin(c);
     if (forbidden) return forbidden;
     const id = c.req.param("id");
@@ -425,9 +467,46 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "Faqat chop etilgan post kanalga yuboriladi" }, 409);
     }
 
-    await repostToChannel(id);
-    const ref = await getTelegramRefForPost(id);
-    return c.json({ channelMessageId: ref?.channelMessageId ?? null });
+    const body = await c.req.json().catch(() => null);
+    const parsed = ChannelSendRequestSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "mode va variant majburiy (mode: media|text)" }, 400);
+
+    const result = await sendPostToChannel(id, parsed.data.mode, parsed.data.variant, {
+      replaceExisting: parsed.data.replaceExisting,
+    });
+
+    if (!result.ok) {
+      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      if (result.reason === "not_published") {
+        return c.json({ error: "Faqat chop etilgan post kanalga yuboriladi" }, 409);
+      }
+      if (result.reason === "telegram_disabled") {
+        return c.json({ error: "Telegram bot yoki kanal sozlanmagan" }, 409);
+      }
+      if (result.reason === "invalid_combo") {
+        return c.json({ error: "Bu uzunlik ushbu rejim uchun mos emas" }, 400);
+      }
+      if (result.reason === "no_media") {
+        return c.json({ error: "🖼 Rasmli rejim uchun postda kover yoki band ichida rasm bo'lishi kerak" }, 400);
+      }
+      // already_sent
+      return c.json({ error: "Post allaqachon kanalga yuborilgan — replaceExisting bilan qayta yuboring" }, 409);
+    }
+
+    return c.json(result);
+  })
+  .post("/:id/channel/resync-caption", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const id = c.req.param("id");
+    const post = await loadPostOr404(id);
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+
+    // Post hali kanalga yuborilmagan bo'lsa — jimgina hech narsa qilmaydi
+    // (`editChannelCaptionForPost` ichida tekshiriladi), shu sabab bu yerda
+    // 409 tashlamaymiz: tugma faqat "allaqachon yuborilgan" holatda ko'rinadi.
+    await editChannelCaptionForPost(id);
+    return c.json({ ok: true });
   })
   .get("/:id/preview", async (c) => {
     const adminUser = c.get("adminUser");

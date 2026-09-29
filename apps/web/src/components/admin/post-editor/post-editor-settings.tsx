@@ -24,7 +24,10 @@ const INTERACTIVITY_KEYS: (keyof PostSettings)[] = [
   "allowAnonymousComments",
   "commentsRequireApproval",
 ];
-const TELEGRAM_SETTING_KEYS: (keyof PostSettings)[] = ["telegraphMirror", "channelAutoPost"];
+// `channelAutoPost` orqaga moslik uchun sxemada qolgan, lekin ENDI ISHLATILMAYDI
+// (kanalga yuborish butunlay qo'lda — "Kanalga yuborish" dialogi) — shu sabab UI'da
+// ko'rsatilmaydi.
+const TELEGRAM_SETTING_KEYS: (keyof PostSettings)[] = ["telegraphMirror"];
 
 export interface PostEditorSettingsProps {
   allTags: TagWithCount[];
@@ -47,8 +50,7 @@ export interface PostEditorSettingsProps {
   channelUrl: string | null;
   onRefreshTelegraph: () => void;
   refreshingTelegraph: boolean;
-  onRepostTelegram: () => void;
-  repostingTelegram: boolean;
+  onOpenChannelSend: () => void;
   /** "Nashr" kartasi uchun — ixtiyoriy, berilmasa status/sana bloki ko'rsatilmaydi. */
   status?: AdminPostStatus;
   publishedAt?: string | null;
@@ -125,8 +127,7 @@ export function PostEditorSettings({
   channelUrl,
   onRefreshTelegraph,
   refreshingTelegraph,
-  onRepostTelegram,
-  repostingTelegram,
+  onOpenChannelSend,
   status,
   publishedAt,
   updatedAt,
@@ -267,8 +268,8 @@ export function PostEditorSettings({
             <Button type="button" variant="outline" size="sm" disabled={refreshingTelegraph} onClick={onRefreshTelegraph}>
               {refreshingTelegraph ? "Yangilanmoqda…" : "Telegraph'ni yangilash"}
             </Button>
-            <Button type="button" variant="outline" size="sm" disabled={repostingTelegram} onClick={onRepostTelegram}>
-              {repostingTelegram ? "Yuborilmoqda…" : "Kanalga qayta yuborish"}
+            <Button type="button" variant="outline" size="sm" onClick={onOpenChannelSend}>
+              Kanalga yuborish
             </Button>
           </div>
         </div>

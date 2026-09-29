@@ -5,6 +5,10 @@ import type {
   AdminCommentListResponse,
   AdminPostDetail,
   BansListResponse,
+  ChannelMode,
+  ChannelPreviewResponse,
+  ChannelSendResponse,
+  ChannelVariant,
   CreatePostResponse,
   CreateStaffInviteResponse,
   CreateTagBody,
@@ -210,8 +214,20 @@ export const adminApi = {
   refreshTelegraph: (postId: string) =>
     adminJson<{ telegraphUrl: string | null }>(`/admin/posts/${postId}/telegram/telegraph`, { method: "POST" }),
 
-  repostTelegram: (postId: string) =>
-    adminJson<{ channelMessageId: number | null }>(`/admin/posts/${postId}/telegram/repost`, { method: "POST" }),
+  channelPreview: (postId: string, mode: ChannelMode, variant: ChannelVariant) =>
+    adminJson<ChannelPreviewResponse>(`/admin/posts/${postId}/channel/preview`, {
+      method: "POST",
+      ...jsonBody({ mode, variant }),
+    }),
+
+  channelSend: (postId: string, mode: ChannelMode, variant: ChannelVariant, replaceExisting?: boolean) =>
+    adminJson<ChannelSendResponse>(`/admin/posts/${postId}/channel/send`, {
+      method: "POST",
+      ...jsonBody({ mode, variant, replaceExisting }),
+    }),
+
+  channelResyncCaption: (postId: string) =>
+    adminJson<{ ok: true }>(`/admin/posts/${postId}/channel/resync-caption`, { method: "POST" }),
 
   // --- Xodim (staff) va ko'rib chiqish (review) ---
 

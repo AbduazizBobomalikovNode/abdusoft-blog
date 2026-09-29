@@ -35,7 +35,13 @@ export const commentStatusEnum = pgEnum("comment_status", [
 
 export const commentSourceEnum = pgEnum("comment_source", ["web", "telegram"]);
 
-export const channelMessageTypeEnum = pgEnum("channel_message_type", ["text", "photo"]);
+export const channelMessageTypeEnum = pgEnum("channel_message_type", ["text", "photo", "album"]);
+
+/** Kanalga yuborilgan post varianti — "Kanalga yuborish" dialogidagi uzunlik tugmalari (`xl` faqat 📝 Rasmsiz rejimda). */
+export const channelVariantEnum = pgEnum("channel_variant", ["s", "m", "l", "xl"]);
+
+/** Kanalga yuborilgan post rejimi — 🖼 Rasmli (kover/rasmlar + caption) yoki 📝 Rasmsiz (oddiy matn). Eski qatorlarda `null` (legacy — `channelMessageType`ga qarab aniqlanadi). */
+export const channelModeEnum = pgEnum("channel_mode", ["media", "text"]);
 
 export const reactionTargetEnum = pgEnum("reaction_target_type", ["post", "comment"]);
 export const reactionTypeEnum = pgEnum("reaction_type", ["like", "dislike"]);
@@ -245,9 +251,18 @@ export const telegramRefs = pgTable("telegram_refs", {
     .references(() => posts.id, { onDelete: "cascade" }),
   telegraphPath: text("telegraph_path"),
   telegraphUrl: text("telegraph_url"),
+  /** Bosh (captioned/birinchi) kanal xabari — orqaga moslik uchun saqlanadi (album bo'lsa ham birinchi element). */
   channelMessageId: bigint("channel_message_id", { mode: "number" }),
-  /** Kanal xabari qanday yuborilgani — 'text' (sendMessage/editMessageText) yoki 'photo' (sendPhoto/editMessageCaption). Eski qatorlarda `null` (legacy — coverUrl bor-yo'qligiga qarab aniqlanadi). */
+  /** Kanal xabari qanday yuborilgani — 'text' (sendMessage/editMessageText), 'photo' (sendPhoto/editMessageCaption) yoki 'album' (sendMediaGroup, faqat caption tahrirlanadi). Eski qatorlarda `null` (legacy — coverUrl bor-yo'qligiga qarab aniqlanadi). */
   channelMessageType: channelMessageTypeEnum("channel_message_type"),
+  /** "Kanalga yuborish" dialogida tanlangan variant (qisqa/o'rtacha/batafsil/maksimal) — tahrirlashda caption/matn shu variant bilan qayta quriladi. */
+  channelVariant: channelVariantEnum("channel_variant"),
+  /** "Kanalga yuborish" dialogida tanlangan rejim (rasmli/rasmsiz) — resync shu rejim bilan qayta quradi. Eski qatorlarda `null`. */
+  channelMode: channelModeEnum("channel_mode"),
+  /** Kanalga yuborilgan BARCHA xabar id'lari (album bo'lsa bir nechta) — hujjat tartibida, `channelMessageId` shularning birinchisi. */
+  channelMessageIds: jsonb("channel_message_ids").$type<number[]>(),
+  /** "Kanalga yuborish" bosilgan payt — `null` bo'lsa hali qo'lda yuborilmagan. */
+  channelSentAt: timestamp("channel_sent_at", { withTimezone: true }),
   /** Kanalga bog'langan muhokama guruhi va shu postning o'sha guruhga avtomatik forward qilingan xabari — Telegram izohlarini shu postga bog'lash uchun. */
   discussionChatId: bigint("discussion_chat_id", { mode: "number" }),
   discussionMessageId: bigint("discussion_message_id", { mode: "number" }),

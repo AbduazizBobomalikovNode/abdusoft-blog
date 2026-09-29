@@ -46,7 +46,7 @@ export function PostEditorHeader({
   onArchive,
   onDelete,
   onRefreshTelegraph,
-  onRepostTelegram,
+  onOpenChannelSend,
 }: {
   postId: string;
   status: AdminPostStatus;
@@ -58,7 +58,7 @@ export function PostEditorHeader({
   onArchive: () => Promise<void>;
   onDelete: () => Promise<void>;
   onRefreshTelegraph: () => void;
-  onRepostTelegram: () => void;
+  onOpenChannelSend: () => void;
 }) {
   const [publishOpen, setPublishOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -128,6 +128,13 @@ export function PostEditorHeader({
           </AlertDialog>
         )}
 
+        <span title={status !== "published" ? "Faqat chop etilgan postlarni kanalga yuborish mumkin" : undefined}>
+          <Button variant="outline" size="sm" disabled={status !== "published"} onClick={onOpenChannelSend}>
+            <Send className="size-4" />
+            Kanalga yuborish
+          </Button>
+        </span>
+
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon-sm" aria-label="Ko'proq amallar">
@@ -138,10 +145,6 @@ export function PostEditorHeader({
             <DropdownMenuItem onSelect={onRefreshTelegraph}>
               <Send />
               Telegraph&apos;ni yangilash
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={onRepostTelegram}>
-              <Send />
-              Kanalga qayta yuborish
             </DropdownMenuItem>
             {status !== "archived" ? (
               <DropdownMenuItem onSelect={() => void onArchive()}>

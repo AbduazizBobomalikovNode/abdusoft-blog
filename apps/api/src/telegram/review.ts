@@ -1,3 +1,4 @@
+import { isChannelComboValid, type ChannelMode, type ChannelVariant } from "@blog/shared";
 import { InlineKeyboard } from "grammy";
 import { eq } from "drizzle-orm";
 import { config } from "../config.js";
@@ -8,10 +9,40 @@ import { approvePost, requestPostChanges } from "../lib/post-review.js";
 import { getSettings } from "../lib/settings.js";
 import { setPendingReply } from "../lib/site-settings.js";
 import { bot } from "./client.js";
+import { computeChannelPost, sendChannelPreviewToChat, sendPostToChannel } from "./channel-send.js";
 import { findAdminUser } from "./comments.js";
 import { escapeHtml, escapeHtmlAttr, stripHtml, truncate } from "./format.js";
 
 const EXCERPT_LIMIT = 500;
+
+const VARIANT_LABELS: Record<ChannelVariant, string> = {
+  s: "Qisqa",
+  m: "O'rtacha",
+  l: "Batafsil",
+  xl: "Maksimal",
+};
+
+const MODE_LABELS: Record<ChannelMode, string> = {
+  media: "🖼 Rasmli",
+  text: "📝 Rasmsiz",
+};
+
+/** `cs`/`cc` callback'lari uchun 2 belgili kompakt kod: rejim harfi (`m`|`t`) + uzunlik harfi (`s`|`m`|`l`|`x`, `x` = `xl`). */
+function modeVariantCode(mode: ChannelMode, variant: ChannelVariant): string {
+  return `${mode === "media" ? "m" : "t"}${variant === "xl" ? "x" : variant}`;
+}
+
+/** `modeVariantCode` teskarisi — noto'g'ri/notanish kod bo'lsa `null` (masalan eski/begona callback). */
+function parseModeVariantCode(code: string): { mode: ChannelMode; variant: ChannelVariant } | null {
+  if (code.length !== 2) return null;
+  const modeChar = code[0];
+  const variantChar = code[1];
+  const mode: ChannelMode | null = modeChar === "m" ? "media" : modeChar === "t" ? "text" : null;
+  const variant: ChannelVariant | null =
+    variantChar === "s" ? "s" : variantChar === "m" ? "m" : variantChar === "l" ? "l" : variantChar === "x" ? "xl" : null;
+  if (!mode || !variant || !isChannelComboValid(mode, variant)) return null;
+  return { mode, variant };
+}
 
 function previewUrl(postId: string): string {
   return `${config.WEB_ORIGIN}/admin/postlar/${postId}/preview`;
@@ -23,6 +54,36 @@ function reviewKeyboard(postId: string): InlineKeyboard {
     .row()
     .text("✅ Chop etish", `pr:ok:${postId}`)
     .text("✏️ Qaytarish", `pr:back:${postId}`);
+}
+
+/**
+ * "✅ Chop etish"dan keyin — kanalga yuborish rejim+uzunlik tanlash tugmalari.
+ * Callback data KOMPAKT: `cs:<m|t><s|m|l|x>:<postId>`. 🖼 qatori FAQAT postda
+ * kover yoki band ichida rasm bo'lsa ko'rsatiladi (`hasMedia`).
+ */
+function channelVariantKeyboard(postId: string, hasMedia: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  if (hasMedia) {
+    kb.text("🖼 O'rtacha", `cs:${modeVariantCode("media", "m")}:${postId}`)
+      .text("🖼 Batafsil", `cs:${modeVariantCode("media", "l")}:${postId}`)
+      .row();
+  }
+  kb.text("📝 Qisqa", `cs:${modeVariantCode("text", "s")}:${postId}`)
+    .text("📝 O'rtacha", `cs:${modeVariantCode("text", "m")}:${postId}`)
+    .text("📝 Batafsil", `cs:${modeVariantCode("text", "l")}:${postId}`)
+    .text("📝 Maksimal", `cs:${modeVariantCode("text", "xl")}:${postId}`)
+    .row()
+    .text("Yubormaslik", `cs:no:${postId}`);
+  return kb;
+}
+
+/** Rejim+uzunlik tanlangandan keyingi tasdiqlash tugmalari. Callback data: `cc:<ok|back|cancel>:<kod|->:<postId>` (`back`/`cancel`da kod "-"). */
+function channelConfirmKeyboard(postId: string, mode: ChannelMode, variant: ChannelVariant): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✅ Kanalga yuborish", `cc:ok:${modeVariantCode(mode, variant)}:${postId}`)
+    .row()
+    .text("🔁 Boshqa variant", `cc:back:-:${postId}`)
+    .text("✖️ Bekor", `cc:cancel:-:${postId}`);
 }
 
 async function notificationText(payload: PostSubmittedEventPayload): Promise<string> {
@@ -139,6 +200,23 @@ export function registerReviewHandlers(): void {
         const url = `${config.WEB_ORIGIN}/${result.post.slug}`;
         const statusLine = `✅ Chop etildi: <a href="${escapeHtmlAttr(url)}">${escapeHtml(result.post.title)}</a>`;
         await editOriginalMessage(message.chat.id, message.message_id, originalText, statusLine);
+
+        // Kanalga yuborish ENDI avtomatik EMAS — shu yerda rejim+uzunlik so'raymiz.
+        // 🖼 qatori faqat postda kover yoki band ichida rasm bo'lsa ko'rsatiladi.
+        try {
+          const mediaCheck = await computeChannelPost(postId, "media", "m");
+          await bot!.api.sendMessage(
+            message.chat.id,
+            `Kanalga yuborish uchun rejim va uzunlikni tanlang: <b>${escapeHtml(result.post.title)}</b>`,
+            {
+              parse_mode: "HTML",
+              link_preview_options: { is_disabled: true },
+              reply_markup: channelVariantKeyboard(postId, mediaCheck.ok),
+            },
+          );
+        } catch (error: unknown) {
+          console.error("Kanal varianti tugmalarini yuborishda xatolik:", error);
+        }
       }
       return;
     }
@@ -161,6 +239,111 @@ export function registerReviewHandlers(): void {
         originalText,
       });
       await ctx.answerCallbackQuery();
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+  });
+
+  // "Kanalga yuborish" — rejim+uzunlik tanlash (`cs:<m|t><s|m|l|x>:<postId>` yoki `cs:no:<postId>`).
+  bot.on("callback_query:data", async (ctx, next) => {
+    const data = ctx.callbackQuery.data;
+    const [prefix, code, postId] = data.split(":");
+    if (prefix !== "cs" || !code || !postId) return next();
+
+    if (code === "no") {
+      await ctx.answerCallbackQuery({ text: "Kanalga yuborilmadi" });
+      return;
+    }
+
+    const parsed = parseModeVariantCode(code);
+    if (!parsed) return next();
+    const { mode, variant } = parsed;
+
+    const computed = await computeChannelPost(postId, mode, variant);
+    if (!computed.ok) {
+      const text =
+        computed.reason === "not_found"
+          ? "Post topilmadi"
+          : computed.reason === "not_published"
+            ? "Post chop etilmagan"
+            : computed.reason === "no_media"
+              ? "Postda rasm yo'q — 📝 Rasmsiz rejimni tanlang"
+              : "Noto'g'ri kombinatsiya";
+      await ctx.answerCallbackQuery({ text });
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+    const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
+    if (!chatId) return;
+
+    try {
+      // AYNAN shu ko'rinish kanalga yuboriladi — admin chatida oldindan namuna.
+      await sendChannelPreviewToChat(chatId, computed.data);
+      await bot!.api.sendMessage(chatId, "Shu ko'rinishda kanalga yuborilsinmi?", {
+        reply_markup: channelConfirmKeyboard(postId, mode, variant),
+      });
+    } catch (error: unknown) {
+      console.error("Kanal oldindan ko'rishni yuborishda xatolik:", error);
+      await bot!.api.sendMessage(chatId, "Oldindan ko'rishni tayyorlashda xatolik yuz berdi.");
+    }
+  });
+
+  // Rejim+uzunlik tasdiqlash (`cc:<ok|back|cancel>:<kod|->:<postId>`).
+  bot.on("callback_query:data", async (ctx, next) => {
+    const data = ctx.callbackQuery.data;
+    const [prefix, action, code, postId] = data.split(":");
+    if (prefix !== "cc" || !action || !postId) return next();
+
+    if (action === "cancel") {
+      await ctx.answerCallbackQuery({ text: "Bekor qilindi" });
+      return;
+    }
+
+    if (action === "back") {
+      await ctx.answerCallbackQuery();
+      const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
+      if (!chatId) return;
+      const mediaCheck = await computeChannelPost(postId, "media", "m");
+      await bot!.api.sendMessage(chatId, "Kanalga yuborish uchun rejim va uzunlikni tanlang:", {
+        reply_markup: channelVariantKeyboard(postId, mediaCheck.ok),
+      });
+      return;
+    }
+
+    if (action === "ok") {
+      const parsed = code ? parseModeVariantCode(code) : null;
+      if (!parsed) return next();
+      const { mode, variant } = parsed;
+
+      // Idempotentlik: allaqachon yuborilgan bo'lsa `sendPostToChannel`
+      // `already_sent` bilan qaytadi — ikkinchi marta yubormaydi.
+      const result = await sendPostToChannel(postId, mode, variant);
+      if (!result.ok) {
+        const text =
+          result.reason === "already_sent"
+            ? "Allaqachon kanalga yuborilgan"
+            : result.reason === "telegram_disabled"
+              ? "Telegram kanal sozlanmagan"
+              : result.reason === "no_media"
+                ? "Postda rasm yo'q"
+                : result.reason === "invalid_combo"
+                  ? "Noto'g'ri kombinatsiya"
+                  : "Yuborib bo'lmadi";
+        await ctx.answerCallbackQuery({ text });
+        return;
+      }
+
+      await ctx.answerCallbackQuery({ text: "✅ Kanalga yuborildi" });
+      const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
+      if (chatId) {
+        const label = `${MODE_LABELS[mode]} · ${VARIANT_LABELS[variant]}`;
+        const note = result.messageUrl
+          ? `✅ Kanalga yuborildi (${label}): ${result.messageUrl}`
+          : `✅ Kanalga yuborildi (${label})`;
+        await bot!.api.sendMessage(chatId, note, { link_preview_options: { is_disabled: true } });
+      }
       return;
     }
 
