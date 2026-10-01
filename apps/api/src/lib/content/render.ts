@@ -20,7 +20,7 @@ import type { TocItem } from "@blog/shared";
 const WORDS_PER_MINUTE = 200;
 const EXCERPT_LENGTH = 160;
 
-const tiptapExtensions = [
+export const tiptapExtensions = [
   StarterKit.configure({ link: { openOnClick: false } }),
   Image,
   Table,

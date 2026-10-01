@@ -1,6 +1,6 @@
 "use client";
 
-import type { AdminPostStatus, ChannelPlan, PostSettings, TagWithCount, TelegramRef } from "@blog/shared";
+import type { AdminPostStatus, ChannelPlan, PostSettings, ResolvedChannelChoice, TagWithCount, TelegramRef } from "@blog/shared";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { SETTING_SWITCHES } from "@/components/admin/post-settings-fields";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDateTime } from "@/lib/format";
+import { ChannelChoiceSummary } from "./channel-choice-summary";
 import { ChannelPlanFields } from "./channel-plan-fields";
 import { CoverImagePicker } from "./cover-image-picker";
 import { TagMultiselect } from "./tag-multiselect";
@@ -62,6 +63,8 @@ export interface PostEditorSettingsProps {
   onRefreshTelegraph: () => void;
   refreshingTelegraph: boolean;
   onOpenChannelSend: () => void;
+  /** Belgilangan kanal versiyasi (yo'q bo'lsa `null`) — Telegram kartasidagi xulosa va rejalashtirish uchun. */
+  channelChoice?: ResolvedChannelChoice | null;
   /** "Nashr" kartasi uchun — ixtiyoriy, berilmasa status/sana bloki ko'rsatilmaydi. */
   status?: AdminPostStatus;
   publishedAt?: string | null;
@@ -145,6 +148,7 @@ export function PostEditorSettings({
   onRefreshTelegraph,
   refreshingTelegraph,
   onOpenChannelSend,
+  channelChoice = null,
   status,
   publishedAt,
   updatedAt,
@@ -193,6 +197,7 @@ export function PostEditorSettings({
                 onChange={onChannelPlanChange}
                 scheduledAtLocal={scheduledAtLocal}
                 onBlockingChange={onChannelPlanBlockingChange}
+                markedChoice={channelChoice}
               />
             ) : null}
           </div>
@@ -200,12 +205,12 @@ export function PostEditorSettings({
       ) : null}
 
       <SettingsCard title="Ko'rinish" hint="Muqova, qisqacha tavsif, teglar va muhimlik">
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2" data-editor-field="cover">
           <Label>Muqova rasm</Label>
           <CoverImagePicker coverUrl={coverUrl} onChange={onCoverChange} />
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2" data-editor-field="excerpt">
           <div className="flex items-center justify-between">
             <Label htmlFor="post-excerpt">Qisqacha tavsif</Label>
             <button
@@ -225,7 +230,7 @@ export function PostEditorSettings({
           />
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2" data-editor-field="tags">
           <Label>Teglar</Label>
           <TagMultiselect allTags={allTags} selectedSlugs={selectedTagSlugs} onChange={onTagsChange} />
         </div>
@@ -255,7 +260,7 @@ export function PostEditorSettings({
         </div>
       </SettingsCard>
 
-      <SettingsCard title="Telegram" hint="Ko'zgulash va kanalga avtomatik post">
+      <SettingsCard title="Telegram" hint="Ko'zgulash va kanal versiyasi (yuborish qo'lda)">
         <div className="flex flex-col divide-y divide-border">
           {telegramSwitches.map((item) => (
             <div key={item.key} className="py-1 first:pt-0 last:pb-0">
@@ -269,6 +274,8 @@ export function PostEditorSettings({
             </div>
           ))}
         </div>
+
+        <ChannelChoiceSummary choice={channelChoice} onOpen={onOpenChannelSend} />
 
         <div className="flex flex-col gap-1.5 rounded-lg border border-border px-3 py-2.5">
           {telegram?.telegraphUrl ? (
@@ -299,9 +306,11 @@ export function PostEditorSettings({
             <Button type="button" variant="outline" size="sm" className="max-md:h-11 max-md:flex-1" disabled={refreshingTelegraph} onClick={onRefreshTelegraph}>
               {refreshingTelegraph ? "Yangilanmoqda…" : "Telegraph'ni yangilash"}
             </Button>
-            <Button type="button" variant="outline" size="sm" className="max-md:h-11 max-md:flex-1" onClick={onOpenChannelSend}>
-              Kanalga yuborish
-            </Button>
+            {status === "published" ? (
+              <Button type="button" variant="outline" size="sm" className="max-md:h-11 max-md:flex-1" onClick={onOpenChannelSend}>
+                Kanalga yuborish
+              </Button>
+            ) : null}
           </div>
         </div>
       </SettingsCard>

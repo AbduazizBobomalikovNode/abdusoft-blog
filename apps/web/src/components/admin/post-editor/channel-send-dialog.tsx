@@ -10,6 +10,7 @@ import type {
   ChannelVariant,
   ChannelVersion,
   ChannelVersionsResponse,
+  ResolvedChannelChoice,
 } from "@blog/shared";
 import {
   AlertDialog,
@@ -38,11 +39,31 @@ function errorMessage(error: unknown, fallback: string): string {
 type Step = 1 | 2 | 3;
 type Choice = { kind: "auto"; mode: ChannelMode; variant: ChannelVariant } | { kind: "version"; id: string };
 
-const STEPS: { value: Step; label: string }[] = [
-  { value: 1, label: "Versiya" },
-  { value: 2, label: "Tahrirlash" },
-  { value: 3, label: "Tekshiruv va yuborish" },
-];
+/**
+ * `send` — chop etilgan post (admin): yuborish tugmasi bor. `prepare` — chop etilmagan post (admin): faqat tayyorlash va
+ * "Asosiy qilib belgilash". `suggest` — xodim: yuborish YO'Q, faqat "Taklif sifatida belgilash".
+ */
+export type ChannelDialogMode = "send" | "prepare" | "suggest";
+
+function stepLabels(mode: ChannelDialogMode): { value: Step; label: string }[] {
+  return [
+    { value: 1, label: "Versiya" },
+    { value: 2, label: "Tahrirlash" },
+    { value: 3, label: mode === "send" ? "Tekshiruv va yuborish" : "Tekshiruv va belgilash" },
+  ];
+}
+
+function choiceFromResolved(resolved: ResolvedChannelChoice["choice"]): Choice {
+  return resolved.kind === "version"
+    ? { kind: "version", id: resolved.versionId }
+    : { kind: "auto", mode: resolved.mode, variant: resolved.variant };
+}
+
+function sameChoice(resolved: ResolvedChannelChoice["choice"] | null | undefined, choice: Choice): boolean {
+  if (!resolved) return false;
+  if (resolved.kind === "version") return choice.kind === "version" && choice.id === resolved.versionId;
+  return choice.kind === "auto" && choice.mode === resolved.mode && choice.variant === resolved.variant;
+}
 
 function toSelection(choice: Choice): ChannelSelection {
   return choice.kind === "auto" ? { mode: choice.mode, variant: choice.variant } : { versionId: choice.id };
@@ -57,11 +78,26 @@ export function ChannelSendDialog({
   postId,
   open,
   onOpenChange,
+  mode: dialogMode = "send",
+  readOnly = false,
+  onChoiceChange,
 }: {
   postId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Standart `send` — eski chaqiruvchilar o'zgarmaydi. */
+  mode?: ChannelDialogMode;
+  /** Xodim uchun `in_review`da — versiyalarni faqat ko'rish (tahrirlash/belgilash yo'q). */
+  readOnly?: boolean;
+  /** Belgilangan versiya o'zgarganda (yoki yuklanganda) chaqiriladi — tashqi xulosa yangilanishi uchun. */
+  onChoiceChange?: (choice: ResolvedChannelChoice | null) => void;
 }) {
+  const sending_ = dialogMode === "send";
+  const [marking, setMarking] = useState(false);
+  const onChoiceChangeRef = useRef(onChoiceChange);
+  useEffect(() => {
+    onChoiceChangeRef.current = onChoiceChange;
+  }, [onChoiceChange]);
   const [step, setStep] = useState<Step>(1);
   const [choice, setChoice] = useState<Choice>({ kind: "auto", mode: "media", variant: "m" });
   const [canUseMedia, setCanUseMedia] = useState<boolean | null>(null);
@@ -94,6 +130,7 @@ export function ChannelSendDialog({
     try {
       const data = await adminApi.listChannelVersions(postId);
       setVersions(data);
+      onChoiceChangeRef.current?.(data.choice);
       return data;
     } catch (error) {
       toast.error(errorMessage(error, "Versiyalarni yuklab bo'lmadi"));
@@ -123,7 +160,8 @@ export function ChannelSendDialog({
       setChecking(true);
       setAck(false);
       try {
-        const data = await adminApi.channelPreflight(postId, selection);
+        // Chop etilmagan postda (tayyorlash/taklif) "post chop etilgan bo'lishi shart" xatosi chiqmasligi uchun `forPlan` semantikasi.
+        const data = await adminApi.channelPreflight(postId, selection, !sending_);
         if (seq === preflightSeq.current) setPreflight(data);
       } catch (error) {
         if (seq !== preflightSeq.current) return;
@@ -133,11 +171,12 @@ export function ChannelSendDialog({
         if (seq === preflightSeq.current) setChecking(false);
       }
     },
-    [postId],
+    [postId, sending_],
   );
 
   useEffect(() => {
-    if (!open) return;
+    // Xodim `/admin/telegram/status`ga kira olmaydi (403) — kanal nomi faqat admin uchun.
+    if (!open || dialogMode === "suggest") return;
     adminApi
       .getTelegramStatus()
       .then((status) => {
@@ -146,9 +185,9 @@ export function ChannelSendDialog({
       .catch(() => {
         // Telegram holati olinmasa ham dialog ishlaydi.
       });
-  }, [open]);
+  }, [open, dialogMode]);
 
-  /** Dialog ochilganda: postda rasm bor-yo'qligini aniqlab 🖼/📝 standartini tanlaymiz, versiyalarni yuklaymiz. */
+  /** Dialog ochilganda: versiyalarni (va belgini) yuklaymiz; belgi bo'lsa shundan boshlaymiz, aks holda rasm bor-yo'qligiga qarab 🖼/📝 standarti. */
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -159,23 +198,52 @@ export function ChannelSendDialog({
       setPreflight(null);
       setChecking(false);
       setLoading(true);
-      void loadVersions();
-      try {
-        const mediaPreview = await adminApi.channelPreview(postId, { mode: "media", variant: "m" });
-        if (cancelled || seq !== previewSeq.current) return;
-        setCanUseMedia(true);
-        setChoice({ kind: "auto", mode: "media", variant: "m" });
-        setPreview(mediaPreview);
-      } catch {
-        if (cancelled || seq !== previewSeq.current) return;
-        setCanUseMedia(false);
-        setChoice({ kind: "auto", mode: "text", variant: "m" });
+      const [data, mediaPreview] = await Promise.all([
+        adminApi
+          .listChannelVersions(postId)
+          .then((d) => {
+            if (!cancelled) {
+              setVersions(d);
+              onChoiceChangeRef.current?.(d.choice);
+            }
+            return d;
+          })
+          .catch((error: unknown) => {
+            if (!cancelled) toast.error(errorMessage(error, "Versiyalarni yuklab bo'lmadi"));
+            return null;
+          }),
+        adminApi.channelPreview(postId, { mode: "media", variant: "m" }).catch(() => null),
+      ]);
+      if (cancelled || seq !== previewSeq.current) return;
+      setCanUseMedia(mediaPreview !== null);
+
+      // Belgilangan versiya bor — dialog shunga oldindan tanlangan holda ochiladi.
+      const marked = data?.choice?.choice ?? null;
+      if (marked) {
+        const next = choiceFromResolved(marked);
         try {
+          const markedPreview = await adminApi.channelPreview(postId, toSelection(next));
+          if (cancelled || seq !== previewSeq.current) return;
+          setChoice(next);
+          setPreview(markedPreview);
+          setLoading(false);
+          return;
+        } catch {
+          // Belgilangan ko'rinishni qurib bo'lmadi (masalan rasm yo'qolgan) — standart tanlovga tushamiz.
+        }
+      }
+
+      try {
+        if (mediaPreview) {
+          setChoice({ kind: "auto", mode: "media", variant: "m" });
+          setPreview(mediaPreview);
+        } else {
+          setChoice({ kind: "auto", mode: "text", variant: "m" });
           const textPreview = await adminApi.channelPreview(postId, { mode: "text", variant: "m" });
           if (!cancelled && seq === previewSeq.current) setPreview(textPreview);
-        } catch (error) {
-          if (!cancelled) toast.error(errorMessage(error, "Oldindan ko'rishni yuklab bo'lmadi"));
         }
+      } catch (error) {
+        if (!cancelled) toast.error(errorMessage(error, "Oldindan ko'rishni yuklab bo'lmadi"));
       } finally {
         if (!cancelled && seq === previewSeq.current) setLoading(false);
       }
@@ -183,7 +251,7 @@ export function ChannelSendDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, postId, loadVersions]);
+  }, [open, postId]);
 
   function selectAuto(mode: ChannelMode, variant: ChannelVariant) {
     const next: Choice = { kind: "auto", mode, variant };
@@ -219,7 +287,7 @@ export function ChannelSendDialog({
         return;
       }
     }
-    if (next === 2 && choice.kind !== "version") return;
+    if (next === 2 && (choice.kind !== "version" || readOnly)) return;
     if (step === 2) void loadVersions();
     setStep(next);
     if (next === 3) await runPreflight(toSelection(choice));
@@ -255,14 +323,49 @@ export function ChannelSendDialog({
     if (!deleteTarget) return;
     const target = deleteTarget;
     try {
-      await adminApi.deleteChannelVersion(postId, target.id);
-      toast.success("Versiya o'chirildi");
+      const res = await adminApi.deleteChannelVersion(postId, target.id);
+      toast.success(res.clearedChoice ? "Versiya o'chirildi — asosiy belgisi ham olib tashlandi" : "Versiya o'chirildi");
       setDeleteTarget(null);
       await loadVersions();
       if (choice.kind === "version" && choice.id === target.id) selectAuto(canUseMedia === false ? "text" : "media", "m");
     } catch (error) {
       toast.error(errorMessage(error, "O'chirib bo'lmadi"));
       setDeleteTarget(null);
+    }
+  }
+
+  /** ⭐ Asosiy — berilgan tanlovni postning belgilangan versiyasi qiladi (xodim uchun: taklif). */
+  async function applyMark(target: Choice, closeAfter = false) {
+    setMarking(true);
+    try {
+      const res = await adminApi.setChannelChoice(
+        postId,
+        target.kind === "auto"
+          ? { kind: "auto", mode: target.mode, variant: target.variant }
+          : { kind: "version", versionId: target.id },
+      );
+      setVersions((prev) => (prev ? { ...prev, choice: res.choice } : prev));
+      onChoiceChangeRef.current?.(res.choice);
+      toast.success(dialogMode === "suggest" ? "Taklif sifatida belgilandi" : "Asosiy versiya belgilandi");
+      if (closeAfter) onOpenChange(false);
+    } catch (error) {
+      toast.error(errorMessage(error, "Belgilab bo'lmadi"));
+    } finally {
+      setMarking(false);
+    }
+  }
+
+  async function clearMark() {
+    setMarking(true);
+    try {
+      await adminApi.clearChannelChoice(postId);
+      setVersions((prev) => (prev ? { ...prev, choice: null } : prev));
+      onChoiceChangeRef.current?.(null);
+      toast.success("Asosiy belgisi olib tashlandi");
+    } catch (error) {
+      toast.error(errorMessage(error, "Belgini olib tashlab bo'lmadi"));
+    } finally {
+      setMarking(false);
     }
   }
 
@@ -298,6 +401,15 @@ export function ChannelSendDialog({
   const needsAck = (preflight?.warnCount ?? 0) > 0;
   const sendBlocked = sending || checking || !preflight || hasErrors || (needsAck && !ack);
   const autoChoice = choice.kind === "auto" ? choice : null;
+  const markedChoice = versions?.choice ?? null;
+  const currentIsMarked = sameChoice(markedChoice?.choice, choice);
+  const sortedVersions = versions
+    ? [...versions.versions].sort(
+        (a, b) =>
+          Number(sameChoice(markedChoice?.choice, { kind: "version", id: b.id })) -
+          Number(sameChoice(markedChoice?.choice, { kind: "version", id: a.id })),
+      )
+    : [];
 
   const modeSwitch = (
     <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
@@ -318,6 +430,7 @@ export function ChannelSendDialog({
                   : "text-muted-foreground hover:text-foreground",
             )}
           >
+            {markedChoice?.choice.kind === "auto" && markedChoice.choice.mode === item.value ? "★ " : ""}
             {item.label}
           </button>
         );
@@ -359,8 +472,40 @@ export function ChannelSendDialog({
     </div>
   ) : null;
 
+  const markedStrip = markedChoice ? (
+    <section className="flex flex-col gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-testid="channel-marked-strip">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-medium break-all">⭐ Belgilangan: {markedChoice.label}</span>
+        {markedChoice.suggestedByStaff && dialogMode !== "suggest" ? (
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+            Xodim taklifi{markedChoice.setBy?.name ? ` · ${markedChoice.setBy.name}` : ""}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        <span className={cn(markedChoice.visibleLength > markedChoice.limit && "font-semibold text-destructive")}>
+          {markedChoice.visibleLength} / {markedChoice.limit}
+        </span>{" "}
+        · {markedChoice.passes ? "✓ Telegram cheklovlaridan o'tadi" : "✗ Telegram cheklovlariga mos emas"}
+      </p>
+      {!readOnly ? (
+        <div className="flex flex-wrap gap-1">
+          {markedChoice.suggestedByStaff && dialogMode !== "suggest" ? (
+            <Button type="button" size="sm" className="max-sm:h-11" disabled={marking} onClick={() => void applyMark(choiceFromResolved(markedChoice.choice))}>
+              Tasdiqlash
+            </Button>
+          ) : null}
+          <Button type="button" size="sm" variant="ghost" className="max-sm:h-11" disabled={marking} onClick={() => void clearMark()}>
+            Belgini olib tashlash
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  ) : null;
+
   const step1 = (
     <div className="flex flex-col gap-4">
+      {markedStrip}
       <section className={cn("flex flex-col gap-2 rounded-lg border p-3", autoChoice ? "border-primary" : "border-border")}>
         <h3 className="text-sm font-semibold">Avtomatik</h3>
         {modeSwitch}
@@ -382,10 +527,27 @@ export function ChannelSendDialog({
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
+              {markedChoice?.choice.kind === "auto" &&
+              markedChoice.choice.mode === (autoChoice?.mode ?? "media") &&
+              markedChoice.choice.variant === item.value
+                ? "★ "
+                : ""}
               {item.label}
             </button>
           ))}
         </div>
+        {autoChoice && !readOnly ? (
+          <Button
+            type="button"
+            size="sm"
+            variant={currentIsMarked ? "secondary" : "outline"}
+            className="w-fit max-sm:h-11"
+            disabled={marking}
+            onClick={() => void (currentIsMarked ? clearMark() : applyMark(autoChoice))}
+          >
+            {currentIsMarked ? "★ Asosiy" : "⭐ Asosiy"}
+          </Button>
+        ) : null}
       </section>
 
       <section className="flex flex-col gap-2">
@@ -393,12 +555,16 @@ export function ChannelSendDialog({
         {versions && versions.versions.length === 0 ? (
           <p className="text-xs text-muted-foreground">Hali versiya yo&apos;q. Pastdagi tugma bilan yarating.</p>
         ) : null}
-        {versions?.versions.map((v) => {
+        {sortedVersions.map((v) => {
           const selected = choice.kind === "version" && choice.id === v.id;
+          const isMarked = sameChoice(markedChoice?.choice, { kind: "version", id: v.id });
           return (
             <div key={v.id} className={cn("flex flex-col gap-2 rounded-lg border p-3", selected ? "border-primary" : "border-border")}>
               <div className="flex flex-wrap items-center justify-between gap-x-2">
-                <span className="text-sm font-medium break-all">{v.name}</span>
+                <span className="text-sm font-medium break-all">
+                  {isMarked ? <span className="mr-1 text-amber-600 dark:text-amber-400">★</span> : null}
+                  {v.name}
+                </span>
                 <span className="text-xs text-muted-foreground">{MODE_LABELS[v.mode]}</span>
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
@@ -413,31 +579,49 @@ export function ChannelSendDialog({
                 <Button type="button" size="sm" variant={selected ? "secondary" : "outline"} className="max-sm:h-11" onClick={() => selectVersion(v)}>
                   {selected ? "Tanlangan" : "Tanlash"}
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="max-sm:h-11"
-                  onClick={() => {
-                    selectVersion(v);
-                    setStep(2);
-                  }}
-                >
-                  Tahrirlash
-                </Button>
-                <Button type="button" size="sm" variant="outline" className="max-sm:h-11" onClick={() => void handleDuplicate(v)}>
-                  Nusxalash
-                </Button>
-                <Button type="button" size="sm" variant="ghost" className="text-destructive max-sm:h-11" onClick={() => setDeleteTarget(v)}>
-                  O&apos;chirish
-                </Button>
+                {!readOnly ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={isMarked ? "secondary" : "outline"}
+                    className="max-sm:h-11"
+                    disabled={marking}
+                    onClick={() => void (isMarked ? clearMark() : applyMark({ kind: "version", id: v.id }))}
+                  >
+                    {isMarked ? "★ Asosiy" : "⭐ Asosiy"}
+                  </Button>
+                ) : null}
+                {!readOnly ? (
+                  <>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="max-sm:h-11"
+                      onClick={() => {
+                        selectVersion(v);
+                        setStep(2);
+                      }}
+                    >
+                      Tahrirlash
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" className="max-sm:h-11" onClick={() => void handleDuplicate(v)}>
+                      Nusxalash
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" className="text-destructive max-sm:h-11" onClick={() => setDeleteTarget(v)}>
+                      O&apos;chirish
+                    </Button>
+                  </>
+                ) : null}
               </div>
             </div>
           );
         })}
-        <Button type="button" variant="outline" size="sm" className="max-sm:h-11" disabled={!preview} onClick={() => void handleFork()}>
-          Shu ko&apos;rinishdan yangi versiya
-        </Button>
+        {!readOnly ? (
+          <Button type="button" variant="outline" size="sm" className="max-sm:h-11" disabled={!preview} onClick={() => void handleFork()}>
+            Shu ko&apos;rinishdan yangi versiya
+          </Button>
+        ) : null}
       </section>
 
       {preview ? (
@@ -481,6 +665,16 @@ export function ChannelSendDialog({
   const step3 = (
     <div className="flex flex-col gap-3">
       {alreadySentNote}
+      {dialogMode === "prepare" ? (
+        <p className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          Post chop etilgach yuboriladi (qo&apos;lda yoki rejaga ko&apos;ra).
+        </p>
+      ) : null}
+      {dialogMode === "suggest" ? (
+        <p className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          Bu taklif — kanalga yuborishni admin hal qiladi.
+        </p>
+      ) : null}
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">Telegram cheklovlari</h3>
         <Button
@@ -499,9 +693,11 @@ export function ChannelSendDialog({
         <>
           <ChannelChecklist preflight={preflight} />
           {!preflight.canSend ? (
-            <p className="text-xs text-destructive">Xatolar tuzatilmaguncha kanalga yuborib bo&apos;lmaydi.</p>
+            <p className="text-xs text-destructive">
+              {sending_ ? "Xatolar tuzatilmaguncha kanalga yuborib bo'lmaydi." : "Xatolarni tuzatmaguncha bu versiya kanalga yuborilmaydi."}
+            </p>
           ) : null}
-          {preflight.canSend && needsAck ? (
+          {sending_ && preflight.canSend && needsAck ? (
             <label className="flex items-center gap-2 text-sm max-sm:min-h-11">
               <input type="checkbox" checked={ack} onChange={(event) => setAck(event.target.checked)} />
               Ogohlantirishlarni ko&apos;rdim
@@ -522,12 +718,12 @@ export function ChannelSendDialog({
           className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-4 overflow-y-auto sm:max-w-4xl max-sm:fixed max-sm:inset-0 max-sm:h-dvh max-sm:max-h-none max-sm:max-w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none"
         >
           <DialogHeader>
-            <DialogTitle>Kanalga yuborish</DialogTitle>
+            <DialogTitle>{sending_ ? "Kanalga yuborish" : "Kanal versiyasi"}</DialogTitle>
           </DialogHeader>
 
           <ol className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1 text-xs font-medium">
-            {STEPS.map((s) => {
-              const disabled = s.value === 2 && choice.kind !== "version";
+            {stepLabels(dialogMode).map((s) => {
+              const disabled = s.value === 2 && (choice.kind !== "version" || readOnly);
               return (
                 <li key={s.value}>
                   <button
@@ -561,7 +757,7 @@ export function ChannelSendDialog({
                   Orqaga
                 </Button>
               ) : null}
-              {step === 3 && preview?.alreadySent && !preview.alreadySent.versionId ? (
+              {step === 3 && sending_ && preview?.alreadySent && !preview.alreadySent.versionId ? (
                 <Button type="button" variant="outline" size="sm" className="max-sm:h-11" disabled={resyncing} onClick={() => void handleResync()}>
                   {resyncing ? "Yangilanmoqda…" : "Caption'ni yangilash"}
                 </Button>
@@ -569,8 +765,25 @@ export function ChannelSendDialog({
             </div>
             {step < 3 ? (
               <Button type="button" className="max-sm:h-11" disabled={loading || !preview} onClick={() => void goToStep(3)}>
-                Tekshirish va yuborish
+                {sending_ ? "Tekshirish va yuborish" : "Tekshirish"}
               </Button>
+            ) : !sending_ ? (
+              readOnly ? null : (
+                <Button
+                  type="button"
+                  className="max-sm:h-11"
+                  disabled={marking || checking || !preflight || currentIsMarked}
+                  onClick={() => void applyMark(choice, true)}
+                >
+                  {currentIsMarked
+                    ? "★ Belgilangan"
+                    : marking
+                      ? "Belgilanmoqda…"
+                      : dialogMode === "suggest"
+                        ? "⭐ Taklif sifatida belgilash"
+                        : "⭐ Asosiy qilib belgilash"}
+                </Button>
+              )
             ) : preview?.alreadySent ? (
               <Button type="button" variant="destructive" className="max-sm:h-11" disabled={sendBlocked} onClick={() => setConfirmReplaceOpen(true)}>
                 Qayta yuborish

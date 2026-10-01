@@ -14,7 +14,10 @@ import type {
   ChannelVariant,
   ChannelVersion,
   ChannelVersionsResponse,
+  ChannelChoice,
   CreateChannelVersionBody,
+  PublishChannelSendResult,
+  ResolvedChannelChoice,
   UpdateChannelVersionBody,
   CreatePostResponse,
   CreateStaffInviteResponse,
@@ -59,6 +62,8 @@ interface LifecycleSummary {
   scheduledAt: string | null;
   pinned: boolean;
   updatedAt: string;
+  /** Faqat `sendToChannel: true` so'ralganda — belgilangan versiyani kanalga yuborish natijasi. */
+  channelSend?: PublishChannelSendResult;
 }
 
 async function adminJson<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -126,8 +131,11 @@ export const adminApi = {
   updatePost: (id: string, body: UpdatePostBody) =>
     adminJson<UpdatePostResponse>(`/admin/posts/${id}`, { method: "PATCH", ...jsonBody(body) }),
 
-  publishPost: (id: string) =>
-    adminJson<LifecycleSummary>(`/admin/posts/${id}/publish`, { method: "POST" }),
+  publishPost: (id: string, opts?: { sendToChannel?: boolean }) =>
+    adminJson<LifecycleSummary>(
+      `/admin/posts/${id}/publish`,
+      opts?.sendToChannel ? { method: "POST", ...jsonBody({ sendToChannel: true }) } : { method: "POST" },
+    ),
 
   unpublishPost: (id: string) =>
     adminJson<LifecycleSummary>(`/admin/posts/${id}/unpublish`, { method: "POST" }),
@@ -158,6 +166,39 @@ export const adminApi = {
     if (alt) formData.append("alt", alt);
     return adminJson<Media>("/admin/media", { method: "POST", body: formData });
   },
+
+  /** `uploadMedia` bilan bir xil, lekin yuklash jarayoni (0–100) haqida xabar beradi (XHR). */
+  uploadMediaWithProgress: (file: File, onProgress?: (percent: number) => void) =>
+    new Promise<Media>((resolve, reject) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${site.apiUrl}/admin/media`);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("Accept", "application/json");
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) onProgress(Math.round((event.loaded / event.total) * 100));
+      };
+      xhr.onerror = () => reject(new AdminApiError(0, "Serverga ulanib bo'lmadi. Internetni tekshiring."));
+      xhr.onload = () => {
+        let data: unknown = null;
+        try {
+          data = JSON.parse(xhr.responseText);
+        } catch {
+          data = null;
+        }
+        if (xhr.status >= 200 && xhr.status < 300 && data) {
+          resolve(data as Media);
+          return;
+        }
+        const message =
+          data && typeof data === "object" && "error" in data && typeof data.error === "string"
+            ? data.error
+            : `Xatolik yuz berdi (${xhr.status})`;
+        reject(new AdminApiError(xhr.status, message));
+      };
+      xhr.send(formData);
+    }),
 
   updateMediaAlt: (id: string, alt: string | null) =>
     adminJson<Media>(`/admin/media/${id}`, { method: "PATCH", ...jsonBody({ alt }) }),
@@ -260,7 +301,17 @@ export const adminApi = {
     }),
 
   deleteChannelVersion: (postId: string, versionId: string) =>
-    adminJson<{ ok: true }>(`/admin/posts/${postId}/channel/versions/${versionId}`, { method: "DELETE" }),
+    adminJson<{ ok: true; clearedChoice: boolean }>(`/admin/posts/${postId}/channel/versions/${versionId}`, { method: "DELETE" }),
+
+  /** Postning bitta belgilangan (asosiy) kanal versiyasini o'rnatadi (xodim uchun — taklif). */
+  setChannelChoice: (postId: string, choice: ChannelChoice) =>
+    adminJson<{ choice: ResolvedChannelChoice | null }>(`/admin/posts/${postId}/channel/choice`, {
+      method: "PUT",
+      ...jsonBody(choice),
+    }),
+
+  clearChannelChoice: (postId: string) =>
+    adminJson<{ ok: true }>(`/admin/posts/${postId}/channel/choice`, { method: "DELETE" }),
 
   channelResyncCaption: (postId: string) =>
     adminJson<{ ok: true }>(`/admin/posts/${postId}/channel/resync-caption`, { method: "POST" }),
@@ -269,7 +320,11 @@ export const adminApi = {
 
   submitPost: (id: string) => adminJson<SubmitPostResponse>(`/admin/posts/${id}/submit`, { method: "POST" }),
 
-  approvePost: (id: string) => adminJson<LifecycleSummary>(`/admin/posts/${id}/approve`, { method: "POST" }),
+  approvePost: (id: string, opts?: { sendToChannel?: boolean }) =>
+    adminJson<LifecycleSummary>(
+      `/admin/posts/${id}/approve`,
+      opts?.sendToChannel ? { method: "POST", ...jsonBody({ sendToChannel: true }) } : { method: "POST" },
+    ),
 
   requestPostChanges: (id: string, note: string) =>
     adminJson<LifecycleSummary>(`/admin/posts/${id}/request-changes`, { method: "POST", ...jsonBody({ note }) }),

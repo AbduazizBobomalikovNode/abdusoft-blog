@@ -13,6 +13,7 @@ import {
 import { db } from "../db/index.js";
 import { channelPostVersions, posts } from "../db/schema.js";
 import { computeChannelPost } from "./channel-send.js";
+import { clearChoiceIfVersion, resolveChannelChoice } from "./channel-choice.js";
 import { telegramHtmlToDoc, validateRestrictedDoc } from "./channel-html.js";
 import {
   collectPostImages,
@@ -48,6 +49,7 @@ export async function listChannelVersions(post: PostRow): Promise<ChannelVersion
     versions: rows.map((row) => toVersionDto(row, post)),
     autoVariants,
     postImages: collectPostImages(post),
+    choice: await resolveChannelChoice(post),
   };
 }
 
@@ -176,12 +178,17 @@ export async function isVersionUsedByPendingPlan(postId: string, versionId: stri
   return rows.length > 0;
 }
 
-export async function deleteChannelVersion(post: PostRow, versionId: string): Promise<VersionServiceResult<{ ok: true }>> {
+/** O'chirilgan versiya belgilangan bo'lsa — belgi ham tozalanadi (`clearedChoice: true`). */
+export async function deleteChannelVersion(
+  post: PostRow,
+  versionId: string,
+): Promise<VersionServiceResult<{ ok: true; clearedChoice: boolean }>> {
   const existing = await loadVersion(post.id, versionId);
   if (!existing) return fail(404, "Versiya topilmadi");
   if (await isVersionUsedByPendingPlan(post.id, versionId)) {
     return fail(409, "Bu versiya rejalashtirilgan kanal rejasida ishlatilmoqda — avval rejani o'zgartiring");
   }
   await db.delete(channelPostVersions).where(eq(channelPostVersions.id, versionId));
-  return { ok: true, data: { ok: true } };
+  const clearedChoice = await clearChoiceIfVersion(post, versionId);
+  return { ok: true, data: { ok: true, clearedChoice } };
 }

@@ -10,17 +10,21 @@ import {
   CreatePostBodySchema,
   DEFAULT_POST_SETTINGS,
   PostSettingsSchema,
+  PublishPostBodySchema,
   RequestChangesBodySchema,
   RESERVED_SLUGS,
   SchedulePostBodySchema,
+  SetChannelChoiceBodySchema,
   STAFF_EDITABLE_POST_FIELDS,
   UpdateChannelVersionBodySchema,
   UpdatePostBodySchema,
   slugify,
   type AdminPostStatus,
   type ChannelPlan,
+  type ChannelSelection,
   type PostAuthorRef,
   type PostListItem,
+  type PublishChannelSendResult,
   type Tag,
 } from "@blog/shared";
 import { nanoid } from "nanoid";
@@ -46,6 +50,14 @@ import {
 import { computeChannelPreflight, summarizePreflightErrors } from "../telegram/channel-preflight.js";
 import { getChannelInfo } from "../telegram/channel-info.js";
 import { loadVersion } from "../telegram/channel-versions.js";
+import {
+  clearChannelChoice,
+  parseStoredChoice,
+  resolveChannelChoice,
+  resolveChoiceForSend,
+  setChannelChoice,
+} from "../telegram/channel-choice.js";
+import { sendMarkedChoiceNow } from "../telegram/channel-plan.js";
 import {
   createChannelVersion,
   deleteChannelVersion,
@@ -76,6 +88,23 @@ function forbidUnlessAdmin(c: Context): Response | null {
   return null;
 }
 
+/**
+ * Kanal versiyalarini TAYYORLASH (ro'yxat/yaratish/tahrirlash/o'chirish, ko'rinish, preflight, belgi)
+ * ruxsati: admin — doim; xodim — FAQAT o'z posti uchun, yozish amallari esa faqat `draft`/`changes_requested`
+ * holatida (`in_review`da versiyalar xodim uchun faqat o'qish). Kanalga YUBORISH bu yerda hech qachon xodimga ochilmaydi.
+ */
+function guardChannelPrep(c: Context, post: typeof posts.$inferSelect, access: "read" | "write"): Response | null {
+  const me = c.get("adminUser");
+  if (me.role === "admin") return null;
+  if (post.createdBy !== me.id) {
+    return c.json({ error: "Faqat o'z postlaringiz uchun kanal versiyasini tayyorlay olasiz" }, 403);
+  }
+  if (access === "write" && post.status !== "draft" && post.status !== "changes_requested") {
+    return c.json({ error: "Post ko'rib chiqishda yoki chop etilgan — kanal versiyalari hozir faqat o'qish uchun" }, 409);
+  }
+  return null;
+}
+
 const STATUS_VALUES = [
   "all",
   "draft",
@@ -101,6 +130,7 @@ const adminPostSelectColumns = {
   updatedAt: posts.updatedAt,
   createdBy: posts.createdBy,
   reviewNote: posts.reviewNote,
+  channelChoice: posts.channelChoice,
 };
 
 type AdminPostRow = {
@@ -121,6 +151,7 @@ type AdminPostRow = {
   updatedAt: Date;
   createdBy: string | null;
   reviewNote: string | null;
+  channelChoice: unknown;
 };
 
 /** Ro'yxat sahifasidagi "Yozgan" ustuni uchun — bitta so'rovda barcha (sahifadagi) muallif nomlarini oldindan yuklaydi. */
@@ -145,6 +176,7 @@ function toAdminListItem(row: AdminPostRow, tagMap: Map<string, Tag[]>, authorMa
     publishedAt: row.publishedAt?.toISOString() ?? null,
     scheduledAt: row.scheduledAt?.toISOString() ?? null,
     hasChannelPlan: row.status === "scheduled" && row.channelPlan != null,
+    hasChannelChoice: row.channelChoice != null,
     updatedAt: row.updatedAt.toISOString(),
     pinned: row.pinned,
     tags: tagMap.get(row.id) ?? [],
@@ -237,6 +269,7 @@ function parseStoredPlan(value: unknown): ChannelPlan | null {
 
 /** Klientdan kelgan rejadan `attempts` (server hisoblagichi)ni olib tashlaydi. */
 function cleanPlan(plan: ChannelPlan): ChannelPlan {
+  if (plan.useChoice) return { useChoice: true, delayMinutes: plan.delayMinutes };
   return plan.versionId
     ? { mode: plan.mode, versionId: plan.versionId, delayMinutes: plan.delayMinutes }
     : { mode: plan.mode, variant: plan.variant, delayMinutes: plan.delayMinutes };
@@ -255,17 +288,23 @@ async function preparePlanOrReject(
   plan: ChannelPlan,
 ): Promise<{ plan: ChannelPlan } | { response: Response }> {
   let cleaned = cleanPlan(plan);
-  if (plan.versionId) {
-    const version = await loadVersion(postId, plan.versionId);
-    if (!version) return { response: c.json({ error: "Versiya topilmadi" }, 404) };
-    cleaned = { ...cleaned, mode: version.mode };
+  let selection: ChannelSelection;
+  if (plan.useChoice) {
+    // Tekshiruv hozirgi belgiga nisbatan (yo'q bo'lsa — standart tanlov); yuborish paytida belgi qayta hal qilinadi.
+    const resolved = await resolveChoiceForSend(postId);
+    if (!resolved) return { response: c.json({ error: "Topilmadi" }, 404) };
+    selection = resolved.selection;
+  } else {
+    if (plan.versionId) {
+      const version = await loadVersion(postId, plan.versionId);
+      if (!version) return { response: c.json({ error: "Versiya topilmadi" }, 404) };
+      cleaned = { ...cleaned, mode: version.mode };
+    }
+    selection = cleaned.versionId ? { versionId: cleaned.versionId } : { mode: cleaned.mode!, variant: cleaned.variant! };
   }
-  const selection = cleaned.versionId
-    ? { versionId: cleaned.versionId }
-    : { mode: cleaned.mode, variant: cleaned.variant! };
   const result = await computeChannelPreflight(postId, selection, {
     requirePublished: false,
-    planFallback: !cleaned.versionId,
+    planFallback: !("versionId" in selection),
   });
   if (!result.ok) {
     return { response: c.json({ error: result.reason === "not_found" ? "Topilmadi" : "Noto'g'ri kanal rejasi" }, result.reason === "not_found" ? 404 : 400) };
@@ -322,6 +361,50 @@ function toLifecycleSummary(post: typeof posts.$inferSelect) {
     pinned: post.pinned,
     updatedAt: post.updatedAt.toISOString(),
   };
+}
+
+const CHANNEL_SEND_WAIT_MS = 20_000;
+
+/** `publish`/`approve` ixtiyoriy tanasi: `sendToChannel: true` bo'lsa postda belgilangan versiya bo'lishi shart (aks holda 400). */
+async function parsePublishBody(
+  c: Context,
+  postId: string,
+): Promise<{ sendToChannel: boolean } | { response: Response }> {
+  const raw = await c.req.json().catch(() => ({}));
+  const parsed = PublishPostBodySchema.safeParse(raw ?? {});
+  if (!parsed.success) return { response: c.json({ error: "Noto'g'ri so'rov tanasi" }, 400) };
+  if (!parsed.data.sendToChannel) return { sendToChannel: false };
+  const post = await loadPostOr404(postId);
+  if (post && !parseStoredChoice(post.channelChoice)) {
+    return { response: c.json({ error: "Postda belgilangan kanal versiyasi yo'q" }, 400) };
+  }
+  return { sendToChannel: true };
+}
+
+/** Rejani (kechikishsiz) qo'yib, Telegraph'dan keyin yuboradi; natija HTTP javobiga (toast) qo'shiladi. Uzoq cho'zilsa — fonda davom etadi (admin chatga xabar boradi). */
+async function queueChannelSend(postId: string): Promise<PublishChannelSendResult> {
+  const work = sendMarkedChoiceNow(postId).then(
+    (outcome): PublishChannelSendResult => {
+      if (outcome.state === "sent") return { state: "sent", messageUrl: outcome.messageUrl, error: null };
+      if (outcome.state === "failed") {
+        return {
+          state: "failed",
+          messageUrl: null,
+          error: outcome.willRetry ? `${outcome.reason} (keyinroq qayta uriniladi)` : outcome.reason,
+        };
+      }
+      return { state: "failed", messageUrl: null, error: "Kanalga yuborilmadi (allaqachon yuborilgan bo'lishi mumkin)" };
+    },
+    (error: unknown): PublishChannelSendResult => ({
+      state: "failed",
+      messageUrl: null,
+      error: error instanceof Error ? error.message : "Noma'lum xato",
+    }),
+  );
+  const timeout = new Promise<PublishChannelSendResult>((resolve) => {
+    setTimeout(() => resolve({ state: "pending", messageUrl: null, error: null }), CHANNEL_SEND_WAIT_MS).unref?.();
+  });
+  return Promise.race([work, timeout]);
 }
 
 export const adminPostsRoute = new Hono()
@@ -488,6 +571,7 @@ export const adminPostsRoute = new Hono()
       scheduledAt: post.scheduledAt?.toISOString() ?? null,
       channelPlan: parseStoredPlan(post.channelPlan),
       channelSendAt: post.channelSendAt?.toISOString() ?? null,
+      channelChoice: await resolveChannelChoice(post),
       pinned: post.pinned,
       settings,
       tags: tagMap.get(post.id) ?? [],
@@ -530,9 +614,11 @@ export const adminPostsRoute = new Hono()
     return c.json({ telegraphUrl: ref?.telegraphUrl ?? null });
   })
   .post("/:id/channel/preview", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
     const id = c.req.param("id");
+    const prepPost = await loadPostOr404(id);
+    if (!prepPost) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, prepPost, "read");
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => null);
     const parsed = ChannelPreviewRequestSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "mode va variant (yoki versionId) majburiy (mode: media|text)" }, 400);
@@ -572,9 +658,11 @@ export const adminPostsRoute = new Hono()
     });
   })
   .post("/:id/channel/preflight", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
     const id = c.req.param("id");
+    const prepPost = await loadPostOr404(id);
+    if (!prepPost) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, prepPost, "read");
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => null);
     const parsed = ChannelSelectionSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "mode va variant (yoki versionId) majburiy" }, 400);
@@ -593,17 +681,17 @@ export const adminPostsRoute = new Hono()
     return c.json(result.preflight);
   })
   .get("/:id/channel/versions", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
     const post = await loadPostOr404(c.req.param("id"));
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, post, "read");
+    if (forbidden) return forbidden;
     return c.json(await listChannelVersions(post));
   })
   .post("/:id/channel/versions", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
     const post = await loadPostOr404(c.req.param("id"));
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, post, "write");
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => null);
     const parsed = CreateChannelVersionBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
@@ -612,12 +700,12 @@ export const adminPostsRoute = new Hono()
     return c.json(result.data, 201);
   })
   .patch("/:id/channel/versions/:vid", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
     const vid = c.req.param("vid");
     if (!UUID_RE.test(vid)) return c.json({ error: "Versiya topilmadi" }, 404);
     const post = await loadPostOr404(c.req.param("id"));
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, post, "write");
+    if (forbidden) return forbidden;
     const body = await c.req.json().catch(() => null);
     const parsed = UpdateChannelVersionBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
@@ -626,14 +714,35 @@ export const adminPostsRoute = new Hono()
     return c.json(result.data);
   })
   .delete("/:id/channel/versions/:vid", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
     const vid = c.req.param("vid");
     if (!UUID_RE.test(vid)) return c.json({ error: "Versiya topilmadi" }, 404);
     const post = await loadPostOr404(c.req.param("id"));
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, post, "write");
+    if (forbidden) return forbidden;
     const result = await deleteChannelVersion(post, vid);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ ok: true, clearedChoice: result.data.clearedChoice });
+  })
+  .put("/:id/channel/choice", async (c) => {
+    const post = await loadPostOr404(c.req.param("id"));
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, post, "write");
+    if (forbidden) return forbidden;
+    const body = await c.req.json().catch(() => null);
+    const parsed = SetChannelChoiceBodySchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "Noto'g'ri tanlov", issues: parsed.error.issues }, 400);
+    const result = await setChannelChoice(post.id, parsed.data, c.get("adminUser").id);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    const fresh = await loadPostOr404(post.id);
+    return c.json({ choice: fresh ? await resolveChannelChoice(fresh) : null });
+  })
+  .delete("/:id/channel/choice", async (c) => {
+    const post = await loadPostOr404(c.req.param("id"));
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, post, "write");
+    if (forbidden) return forbidden;
+    await clearChannelChoice(post.id);
     return c.json({ ok: true });
   })
   .post("/:id/channel/send", async (c) => {
@@ -950,6 +1059,8 @@ export const adminPostsRoute = new Hono()
     if (forbidden) return forbidden;
     const adminUser = c.get("adminUser");
     const id = c.req.param("id");
+    const wants = await parsePublishBody(c, id);
+    if ("response" in wants) return wants.response;
     const result = await approvePost(id, adminUser.id);
 
     if (!result.ok) {
@@ -957,7 +1068,8 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "Post ko'rib chiqishda emas" }, 409);
     }
 
-    return c.json(toLifecycleSummary(result.post));
+    const channelSend = wants.sendToChannel ? await queueChannelSend(id) : undefined;
+    return c.json({ ...toLifecycleSummary(result.post), ...(channelSend ? { channelSend } : {}) });
   })
   .post("/:id/request-changes", async (c) => {
     const forbidden = forbidUnlessAdmin(c);
@@ -982,6 +1094,8 @@ export const adminPostsRoute = new Hono()
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const wants = await parsePublishBody(c, id);
+    if ("response" in wants) return wants.response;
 
     const now = new Date();
     await db
@@ -1002,7 +1116,9 @@ export const adminPostsRoute = new Hono()
     const tagSlugs = (await tagsForPostIds([id])).get(id)?.map((t) => t.slug) ?? [];
     revalidateWeb(pathsForPost(fresh.slug, tagSlugs));
 
-    return c.json(toLifecycleSummary(fresh));
+    // Belgilangan versiyani Telegraph ko'zgusidan KEYIN yuborish (ixtiyoriy; standart — qo'lda yuborish).
+    const channelSend = wants.sendToChannel ? await queueChannelSend(id) : undefined;
+    return c.json({ ...toLifecycleSummary(fresh), ...(channelSend ? { channelSend } : {}) });
   })
   .post("/:id/unpublish", async (c) => {
     const forbidden = forbidUnlessAdmin(c);

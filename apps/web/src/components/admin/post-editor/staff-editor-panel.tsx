@@ -1,9 +1,10 @@
 "use client";
 
-import type { TagWithCount } from "@blog/shared";
+import type { ResolvedChannelChoice, TagWithCount } from "@blog/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ChannelChoiceSummary } from "./channel-choice-summary";
 import { CoverImagePicker } from "./cover-image-picker";
 import { TagMultiselect } from "./tag-multiselect";
 
@@ -23,6 +24,8 @@ export function StaffEditorPanel({
   coverUrl,
   onCoverChange,
   readOnly,
+  channelChoice = null,
+  onOpenChannelVersion,
 }: {
   allTags: TagWithCount[];
   selectedTagSlugs: string[];
@@ -33,6 +36,8 @@ export function StaffEditorPanel({
   coverUrl: string | null;
   onCoverChange: (url: string | null) => void;
   readOnly: boolean;
+  channelChoice?: ResolvedChannelChoice | null;
+  onOpenChannelVersion?: () => void;
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -42,7 +47,7 @@ export function StaffEditorPanel({
           <p className="text-xs text-muted-foreground">Muqova, qisqacha tavsif va teglar</p>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 px-4">
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2" data-editor-field="cover">
             <Label>Muqova rasm</Label>
             {readOnly ? (
               coverUrl ? (
@@ -58,7 +63,7 @@ export function StaffEditorPanel({
             )}
           </div>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2" data-editor-field="excerpt">
             <div className="flex items-center justify-between">
               <Label htmlFor="staff-post-excerpt">Qisqacha tavsif</Label>
               {!readOnly ? (
@@ -82,7 +87,7 @@ export function StaffEditorPanel({
             />
           </div>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2" data-editor-field="tags">
             <Label>Teglar</Label>
             {readOnly ? (
               <p className="text-sm text-muted-foreground">
@@ -94,6 +99,18 @@ export function StaffEditorPanel({
           </div>
         </CardContent>
       </Card>
+
+      {onOpenChannelVersion ? (
+        <Card className="gap-3 py-4">
+          <CardHeader className="gap-0.5 px-4">
+            <CardTitle className="text-sm">Telegram kanal</CardTitle>
+            <p className="text-xs text-muted-foreground">Kanal uchun versiya tayyorlang va taklif qiling — yuborishni admin hal qiladi</p>
+          </CardHeader>
+          <CardContent className="px-4">
+            <ChannelChoiceSummary choice={channelChoice} onOpen={onOpenChannelVersion} viewerIsStaff />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

@@ -1,12 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
-import type { JSONContent } from "@tiptap/core";
-import { EditorContent, useEditor } from "@tiptap/react";
-import { BubbleMenu } from "@tiptap/react/menus";
-import { StarterKit } from "@tiptap/starter-kit";
-import { Bold, Italic, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import type {
   GeneralSettingsPatch,
@@ -138,76 +134,11 @@ function StatusDot({ status }: { status: IntegrationStatus }) {
   );
 }
 
-function AboutTab({ initial }: { initial: SiteSettingsAdmin["about"] }) {
-  const [saving, setSaving] = useState(false);
-  const editor = useEditor({
-    immediatelyRender: false,
-    extensions: [StarterKit.configure({ link: { openOnClick: false } })],
-    content: (initial.json ?? { type: "doc", content: [] }) as JSONContent,
-    editorProps: { attributes: { class: "tiptap prose-article" } },
-  });
-
-  async function handleSave() {
-    if (!editor) return;
-    setSaving(true);
-    try {
-      await adminApi.updateSiteSettings({ about: { json: editor.getJSON() } });
-      toast.success("Haqida sahifasi saqlandi");
-    } catch (error) {
-      toast.error(error instanceof AdminApiError ? error.message : "Saqlab bo'lmadi");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardContent className="flex flex-col gap-3 pt-6">
-        <Label>Haqida sahifasi matni</Label>
-        {editor ? (
-          <BubbleMenu editor={editor} className="editor-bubble-menu">
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => editor.chain().focus().toggleBold().run()}
-              className="flex size-7 items-center justify-center rounded-md hover:bg-muted"
-              aria-label="Qalin"
-            >
-              <Bold className="size-4" />
-            </button>
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => editor.chain().focus().toggleItalic().run()}
-              className="flex size-7 items-center justify-center rounded-md hover:bg-muted"
-              aria-label="Kursiv"
-            >
-              <Italic className="size-4" />
-            </button>
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                const url = window.prompt("Havola URL manzili:");
-                if (url) editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-              }}
-              className="flex size-7 items-center justify-center rounded-md hover:bg-muted"
-              aria-label="Havola"
-            >
-              <Link2 className="size-4" />
-            </button>
-          </BubbleMenu>
-        ) : null}
-        <div className="tiptap-editor-content min-h-40 rounded-lg border border-border px-3 py-2">
-          <EditorContent editor={editor} />
-        </div>
-        <Button onClick={() => void handleSave()} disabled={saving} className="w-fit" size="sm">
-          {saving ? "Saqlanmoqda…" : "Saqlash"}
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
+// Tiptap faqat "Haqida" yorlig'i ochilganda yuklanadi (sozlamalar sahifasining boshlang'ich hajmi o'smaydi).
+const AboutTab = dynamic(() => import("./about-tab").then((m) => m.AboutTab), {
+  ssr: false,
+  loading: () => <div className="h-64 animate-pulse rounded-xl bg-muted" aria-busy="true" />,
+});
 
 function SocialTab({ initial }: { initial: SocialLinks }) {
   const [social, setSocial] = useState<SocialLinks>(initial);

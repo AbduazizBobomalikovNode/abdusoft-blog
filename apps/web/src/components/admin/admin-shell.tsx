@@ -81,7 +81,7 @@ export function AdminShell({
   return (
     <div className="flex min-h-svh w-full">
       {/* Desktop sidebar */}
-      <aside className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col border-r border-border p-3 md:flex">
+      <aside data-admin-chrome className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col border-r border-border p-3 md:flex">
         <Link href="/admin" className="px-2 py-2 text-sm font-semibold tracking-tight">
           {site.name} <span className="text-muted-foreground">/ admin</span>
         </Link>

@@ -32,3 +32,18 @@ export function PostChannelPlanHint({ status, hasChannelPlan }: { status: AdminP
     </span>
   );
 }
+
+/** Postda belgilangan kanal versiyasi bo'lsa — kichik ★ belgisi. */
+export function PostChannelChoiceHint({ hasChannelChoice }: { hasChannelChoice?: boolean }) {
+  if (!hasChannelChoice) return null;
+  return (
+    <span
+      className="text-xs whitespace-nowrap text-amber-600 dark:text-amber-400"
+      title="Kanal versiyasi belgilangan"
+      aria-label="Kanal versiyasi belgilangan"
+      data-testid="post-choice-star"
+    >
+      ★
+    </span>
+  );
+}

@@ -237,3 +237,45 @@ describe("admin's own direct publish flow is unchanged (no review needed)", () =
     expect(body.status).toBe("published");
   });
 });
+
+describe("channel versions — staff may prepare/suggest on own editable posts, never send", () => {
+  const UUID = "11111111-1111-4111-8111-111111111111";
+
+  it("send / resync / schedule / publish stay 403 for staff", async () => {
+    const post = await createDraftAs(staffA.cookie);
+    expect((await postJson(`/admin/posts/${post.id}/channel/send`, staffA.cookie, { mode: "text", variant: "m" })).status).toBe(403);
+    expect((await postJson(`/admin/posts/${post.id}/channel/resync-caption`, staffA.cookie)).status).toBe(403);
+    expect((await postJson(`/admin/posts/${post.id}/publish`, staffA.cookie, { sendToChannel: true })).status).toBe(403);
+    expect((await patchJson(`/admin/posts/${post.id}`, staffA.cookie, { channelPlan: { useChoice: true, delayMinutes: 0 } })).status).toBe(403);
+  });
+
+  it("own draft: versions + mark work; other staff / anonymous / plain user are rejected", async () => {
+    const post = await createDraftAs(staffA.cookie);
+    const created = await postJson(`/admin/posts/${post.id}/channel/versions`, staffA.cookie, { mode: "text" });
+    expect(created.status).toBe(201);
+    const version = await json<{ id: string }>(created);
+    expect((await req(`/admin/posts/${post.id}/channel/choice`, staffA.cookie, { method: "PUT", body: JSON.stringify({ kind: "version", versionId: version.id }) })).status).toBe(200);
+
+    for (const [method, url, body] of [
+      ["GET", `/admin/posts/${post.id}/channel/versions`, undefined],
+      ["POST", `/admin/posts/${post.id}/channel/versions`, { mode: "text" }],
+      ["PUT", `/admin/posts/${post.id}/channel/choice`, { kind: "auto", mode: "text", variant: "m" }],
+      ["DELETE", `/admin/posts/${post.id}/channel/choice`, undefined],
+      ["POST", `/admin/posts/${post.id}/channel/preflight`, { versionId: version.id }],
+    ] as const) {
+      expect((await req(url, staffB.cookie, { method, body: body ? JSON.stringify(body) : undefined })).status, `staffB ${method} ${url}`).toBe(403);
+      expect((await req(url, plainUser.cookie, { method, body: body ? JSON.stringify(body) : undefined })).status, `user ${method} ${url}`).toBe(403);
+      expect((await req(url, null, { method, body: body ? JSON.stringify(body) : undefined })).status, `anon ${method} ${url}`).toBe(401);
+    }
+    expect((await getJson(`/admin/posts/${UUID}/channel/versions`, staffA.cookie)).status).toBe(404);
+  });
+
+  it("in_review: staff reads only (writes 409)", async () => {
+    const post = await createDraftAs(staffA.cookie);
+    await postJson(`/admin/posts/${post.id}/submit`, staffA.cookie);
+    expect((await getJson(`/admin/posts/${post.id}/channel/versions`, staffA.cookie)).status).toBe(200);
+    expect((await postJson(`/admin/posts/${post.id}/channel/versions`, staffA.cookie, { mode: "text" })).status).toBe(409);
+    expect((await req(`/admin/posts/${post.id}/channel/choice`, staffA.cookie, { method: "PUT", body: JSON.stringify({ kind: "auto", mode: "text", variant: "m" }) })).status).toBe(409);
+    expect((await postJson(`/admin/posts/${post.id}/channel/versions`, admin.cookie, { mode: "text" })).status).toBe(201);
+  });
+});

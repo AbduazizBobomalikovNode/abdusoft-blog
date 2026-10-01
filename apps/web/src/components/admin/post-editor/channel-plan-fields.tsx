@@ -8,8 +8,10 @@ import type {
   ChannelPlan,
   ChannelPreflightResponse,
   ChannelPreviewResponse,
+  ChannelSelection,
   ChannelVariant,
   ChannelVersion,
+  ResolvedChannelChoice,
 } from "@blog/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -42,7 +44,13 @@ function formatShort(date: Date): string {
 }
 
 /** "Sayt: 2-okt 09:00 · Kanal: 09:15 · Rasmli, Batafsil" */
-export function channelPlanSummary(plan: ChannelPlan, scheduledAtLocal: string, versionName?: string | null): string {
+export function channelPlanSummary(
+  plan: ChannelPlan,
+  scheduledAtLocal: string,
+  versionName?: string | null,
+  /** `useChoice` rejasi uchun — joriy belgi yorlig'i (`null` — belgi yo'q). */
+  markedLabel?: string | null,
+): string {
   const site = scheduledAtLocal ? new Date(scheduledAtLocal) : null;
   const valid = site && !Number.isNaN(site.getTime());
   const channelAt = valid ? new Date(site.getTime() + plan.delayMinutes * 60_000) : null;
@@ -52,6 +60,10 @@ export function channelPlanSummary(plan: ChannelPlan, scheduledAtLocal: string, 
       ? `${pad(channelAt.getHours())}:${pad(channelAt.getMinutes())}`
       : formatShort(channelAt)
     : "—";
+  if (plan.useChoice) {
+    const what = markedLabel ? `⭐ ${markedLabel}` : "⭐ belgilangan versiya (hozircha yo'q — standart)";
+    return `Sayt: ${valid ? formatShort(site) : "—"} · Kanal: ${channelText} · ${what}`;
+  }
   const modeText = plan.mode === "media" ? "Rasmli" : "Rasmsiz";
   const lengthText = plan.versionId
     ? `versiya: ${versionName ?? "maxsus"}`
@@ -72,6 +84,8 @@ export interface ChannelPlanFieldsProps {
   scheduledAtLocal: string;
   /** Preflight xatolari bor bo'lsa `true` — chaqiruvchi rejani saqlash/rejalashtirish tugmasini o'chiradi. */
   onBlockingChange?: (blocked: boolean) => void;
+  /** Muharrirdagi JORIY belgilangan versiya (dialogda o'zgarsa yangilanadi); berilmasa serverdan olinadi. */
+  markedChoice?: ResolvedChannelChoice | null;
 }
 
 /**
@@ -79,7 +93,7 @@ export interface ChannelPlanFieldsProps {
  * kechikish va faqat o'qish uchun Telegram ko'rinishi (dialogdagi preview
  * komponenti qayta ishlatiladi).
  */
-export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, onBlockingChange }: ChannelPlanFieldsProps) {
+export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, onBlockingChange, markedChoice: markedProp }: ChannelPlanFieldsProps) {
   const [channelHandle, setChannelHandle] = useState<string | null>(null);
   /** `null` — hali tekshirilmagan. */
   const [telegramReady, setTelegramReady] = useState<boolean | null>(null);
@@ -90,6 +104,8 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
   const [preview, setPreview] = useState<ChannelPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [versions, setVersions] = useState<ChannelVersion[]>([]);
+  const [fetchedChoice, setFetchedChoice] = useState<ResolvedChannelChoice | null>(null);
+  const markedChoice = markedProp !== undefined ? markedProp : fetchedChoice;
   const [planPreflight, setPlanPreflight] = useState<ChannelPreflightResponse | null>(null);
   const [checking, setChecking] = useState(false);
 
@@ -110,12 +126,26 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
   useEffect(() => {
     adminApi
       .listChannelVersions(postId)
-      .then((data) => setVersions(data.versions))
+      .then((data) => {
+        setVersions(data.versions);
+        setFetchedChoice(data.choice);
+      })
       .catch(() => setVersions([]));
   }, [postId]);
 
+  /** Rejaning HOZIRGI (tekshiruv uchun) tanlovi: `useChoice` bo'lsa — joriy belgi, yo'q bo'lsa standart (rasm bo'lsa 🖼/m, aks holda 📝/m). */
+  function effectiveSelection(plan: ChannelPlan): ChannelSelection {
+    if (plan.useChoice) {
+      const marked = markedChoice?.choice;
+      if (marked) return marked.kind === "version" ? { versionId: marked.versionId } : { mode: marked.mode, variant: marked.variant };
+      return { mode: canUseMedia === false ? "text" : "media", variant: "m" };
+    }
+    if (plan.versionId) return { versionId: plan.versionId };
+    return { mode: plan.mode ?? "text", variant: plan.variant ?? "m" };
+  }
+
   // Reja yoqilgan paytda Telegram cheklovlarini tekshiramiz; xato bo'lsa saqlash bloklanadi.
-  const planKey = value ? `${value.mode}|${value.variant ?? ""}|${value.versionId ?? ""}` : "";
+  const planKey = value ? `${value.useChoice ? "choice" : ""}|${JSON.stringify(effectiveSelection(value))}` : "";
   useEffect(() => {
     if (!value) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reja o'chirilganda holatni tozalash
@@ -125,9 +155,7 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
     }
     let cancelled = false;
     setChecking(true);
-    const selection = value.versionId
-      ? { versionId: value.versionId }
-      : { mode: value.mode, variant: value.variant ?? ("m" as ChannelVariant) };
+    const selection = effectiveSelection(value);
     adminApi
       .channelPreflight(postId, selection, true)
       .then((result) => {
@@ -156,8 +184,16 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
 
   function handleChoiceSelect(selected: string) {
     if (!value) return;
+    if (selected === "choice") {
+      onChange({ useChoice: true, delayMinutes: value.delayMinutes });
+      return;
+    }
     if (selected === "auto") {
-      onChange({ mode: value.mode, variant: value.variant ?? "m", delayMinutes: value.delayMinutes });
+      onChange({
+        mode: value.mode ?? (canUseMedia === false ? "text" : "media"),
+        variant: value.variant ?? "m",
+        delayMinutes: value.delayMinutes,
+      });
       return;
     }
     const version = versions.find((v) => v.id === selected);
@@ -183,9 +219,9 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
   // Saqlangan reja 🖼 Rasmli bo'lsa ham — rasm yo'qolgan bo'lishi mumkin: tugma holatini aniqlaymiz.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- ataylab: tashqi (API) holatini aniqlash, natija state'ga yoziladi
-    if (value?.mode === "media" && canUseMedia === null) void detectMedia();
+    if ((value?.mode === "media" || (value?.useChoice && !markedChoice)) && canUseMedia === null) void detectMedia();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value?.mode]);
+  }, [value?.mode, value?.useChoice]);
 
   async function handleToggle(on: boolean) {
     if (!on) {
@@ -194,6 +230,11 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
     }
     const hasMedia = await detectMedia();
     setCustomDelay(false);
+    // Belgilangan versiya bor bo'lsa — standart shu (yuborish paytida joriy belgi olinadi).
+    if (markedChoice) {
+      onChange({ useChoice: true, delayMinutes: 0 });
+      return;
+    }
     onChange({ mode: hasMedia ? "media" : "text", variant: "m", delayMinutes: 0 });
   }
 
@@ -203,7 +244,7 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
   }
 
   function handleModeChange(mode: ChannelMode) {
-    if (!value || value.mode === mode) return;
+    if (!value || value.useChoice || value.mode === mode) return;
     if (mode === "media" && canUseMedia === false) return;
     const allowed = VARIANTS_BY_MODE[mode].map((v) => v.value);
     const variant: ChannelVariant = value.variant && allowed.includes(value.variant) ? value.variant : "m";
@@ -231,12 +272,7 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
     setPreviewLoading(true);
     setPreview(null);
     try {
-      setPreview(
-        await adminApi.channelPreview(
-          postId,
-          value.versionId ? { versionId: value.versionId } : { mode: value.mode, variant: value.variant ?? "m" },
-        ),
-      );
+      setPreview(await adminApi.channelPreview(postId, effectiveSelection(value)));
     } catch (error) {
       toast.error(errorMessage(error, "Oldindan ko'rishni yuklab bo'lmadi"));
     } finally {
@@ -278,26 +314,40 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
 
       {value ? (
         <div className="flex min-w-0 flex-col gap-2.5 rounded-lg border border-border p-2.5">
-          {versions.length > 0 || value.versionId ? (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="channel-plan-choice">Ko&apos;rinish</Label>
-              <Select value={value.versionId ?? "auto"} onValueChange={handleChoiceSelect}>
-                <SelectTrigger id="channel-plan-choice" className="w-full max-md:data-[size=default]:h-11">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="auto">Avtomatik</SelectItem>
-                  {versions.map((v) => (
-                    <SelectItem key={v.id} value={v.id}>
-                      {v.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="channel-plan-choice">Ko&apos;rinish</Label>
+            <Select value={value.useChoice ? "choice" : (value.versionId ?? "auto")} onValueChange={handleChoiceSelect}>
+              <SelectTrigger id="channel-plan-choice" className="w-full max-md:data-[size=default]:h-11">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="choice">⭐ Belgilangan versiya</SelectItem>
+                <SelectItem value="auto">Avtomatik</SelectItem>
+                {versions.map((v) => (
+                  <SelectItem key={v.id} value={v.id}>
+                    {v.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {value.useChoice ? (
+            <div className="rounded-lg bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground" data-testid="plan-choice-note">
+              {markedChoice ? (
+                <>
+                  <span className="font-medium text-foreground">⭐ {markedChoice.label}</span> · {markedChoice.visibleLength} / {markedChoice.limit}
+                  {markedChoice.passes ? " · ✓" : " · ✗"}
+                  <br />
+                  Yuborish paytidagi JORIY belgi olinadi — keyinroq belgi o&apos;zgarsa, o&apos;zgargani yuboriladi.
+                </>
+              ) : (
+                <>Belgilangan versiya yo&apos;q — rasm bo&apos;lsa 🖼 O&apos;rtacha, aks holda 📝 O&apos;rtacha yuboriladi.</>
+              )}
             </div>
           ) : null}
 
-          {!value.versionId ? (
+          {!value.versionId && !value.useChoice ? (
           <>
           <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
             {MODE_OPTIONS.map((item) => {
@@ -333,7 +383,7 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
           </div>
 
           <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-            {VARIANTS_BY_MODE[value.mode].map((item) => (
+            {VARIANTS_BY_MODE[value.mode ?? "text"].map((item) => (
               <button
                 key={item.value}
                 type="button"
@@ -387,7 +437,7 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
           </div>
 
           <p className="text-xs leading-relaxed break-words text-muted-foreground">
-            {channelPlanSummary(value, scheduledAtLocal, versions.find((v) => v.id === value.versionId)?.name)}
+            {channelPlanSummary(value, scheduledAtLocal, versions.find((v) => v.id === value.versionId)?.name, markedChoice?.label ?? null)}
           </p>
 
           {checking && !planPreflight ? <p className="text-xs text-muted-foreground">Telegram cheklovlari tekshirilmoqda…</p> : null}

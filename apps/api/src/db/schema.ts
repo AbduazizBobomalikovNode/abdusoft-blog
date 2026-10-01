@@ -67,6 +67,11 @@ export const posts = pgTable(
     channelPlan: jsonb("channel_plan"),
     /** Post chop etilgach kanalga yuboriladigan vaqt — scheduler shu ustun bo'yicha ishlaydi. */
     channelSendAt: timestamp("channel_send_at", { withTimezone: true }),
+    /** Belgilangan (asosiy) kanal versiyasi: `{ kind: 'auto', mode, variant }` | `{ kind: 'version', versionId }` (`ChannelChoiceSchema`). */
+    channelChoice: jsonb("channel_choice"),
+    /** Belgini qo'ygan foydalanuvchi (xodim taklifi bo'lishi mumkin). */
+    channelChoiceBy: text("channel_choice_by").references(() => user.id, { onDelete: "set null" }),
+    channelChoiceAt: timestamp("channel_choice_at", { withTimezone: true }),
     settings: jsonb("settings").notNull().default({}),
     viewsCount: integer("views_count").notNull().default(0),
     likesCount: integer("likes_count").notNull().default(0),

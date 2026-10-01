@@ -14,6 +14,7 @@
     "@blog/shared": "workspace:*",
     "@tiptap/core": "^3.31.3",
     "@tiptap/extension-bubble-menu": "^3.31.3",
+    "@tiptap/extension-code-block": "^3.31.3",
     "@tiptap/extension-image": "^3.31.3",
     "@tiptap/extension-placeholder": "^3.31.3",
     "@tiptap/extension-table": "^3.31.3",
@@ -47,6 +48,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
+    "linkedom": "^0.18.13",
     "tailwindcss": "^4",
     "typescript": "^5.9.3",
     "vitest": "^5.0.2"

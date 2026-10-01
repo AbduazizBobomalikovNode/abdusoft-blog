@@ -1,11 +1,12 @@
 import { and, eq, isNotNull, isNull, lte } from "drizzle-orm";
-import { ChannelPlanSchema, type ChannelPlan } from "@blog/shared";
+import { ChannelPlanSchema, type ChannelPlan, type ChannelSelection } from "@blog/shared";
 import { db } from "../db/index.js";
 import { posts } from "../db/schema.js";
 import { getSettings } from "../lib/settings.js";
 import { bot } from "./client.js";
 import { sendPostToChannel, sendVersionToChannel, type SendChannelPostResult } from "./channel-send.js";
 import { summarizePreflightErrors } from "./channel-preflight.js";
+import { resolveChoiceForSend } from "./channel-choice.js";
 import { escapeHtml } from "./format.js";
 import { awaitPostSync } from "./publish.js";
 
@@ -67,6 +68,12 @@ export async function recoverInterruptedChannelSends(now: Date = new Date()): Pr
   return rows.length;
 }
 
+/** Bitta rejani bajarish natijasi — HTTP (`publish` + "kanalga ham yuborilsin") shundan toast quradi. */
+export type PlanOutcome =
+  | { state: "sent"; messageUrl: string | null; note: string | null }
+  | { state: "skipped" }
+  | { state: "failed"; reason: string; willRetry: boolean };
+
 /**
  * Vaqti kelgan (`status = 'published' and channel_send_at <= now()`) kanal
  * rejalarini bajaradi. Ikki marta yubormaslik uchun har bir post avval ATOMIK
@@ -80,58 +87,100 @@ export async function runDueChannelSends(now: Date = new Date()): Promise<void> 
     .where(and(eq(posts.status, "published"), isNotNull(posts.channelSendAt), lte(posts.channelSendAt, now)));
 
   for (const { id } of due) {
-    const [claimed] = await db
-      .update(posts)
-      .set({ channelSendAt: null })
-      .where(and(eq(posts.id, id), eq(posts.status, "published"), isNotNull(posts.channelSendAt)))
-      .returning();
-    if (!claimed) continue; // boshqa tick/jarayon allaqachon oldi
-
-    const parsedPlan = ChannelPlanSchema.safeParse(claimed.channelPlan);
-    if (!parsedPlan.success) {
-      await clearPlan(id);
-      continue;
-    }
-    const plan: ChannelPlan = parsedPlan.data;
-    const attempts = (plan.attempts ?? 0) + 1;
-
-    try {
-      // Telegraph havolasi caption'ga kirishi uchun chop etish sinxronizatsiyasi tugashini kutamiz.
-      await awaitPostSync(id);
-
-      // Yuborish vaqtida preflight QAYTA ishga tushadi (`sendPostToChannel`/`sendVersionToChannel` ichida);
-      // o'tmasa — bu muvaffaqiyatsiz urinish, sababi admin xabarida ko'rsatiladi.
-      let result = plan.versionId
-        ? await sendVersionToChannel(id, plan.versionId)
-        : await sendPostToChannel(id, plan.mode, plan.variant!);
-      let fellBack = false;
-      if (!plan.versionId && !result.ok && result.reason === "no_media" && plan.mode === "media") {
-        // Rasm/kover endi yo'q — shu uzunlik bilan rasmsiz matnga o'tamiz.
-        fellBack = true;
-        result = await sendPostToChannel(id, "text", plan.variant!);
-      }
-
-      if (result.ok) {
-        await clearPlan(id);
-        const link = result.messageUrl ? `\n${escapeHtml(result.messageUrl)}` : "";
-        const note = fellBack ? "\nRasm topilmadi — rasmsiz yuborildi." : "";
-        await notifyAdmin(`✅ Kanalga yuborildi: ${escapeHtml(claimed.title)}${note}${link}`);
-        continue;
-      }
-
-      if (result.reason === "already_sent" || result.reason === "not_found" || result.reason === "not_published") {
-        await clearPlan(id);
-        continue;
-      }
-
-      await handleFailure(id, claimed.title, plan, attempts, failureReason(result), now);
-    } catch (error: unknown) {
-      console.error(`Rejalashtirilgan kanal yuborish xatosi (post ${id}):`, error);
-      await handleFailure(id, claimed.title, plan, attempts, error instanceof Error ? error.message : String(error), now);
-    }
+    await runChannelPlanFor(id, now);
   }
 }
 
+/**
+ * Bitta postning rejasini ATOMIK "claim" qilib bajaradi (scheduler va "chop etilgach
+ * kanalga ham yuborilsin" yo'li bir xil mexanizmdan foydalanadi).
+ */
+export async function runChannelPlanFor(id: string, now: Date = new Date()): Promise<PlanOutcome> {
+  const [claimed] = await db
+    .update(posts)
+    .set({ channelSendAt: null })
+    .where(and(eq(posts.id, id), eq(posts.status, "published"), isNotNull(posts.channelSendAt)))
+    .returning();
+  if (!claimed) return { state: "skipped" }; // boshqa tick/jarayon allaqachon oldi
+
+  const parsedPlan = ChannelPlanSchema.safeParse(claimed.channelPlan);
+  if (!parsedPlan.success) {
+    await clearPlan(id);
+    return { state: "skipped" };
+  }
+  const plan: ChannelPlan = parsedPlan.data;
+  const attempts = (plan.attempts ?? 0) + 1;
+
+  try {
+    // Telegraph havolasi caption'ga kirishi uchun chop etish sinxronizatsiyasi tugashini kutamiz.
+    await awaitPostSync(id);
+
+    // Nima yuboriladi: `useChoice` — YUBORISH VAQTIDAGI joriy belgi (yo'q bo'lsa standart); aks holda reja ichidagi aniq tanlov.
+    let selection: ChannelSelection;
+    let noMark = false;
+    if (plan.useChoice) {
+      const resolved = await resolveChoiceForSend(id);
+      if (!resolved) {
+        await clearPlan(id);
+        return { state: "skipped" };
+      }
+      selection = resolved.selection;
+      noMark = resolved.fallback;
+    } else if (plan.versionId) {
+      selection = { versionId: plan.versionId };
+    } else {
+      selection = { mode: plan.mode!, variant: plan.variant! };
+    }
+
+    // Yuborish vaqtida preflight QAYTA ishga tushadi (`sendPostToChannel`/`sendVersionToChannel` ichida);
+    // o'tmasa — bu muvaffaqiyatsiz urinish, sababi admin xabarida ko'rsatiladi.
+    let result =
+      "versionId" in selection ? await sendVersionToChannel(id, selection.versionId) : await sendPostToChannel(id, selection.mode, selection.variant);
+    let fellBack = false;
+    if (!("versionId" in selection) && !result.ok && result.reason === "no_media" && selection.mode === "media") {
+      // Rasm/kover endi yo'q — shu uzunlik bilan rasmsiz matnga o'tamiz.
+      fellBack = true;
+      result = await sendPostToChannel(id, "text", selection.variant);
+    }
+
+    if (result.ok) {
+      await clearPlan(id);
+      const link = result.messageUrl ? `\n${escapeHtml(result.messageUrl)}` : "";
+      const notes = [
+        noMark ? "Belgilangan versiya yo'q edi — standart ko'rinish yuborildi." : null,
+        fellBack ? "Rasm topilmadi — rasmsiz yuborildi." : null,
+      ].filter((n): n is string => n !== null);
+      await notifyAdmin(`✅ Kanalga yuborildi: ${escapeHtml(claimed.title)}${notes.map((n) => `\n${n}`).join("")}${link}`);
+      return { state: "sent", messageUrl: result.messageUrl, note: notes.length > 0 ? notes.join(" ") : null };
+    }
+
+    if (result.reason === "already_sent" || result.reason === "not_found" || result.reason === "not_published") {
+      await clearPlan(id);
+      return { state: "skipped" };
+    }
+
+    const reason = failureReason(result);
+    const willRetry = await handleFailure(id, claimed.title, plan, attempts, reason, now);
+    return { state: "failed", reason, willRetry };
+  } catch (error: unknown) {
+    console.error(`Rejalashtirilgan kanal yuborish xatosi (post ${id}):`, error);
+    const reason = error instanceof Error ? error.message : String(error);
+    const willRetry = await handleFailure(id, claimed.title, plan, attempts, reason, now);
+    return { state: "failed", reason, willRetry };
+  }
+}
+
+/** Belgilangan versiyani chop etilgandan keyin yuborish rejasini (kechikishsiz) qo'yadi va darhol bajaradi. */
+export async function sendMarkedChoiceNow(postId: string): Promise<PlanOutcome> {
+  const now = new Date();
+  await db
+    .update(posts)
+    .set({ channelPlan: { useChoice: true, delayMinutes: 0, attempts: 0 }, channelSendAt: now })
+    .where(and(eq(posts.id, postId), eq(posts.status, "published")));
+  return runChannelPlanFor(postId, now);
+}
+
+/** `true` — qayta uriniladi; `false` — urinishlar tugadi (reja o'chirildi, admin xabardor). */
 async function handleFailure(
   postId: string,
   title: string,
@@ -139,15 +188,16 @@ async function handleFailure(
   attempts: number,
   reason: string,
   now: Date,
-): Promise<void> {
+): Promise<boolean> {
   if (attempts >= MAX_CHANNEL_PLAN_ATTEMPTS) {
     await clearPlan(postId);
     await notifyAdmin(`⚠️ Kanalga yuborilmadi: ${escapeHtml(title)} — ${escapeHtml(reason)}`);
-    return;
+    return false;
   }
   // Keyingi tick'da qayta uriniladi (faqat reja hali bekor qilinmagan bo'lsa).
   await db
     .update(posts)
     .set({ channelPlan: { ...plan, attempts }, channelSendAt: now })
     .where(and(eq(posts.id, postId), isNotNull(posts.channelPlan)));
+  return true;
 }

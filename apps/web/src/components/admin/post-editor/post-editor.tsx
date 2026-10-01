@@ -1,26 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { JSONContent } from "@tiptap/core";
-import { EditorContent, useEditor } from "@tiptap/react";
-import { StarterKit } from "@tiptap/starter-kit";
-import { Image } from "@tiptap/extension-image";
-import { Table } from "@tiptap/extension-table";
-import { TableRow } from "@tiptap/extension-table-row";
-import { TableHeader } from "@tiptap/extension-table-header";
-import { TableCell } from "@tiptap/extension-table-cell";
-import { Placeholder } from "@tiptap/extension-placeholder";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import { Settings2 } from "lucide-react";
 import { toast } from "sonner";
-import { slugify, type AdminPostDetail, type AdminPostStatus, type ChannelPlan, type Me, type PostSettings, type TagWithCount, type TelegramRef, type UpdatePostBody } from "@blog/shared";
+import { docStats, slugify, type AdminPostDetail, type AdminPostStatus, type ChannelPlan, type DocStats, type Me, type PostSettings, type ResolvedChannelChoice, type TagWithCount, type TelegramRef } from "@blog/shared";
+import { DraftBanner } from "@/components/admin/editor/draft-banner";
+import { EditorToolbar } from "@/components/admin/editor/editor-toolbar";
+import { OPEN_SHORTCUTS_EVENT } from "@/components/admin/editor/events";
+import { ImagePicker, ImageToolbar } from "@/components/admin/editor/image-tools";
+import { InsertDialog } from "@/components/admin/editor/insert-dialog";
+import { InsertPlus } from "@/components/admin/editor/insert-plus";
+import { createEditorExtensions } from "@/components/admin/editor/kit";
+import { LinkPopover } from "@/components/admin/editor/link-popover";
+import { OutlinePanel } from "@/components/admin/editor/outline-panel";
+import { PublishChecklist } from "@/components/admin/editor/publish-checklist";
+import { ShortcutsDialog } from "@/components/admin/editor/shortcuts-dialog";
+import { StarterPanel } from "@/components/admin/editor/starter-panel";
+import { StatusFooter, type FooterSaveInfo } from "@/components/admin/editor/status-footer";
+import { TableToolbar } from "@/components/admin/editor/table-toolbar";
+import { useCaretFollow } from "@/components/admin/editor/use-caret-follow";
+import { useFocusMode } from "@/components/admin/editor/use-focus-mode";
 import { ChannelSendDialog } from "./channel-send-dialog";
-import { PostEditorHeader, StaffEditorHeader, type SaveState } from "./post-editor-header";
+import { PostEditorHeader, StaffEditorHeader, type EditorMenuActions, type SaveState } from "./post-editor-header";
 import { PostEditorSettings } from "./post-editor-settings";
-import { CodeBlockLanguageMenu, PostEditorBubbleMenu } from "./post-editor-toolbar";
+import { PostEditorBubbleMenu } from "./post-editor-toolbar";
 import { AdminReviewActions, StaffReviewBanner } from "./review-banner";
-import { SlashCommand } from "./slash-command";
 import { StaffEditorPanel } from "./staff-editor-panel";
+import { useAutosave } from "./use-autosave";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,9 +44,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
+import { buildPublishChecklist, hasBlockingIssue, type ChecklistItem, type FixTarget } from "@/lib/editor/checklist";
+import { browserStorage, clearBackup, loadBackup, serverChangedSinceBackup, shouldOfferRestore, type DraftBackup } from "@/lib/editor/draft-backup";
+import { extractOutline, type OutlineItem } from "@blog/shared";
+import { isHintText } from "@blog/shared";
 import { site } from "@/lib/site";
-
-const AUTOSAVE_DELAY_MS = 1500;
+import { formatTime } from "@/lib/format";
 
 function toDatetimeLocal(iso: string | null): string {
   if (!iso) return "";
@@ -47,6 +60,20 @@ function toDatetimeLocal(iso: string | null): string {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof AdminApiError ? error.message : fallback;
+}
+
+const EMPTY_STATS: DocStats = { words: 0, characters: 0, readingMinutes: 1 };
+
+function saveTone(state: SaveState): FooterSaveInfo["tone"] {
+  return state;
+}
+
+function footerText(state: SaveState, lastSavedAt: string | null, saveError: string | null): string {
+  if (state === "saving") return "Saqlanmoqda…";
+  if (state === "offline") return "Oflayn — mahalliy saqlandi";
+  if (state === "error") return saveError ? `Xato: ${saveError}` : "Xato — saqlanmadi";
+  if (state === "saved" && lastSavedAt) return `Saqlandi ${formatTime(lastSavedAt)}`;
+  return "";
 }
 
 export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTags: TagWithCount[]; me: Me }) {
@@ -63,69 +90,45 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   const [status, setStatus] = useState<AdminPostStatus>(post.status);
   const [reviewNote, setReviewNote] = useState<string | null>(post.reviewNote);
   const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitChecklist, setSubmitChecklist] = useState<ChecklistItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [scheduledAtLocal, setScheduledAtLocal] = useState(toDatetimeLocal(post.scheduledAt));
   const [scheduling, setScheduling] = useState(false);
   // Faqat rejalashtirilgan postda server tomonda saqlanadi — boshqa holatda "rejalashtirish" bosilganda yuboriladi.
   const [channelPlan, setChannelPlan] = useState<ChannelPlan | null>(post.status === "scheduled" ? post.channelPlan : null);
-  const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [lastSavedAt, setLastSavedAt] = useState<string | null>(post.updatedAt);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [telegram, setTelegram] = useState<TelegramRef | null>(post.telegram);
   const [telegramChannel, setTelegramChannel] = useState<string | null>(null);
   const [refreshingTelegraph, setRefreshingTelegraph] = useState(false);
   const [channelSendOpen, setChannelSendOpen] = useState(false);
   const [channelPlanBlocked, setChannelPlanBlocked] = useState(false);
+  const [channelChoice, setChannelChoice] = useState<ResolvedChannelChoice | null>(post.channelChoice);
+  const [starterDismissed, setStarterDismissed] = useState(false);
+  const [insertOpen, setInsertOpen] = useState(false);
+  const [draftOffer, setDraftOffer] = useState<{ backup: DraftBackup; serverNewer: boolean } | null>(null);
+  const [snapshot, setSnapshot] = useState<{ stats: DocStats; outline: OutlineItem[] }>({ stats: EMPTY_STATS, outline: [] });
 
   // Xodim (staff) uchun — post ko'rib chiqishda bo'lsa butunlay o'qish uchun
   // (API ham shu holatda PATCH'ni 409 bilan rad etadi — bu shunchaki mos UI).
   const readOnly = isStaff && status === "in_review";
   const canSubmit = isStaff && (status === "draft" || status === "changes_requested");
 
-  const pendingRef = useRef<UpdatePostBody>({});
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dirtyRef = useRef(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const slugRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { focusMode, toggle: toggleFocus } = useFocusMode(true);
 
-  const flush = useCallback(async () => {
-    const payload = pendingRef.current;
-    if (Object.keys(payload).length === 0) return;
-    pendingRef.current = {};
-    setSaveState("saving");
-    try {
-      const result = await adminApi.updatePost(post.id, payload);
-      setSaveState("saved");
-      setSaveError(null);
-      setLastSavedAt(result.updatedAt);
-      dirtyRef.current = false;
-    } catch (error) {
-      setSaveState("error");
-      setSaveError(errorMessage(error, "Saqlashda xatolik"));
-      toast.error(errorMessage(error, "Saqlashda xatolik"));
-      pendingRef.current = { ...payload, ...pendingRef.current };
-    }
-  }, [post.id]);
-
-  const flushNow = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    void flush();
-  }, [flush]);
-
-  const queueSave = useCallback(
-    (patch: Partial<UpdatePostBody>) => {
-      pendingRef.current = { ...pendingRef.current, ...patch };
-      dirtyRef.current = true;
-      setSaveState("idle");
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => void flush(), AUTOSAVE_DELAY_MS);
+  const { saveState, saveError, lastSavedAt, queueSave, flushNow, dirtyRef } = useAutosave({
+    postId: post.id,
+    initialUpdatedAt: post.updatedAt,
+    initialTitle: post.title,
+    initialContentJson: post.contentJson,
+    enabled: !readOnly,
+    onSlugConflict: (message) => {
+      setSlugAuto(false);
+      toast.warning(`${message}. Matn saqlandi — slugni o'zgartiring.`);
     },
-    [flush],
-  );
+  });
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -145,13 +148,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     }
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
+  }, [dirtyRef]);
 
   useEffect(() => {
     // Yangi post ("Nomsiz post" — /admin-posts.ts POST / dagi fallback nomi)
@@ -177,6 +174,26 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sarlavha qatori balandligi — asboblar paneli shunga yopishadi (sticky).
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const header = root?.querySelector<HTMLElement>("[data-editor-header]");
+    if (!root || !header) return;
+    const apply = () => root.style.setProperty("--editor-header-h", `${header.offsetHeight}px`);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
+  // Sarlavha maydoni balandligi matnga qarab o'sadi (boshlang'ich uzun sarlavha ham).
+  useLayoutEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [title]);
+
   async function handleRefreshTelegraph() {
     setRefreshingTelegraph(true);
     try {
@@ -195,80 +212,16 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
       ? `https://t.me/${telegramChannel.slice(1)}/${telegram.channelMessageId}`
       : null;
 
-  async function uploadAndInsertImage(file: File) {
-    const toastId = toast.loading("Rasm yuklanmoqda…");
-    try {
-      const media = await adminApi.uploadMedia(file);
-      editor?.chain().focus().setImage({ src: media.url, alt: media.alt ?? "" }).run();
-      toast.success("Rasm qo'shildi", { id: toastId });
-    } catch (error) {
-      toast.error(errorMessage(error, "Rasm yuklanmadi"), { id: toastId });
-    }
-  }
-
-  useEffect(() => {
-    function handleInsertImageRequest() {
-      fileInputRef.current?.click();
-    }
-    window.addEventListener("post-editor:insert-image", handleInsertImageRequest);
-    return () => window.removeEventListener("post-editor:insert-image", handleInsertImageRequest);
-  }, []);
-
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: [
-      StarterKit.configure({ link: { openOnClick: false } }),
-      Image,
-      Table,
-      TableRow,
-      TableHeader,
-      TableCell,
-      Placeholder.configure({
-        placeholder: "Yozishni boshlang… \"/\" buyruqlar menyusi",
-        showOnlyCurrent: false,
-      }),
-      SlashCommand,
-    ],
+    extensions: createEditorExtensions({ media: true }),
     content: post.contentJson as JSONContent,
     editable: !readOnly,
     editorProps: {
       attributes: { class: "tiptap prose-article" },
-      handlePaste: (view, event) => {
-        if (readOnly) return false;
-        const file = event.clipboardData?.files?.[0];
-        if (!file || !file.type.startsWith("image/")) return false;
-        event.preventDefault();
-        void (async () => {
-          try {
-            const media = await adminApi.uploadMedia(file);
-            const node = view.state.schema.nodes.image?.create({ src: media.url, alt: media.alt ?? "" });
-            if (!node) return;
-            view.dispatch(view.state.tr.replaceSelectionWith(node));
-          } catch (error) {
-            toast.error(errorMessage(error, "Rasm yuklanmadi"));
-          }
-        })();
-        return true;
-      },
-      handleDrop: (view, event, _slice, moved) => {
-        if (readOnly || moved) return false;
-        const file = event.dataTransfer?.files?.[0];
-        if (!file || !file.type.startsWith("image/")) return false;
-        event.preventDefault();
-        const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
-        void (async () => {
-          try {
-            const media = await adminApi.uploadMedia(file);
-            const node = view.state.schema.nodes.image?.create({ src: media.url, alt: media.alt ?? "" });
-            if (!node) return;
-            const pos = coords?.pos ?? view.state.selection.from;
-            view.dispatch(view.state.tr.insert(pos, node));
-          } catch (error) {
-            toast.error(errorMessage(error, "Rasm yuklanmadi"));
-          }
-        })();
-        return true;
-      },
+      // Kursor sticky sarlavha/asboblar paneli ostida qolmasin.
+      scrollMargin: { top: 150, bottom: 96, left: 0, right: 0 },
+      scrollThreshold: { top: 150, bottom: 96, left: 0, right: 0 },
     },
     onUpdate: ({ editor: ed }) => queueSave({ contentJson: ed.getJSON() }),
   });
@@ -277,6 +230,62 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     // emitUpdate=false: aks holda `update` hodisasi chiqib, o'qish-uchun postda 409 PATCH ketadi.
     editor?.setEditable(!readOnly, false);
   }, [editor, readOnly]);
+
+  useCaretFollow(editor);
+
+  // So'z/belgi/mundarija — har tuslanishda emas, kichik kechikish bilan.
+  useEffect(() => {
+    if (!editor) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const compute = () => {
+      if (editor.isDestroyed) return;
+      const json = editor.getJSON();
+      setSnapshot({ stats: docStats(json), outline: extractOutline(json) });
+    };
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(compute, 250);
+    };
+    compute();
+    editor.on("update", schedule);
+    return () => {
+      if (timer) clearTimeout(timer);
+      editor.off("update", schedule);
+    };
+  }, [editor]);
+
+  const bodyEmpty = useEditorState({ editor, selector: (ctx) => ctx.editor?.isEmpty ?? true });
+
+  // Mahalliy zaxira: serverdagi nusxadan yangiroq saqlanmagan matn bo'lsa — bloklamaydigan xabar.
+  useEffect(() => {
+    if (readOnly) return;
+    const storage = browserStorage();
+    const backup = loadBackup(storage, post.id);
+    if (!backup) return;
+    const server = { updatedAt: post.updatedAt, title: post.title, contentJson: post.contentJson };
+    if (!shouldOfferRestore(backup, server)) {
+      clearBackup(storage, post.id);
+      return;
+    }
+    const timer = setTimeout(() => setDraftOffer({ backup, serverNewer: serverChangedSinceBackup(backup, server) }), 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- faqat ochilganda
+  }, []);
+
+  function restoreDraft() {
+    if (!draftOffer || !editor) return;
+    const { backup } = draftOffer;
+    setTitle(backup.title);
+    queueSave({ title: backup.title });
+    editor.commands.setContent(backup.contentJson as JSONContent, { emitUpdate: true });
+    setDraftOffer(null);
+    toast.success("Mahalliy nusxa tiklandi");
+  }
+
+  function discardDraft() {
+    clearBackup(browserStorage(), post.id);
+    setDraftOffer(null);
+  }
 
   async function handleSubmit() {
     setSubmitting(true);
@@ -305,17 +314,25 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     }
   }
 
-  function handleTitleInput(event: React.FormEvent<HTMLTextAreaElement>) {
-    const el = event.currentTarget;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }
-
   function handleTitleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
       event.preventDefault();
       editor?.chain().focus("start").run();
     }
+  }
+
+  /** Joylashtirilgan yangi qatorlar bo'shliqqa aylanadi (sarlavha — bitta qator). */
+  function handleTitlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const text = event.clipboardData.getData("text/plain");
+    if (!/[\r\n]/.test(text)) return;
+    event.preventDefault();
+    const el = event.currentTarget;
+    const clean = text.replace(/\s*[\r\n]+\s*/g, " ").trim();
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    handleTitleChange(title.slice(0, start) + clean + title.slice(end));
+    const caret = start + clean.length;
+    requestAnimationFrame(() => el.setSelectionRange(caret, caret));
   }
 
   function handleSlugChange(value: string) {
@@ -329,11 +346,15 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     }
   }
 
-  async function handlePublish() {
+  async function handlePublish(opts?: { sendToChannel?: boolean }) {
     try {
-      const result = await adminApi.publishPost(post.id);
+      const result = await adminApi.publishPost(post.id, opts);
       setStatus(result.status);
-      toast.success("Post chop etildi");
+      const send = result.channelSend;
+      if (send?.state === "sent") toast.success("Post chop etildi va kanalga yuborildi");
+      else if (send?.state === "failed") toast.error(`Post chop etildi, lekin kanalga yuborilmadi: ${send.error ?? "noma'lum xato"}`);
+      else if (send?.state === "pending") toast.success("Post chop etildi — kanalga yuborilmoqda, natija admin chatiga keladi");
+      else toast.success("Post chop etildi");
     } catch (error) {
       toast.error(errorMessage(error, "Chop etishda xatolik"));
     }
@@ -449,6 +470,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     onRefreshTelegraph: () => void handleRefreshTelegraph(),
     refreshingTelegraph,
     onOpenChannelSend: () => setChannelSendOpen(true),
+    channelChoice,
   };
 
   const staffPanelProps = {
@@ -461,10 +483,88 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     coverUrl,
     onCoverChange: settingsProps.onCoverChange,
     readOnly,
+    channelChoice,
+    onOpenChannelVersion: () => setChannelSendOpen(true),
   };
 
+  // ---------------------------------------------------------------- chop etishdan oldingi tekshiruv
+
+  const getChecklist = useCallback(
+    (): ChecklistItem[] =>
+      buildPublishChecklist({
+        title,
+        slug,
+        doc: editor && !editor.isDestroyed ? editor.getJSON() : post.contentJson as JSONContent,
+        coverUrl,
+        excerpt,
+        tagCount: tagSlugs.length,
+      }),
+    [title, slug, editor, coverUrl, excerpt, tagSlugs.length, post.contentJson],
+  );
+
+  const handleFix = useCallback(
+    (target: FixTarget) => {
+      // Dialog yopilgach fokus qaytishi bilan to'qnashmaslik uchun kichik kechikish.
+      window.setTimeout(() => {
+        if (target === "title") {
+          titleRef.current?.focus();
+          titleRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+          return;
+        }
+        if (target === "slug") {
+          slugRef.current?.focus();
+          slugRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+          return;
+        }
+        if (target === "cover" || target === "excerpt" || target === "tags") {
+          const find = () => document.querySelector<HTMLElement>(`[data-editor-field="${target}"]`);
+          const desktop = window.matchMedia("(min-width: 1024px)").matches;
+          if (!desktop) setSettingsOpen(true);
+          window.setTimeout(() => {
+            const el = Array.from(document.querySelectorAll<HTMLElement>(`[data-editor-field="${target}"]`)).find((n) => n.offsetParent !== null) ?? find();
+            el?.scrollIntoView({ block: "center", behavior: "smooth" });
+            el?.querySelector<HTMLElement>("textarea, input, button")?.focus({ preventScroll: true });
+          }, desktop ? 0 : 350);
+          return;
+        }
+        if (!editor) return;
+        if (target === "body") {
+          editor.chain().focus("end").run();
+          return;
+        }
+        const { doc } = editor.state;
+        let found: { pos: number; kind: "image" | "heading" | "hint"; size: number } | null = null;
+        doc.descendants((node, pos) => {
+          if (found) return false;
+          if (target === "imageAlt" && node.type.name === "image" && !String(node.attrs.alt ?? "").trim()) found = { pos, kind: "image", size: node.nodeSize };
+          else if (target === "emptyHeading" && node.type.name === "heading" && node.content.size === 0) found = { pos, kind: "heading", size: node.nodeSize };
+          else if (target === "hints" && node.type.name === "paragraph" && node.content.size > 0 && isHintText(node.textContent)) found = { pos, kind: "hint", size: node.nodeSize };
+          return !node.isTextblock;
+        });
+        const hit = found as { pos: number; kind: "image" | "heading" | "hint"; size: number } | null;
+        if (!hit) return;
+        const sel = hit.kind === "image" ? NodeSelection.create(doc, hit.pos) : hit.kind === "heading" ? TextSelection.create(doc, hit.pos + 1) : TextSelection.create(doc, hit.pos + 1, hit.pos + hit.size - 1);
+        editor.view.dispatch(editor.state.tr.setSelection(sel).scrollIntoView());
+        editor.commands.focus();
+      }, 150);
+    },
+    [editor],
+  );
+
+  const editorActions: EditorMenuActions | undefined = readOnly
+    ? undefined
+    : {
+        onOpenInsert: () => setInsertOpen(true),
+        onToggleFocus: toggleFocus,
+        onOpenShortcuts: () => window.dispatchEvent(new CustomEvent(OPEN_SHORTCUTS_EVENT)),
+      };
+
+  const submitBlocked = hasBlockingIssue(submitChecklist);
+  const showStarter = !readOnly && !!editor && bodyEmpty && !starterDismissed;
+  const footerSave: FooterSaveInfo = { text: footerText(saveState, lastSavedAt, saveError), tone: saveTone(saveState) };
+
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={rootRef} className="flex flex-col gap-4">
       {isStaff ? (
         <StaffEditorHeader
           postId={post.id}
@@ -473,7 +573,12 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
           saveError={saveError}
           lastSavedAt={lastSavedAt}
           canSubmit={canSubmit}
-          onSubmit={() => setSubmitOpen(true)}
+          onSubmit={() => {
+            setSubmitChecklist(getChecklist());
+            setSubmitOpen(true);
+          }}
+          onOpenChannelVersion={() => setChannelSendOpen(true)}
+          editorActions={editorActions}
         />
       ) : (
         <PostEditorHeader
@@ -488,16 +593,30 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
           onDelete={handleDelete}
           onRefreshTelegraph={() => void handleRefreshTelegraph()}
           onOpenChannelSend={() => setChannelSendOpen(true)}
+          channelChoice={channelChoice}
+          getChecklist={getChecklist}
+          onFix={handleFix}
+          editorActions={editorActions}
         />
       )}
 
-      <ChannelSendDialog postId={post.id} open={channelSendOpen} onOpenChange={setChannelSendOpen} />
+      {editor && !readOnly ? <EditorToolbar editor={editor} onToggleFocus={toggleFocus} focusMode={focusMode} /> : null}
+
+      <ChannelSendDialog
+        postId={post.id}
+        open={channelSendOpen}
+        onOpenChange={setChannelSendOpen}
+        mode={isStaff ? "suggest" : status === "published" ? "send" : "prepare"}
+        readOnly={isStaff && status !== "draft" && status !== "changes_requested"}
+        onChoiceChange={setChannelChoice}
+      />
 
       {isStaff ? <StaffReviewBanner status={status} reviewNote={reviewNote} /> : null}
       {!isStaff && status === "in_review" ? (
         <AdminReviewActions
           postId={post.id}
           authorName={post.createdBy?.name ?? "Xodim"}
+          channelChoice={channelChoice}
           onApproved={(next) => setStatus(next)}
           onChangesRequested={(next) => {
             setStatus(next);
@@ -506,26 +625,31 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
         />
       ) : null}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-        <div className="flex min-w-0 flex-col gap-3">
+      <div className="editor-grid grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="flex min-w-0 flex-col gap-3" data-editor-column>
+          {draftOffer ? <DraftBanner serverNewer={draftOffer.serverNewer} onRestore={restoreDraft} onDiscard={discardDraft} /> : null}
+
           <textarea
             ref={titleRef}
             value={title}
             onChange={(event) => handleTitleChange(event.target.value)}
-            onInput={handleTitleInput}
             onKeyDown={handleTitleKeyDown}
+            onPaste={handleTitlePaste}
             placeholder="Sarlavha"
             rows={1}
             disabled={readOnly}
+            aria-label="Sarlavha"
             className="post-editor-title"
           />
 
           <div className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground md:flex-wrap">
             <span className="max-w-full truncate max-md:max-w-[38%] max-md:shrink-0">{site.url}/</span>
             <input
+              ref={slugRef}
               value={slug}
               onChange={(event) => handleSlugChange(event.target.value)}
               disabled={readOnly}
+              aria-label="Slug"
               className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 hover:border-border focus:border-border focus:outline-none max-md:min-h-11 max-md:truncate"
             />
             {!readOnly ? (
@@ -552,10 +676,25 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
             {isStaff ? "Qo'shimcha" : "Sozlamalar"}
           </Button>
 
+          {editor && showStarter ? (
+            <StarterPanel
+              editor={editor}
+              onBlank={() => {
+                setStarterDismissed(true);
+                editor.commands.focus("start");
+              }}
+              onImportMarkdown={() => setInsertOpen(true)}
+            />
+          ) : null}
+
           {editor ? (
             <>
               <PostEditorBubbleMenu editor={editor} />
-              <CodeBlockLanguageMenu editor={editor} />
+              <LinkPopover editor={editor} />
+              <ImageToolbar editor={editor} />
+              <TableToolbar editor={editor} />
+              <InsertPlus editor={editor} />
+              <ImagePicker editor={editor} />
             </>
           ) : null}
 
@@ -564,10 +703,29 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
           </div>
         </div>
 
-        <aside className="hidden lg:block">
-          {isStaff ? <StaffEditorPanel {...staffPanelProps} /> : <PostEditorSettings {...settingsProps} />}
+        <aside className="hidden lg:block" data-editor-focus-hide>
+          <div className="sticky top-[calc(var(--editor-header-h,3.5rem)+3.5rem)] flex max-h-[calc(100svh-var(--editor-header-h,3.5rem)-6rem)] flex-col gap-4 overflow-y-auto pb-2">
+            {editor && !readOnly ? <OutlinePanel editor={editor} items={snapshot.outline} /> : null}
+            {isStaff ? <StaffEditorPanel {...staffPanelProps} /> : <PostEditorSettings {...settingsProps} />}
+          </div>
         </aside>
       </div>
+
+      {editor ? <ShortcutsDialog /> : null}
+      {editor && !readOnly ? (
+        <InsertDialog
+          editor={editor}
+          open={insertOpen}
+          onOpenChange={setInsertOpen}
+          setTitle={
+            title.trim() === "" || title.trim() === "Nomsiz post"
+              ? (value) => {
+                  handleTitleChange(value);
+                }
+              : null
+          }
+        />
+      ) : null}
 
       <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
         <SheetContent side="right" className="overflow-y-auto p-4 max-sm:data-[side=right]:w-full">
@@ -579,7 +737,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
       </Sheet>
 
       <AlertDialog open={submitOpen} onOpenChange={setSubmitOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-h-[90svh] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle>Ko&apos;rib chiqishga yuborish</AlertDialogTitle>
             <AlertDialogDescription>
@@ -587,26 +745,25 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
               Telegram kanalida avtomatik chop etiladi.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {submitChecklist.length > 0 ? (
+            <PublishChecklist
+              items={submitChecklist}
+              onFix={(target) => {
+                setSubmitOpen(false);
+                handleFix(target);
+              }}
+            />
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Bekor qilish</AlertDialogCancel>
-            <AlertDialogAction disabled={submitting} onClick={() => void handleSubmit()}>
+            <AlertDialogAction disabled={submitting || submitBlocked} onClick={() => void handleSubmit()}>
               Yuborish
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) void uploadAndInsertImage(file);
-          event.target.value = "";
-        }}
-      />
+      {editor && !readOnly ? <StatusFooter stats={snapshot.stats} save={footerSave} /> : null}
     </div>
   );
 }

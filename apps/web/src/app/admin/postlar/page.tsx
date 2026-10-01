@@ -5,7 +5,7 @@ import { FileText, MessageCircle, ThumbsDown, ThumbsUp, Eye as EyeIcon } from "l
 import { EmptyState } from "@/components/admin/empty-state";
 import { NewPostButton } from "@/components/admin/new-post-button";
 import { PostRowActions } from "@/components/admin/post-row-actions";
-import { PostChannelPlanHint, PostStatusBadge } from "@/components/admin/post-status-badge";
+import { PostChannelChoiceHint, PostChannelPlanHint, PostStatusBadge } from "@/components/admin/post-status-badge";
 import { PostStatusTabs } from "@/components/admin/post-status-tabs";
 import { Input } from "@/components/ui/input";
 import {
@@ -110,6 +110,7 @@ export default async function AdminPostsPage({
                 <div className="flex flex-wrap items-center gap-2">
                   <PostStatusBadge status={post.status} />
                   <PostChannelPlanHint status={post.status} hasChannelPlan={post.hasChannelPlan} />
+                  <PostChannelChoiceHint hasChannelChoice={post.hasChannelChoice} />
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
                     {formatDateTime(post.publishedAt ?? post.scheduledAt ?? post.updatedAt)}
                   </span>
@@ -183,6 +184,7 @@ export default async function AdminPostsPage({
                     <div className="flex flex-wrap items-center gap-1.5">
                       <PostStatusBadge status={post.status} />
                       <PostChannelPlanHint status={post.status} hasChannelPlan={post.hasChannelPlan} />
+                  <PostChannelChoiceHint hasChannelChoice={post.hasChannelChoice} />
                     </div>
                   </TableCell>
                   {isAdmin ? (

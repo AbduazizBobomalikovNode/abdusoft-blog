@@ -431,6 +431,87 @@ describe("custom versions in the Telegram approval flow", () => {
   });
 });
 
+describe("⭐ marked channel version in the Telegram approval flow", () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
+
+  it("mentions the prepared version in the review notification, shows it as the first button row, previews and sends it once", async () => {
+    const createRes = await postJson("/admin/posts", staff.cookie, { title: "Belgilangan versiya oqimi" });
+    const { id } = await json<{ id: string }>(createRes);
+    const vRes = await postJson(`/admin/posts/${id}/channel/versions`, staff.cookie, { mode: "text", fromVariant: "m", name: "Xodim versiyasi" });
+    expect(vRes.status).toBe(201);
+    const version = await json<{ id: string }>(vRes);
+    const markRes = await req(`/admin/posts/${id}/channel/choice`, staff.cookie, {
+      method: "PUT",
+      body: JSON.stringify({ kind: "version", versionId: version.id }),
+    });
+    expect(markRes.status).toBe(200);
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    expect((await postJson(`/admin/posts/${id}/submit`, staff.cookie)).status).toBe(200);
+    await settle();
+    const notice = (await mockCalls()).find((c) => c.method === "sendMessage" && String(c.body.text).includes("Ko'rib chiqish uchun yangi post"));
+    expect(String(notice?.body.text)).toContain("⭐ Kanal versiyasi tayyorlangan: Xodim versiyasi");
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${id}`, 9401, "📝"));
+    const prompt = findPrompt(await mockCalls(), `cm:${id}`);
+    expect(prompt).toBeTruthy();
+    const rows = buttonRows(prompt);
+    expect(rows[0]).toHaveLength(1);
+    expect(rows[0]![0]!.callback_data).toBe(`cm:${id}`);
+    expect(rows[0]![0]!.text).toBe("⭐ Belgilangan: Xodim versiyasi");
+    for (const row of rows) for (const b of row) expect(Buffer.byteLength(b.callback_data ?? "", "utf8")).toBeLessThanOrEqual(64);
+
+    // ⭐ bosiladi -> preflight -> aniq preview -> tasdiqlash (maxsus versiya oqimi).
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    expect((await sendWebhookUpdate(callbackUpdate(`cm:${id}`, 9402))).status).toBe(200);
+    const afterPick = await mockCalls();
+    expect(findPrompt(afterPick, `cvc:ok:${version.id}`)).toBeTruthy();
+    expect(afterPick.some((c) => c.method === "sendMessage" && String(c.body.chat_id).startsWith("@"))).toBe(false);
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`cvc:ok:${version.id}`, 9403));
+    const ref = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, id)).then((r) => r[0]);
+    expect(ref?.channelSentAt).toBeTruthy();
+    expect(ref?.channelVersionId).toBe(version.id);
+    const ids = ref?.channelMessageIds ?? [];
+
+    // Idempotent: ⭐ -> tasdiqlash qayta bosilsa ikkinchi marta yuborilmaydi.
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`cvc:ok:${version.id}`, 9404));
+    expect((await mockCalls()).some((c) => c.method === "sendMessage" && String(c.body.chat_id).startsWith("@"))).toBe(false);
+    const again = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, id)).then((r) => r[0]);
+    expect(again?.channelMessageIds).toEqual(ids);
+  });
+
+  it("an auto mark goes through the same auto confirm flow; no mark -> no ⭐ row", async () => {
+    const id = await createPublishedViaReview("Avto belgi oqimi");
+    const markRes = await req(`/admin/posts/${id}/channel/choice`, staff.cookie, { method: "PUT", body: JSON.stringify({ kind: "auto", mode: "text", variant: "s" }) });
+    // `createPublishedViaReview` allaqachon `in_review` — xodim endi belgilay olmaydi (faqat o'qish).
+    expect(markRes.status).toBe(409);
+    const [row] = await db.select().from(posts).where(eq(posts.id, id));
+    await db.update(posts).set({ channelChoice: { kind: "auto", mode: "text", variant: "s" }, channelChoiceBy: row!.createdBy }).where(eq(posts.id, id));
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${id}`, 9411, "📝"));
+    const prompt = findPrompt(await mockCalls(), `cm:${id}`);
+    expect(buttonRows(prompt)[0]![0]!.text).toBe("⭐ Belgilangan: Rasmsiz · Qisqa");
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`cm:${id}`, 9412));
+    expect(findPrompt(await mockCalls(), `cc:ok:ts:${id}`)).toBeTruthy();
+    await sendWebhookUpdate(callbackUpdate(`cc:ok:ts:${id}`, 9413));
+    const ref = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, id)).then((r) => r[0]);
+    expect(ref?.channelVariant).toBe("s");
+
+    const plainId = await createPublishedViaReview("Belgisiz post");
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${plainId}`, 9414, "📝"));
+    expect(findPrompt(await mockCalls(), `cs:ts:${plainId}`)).toBeTruthy();
+    expect(JSON.stringify(findPrompt(await mockCalls(), `cs:ts:${plainId}`)?.body.reply_markup)).not.toContain('"cm:');
+  });
+});
+
 afterAll(async () => {
   await mockServer?.close();
   await rm(path.join(uploadsDir, "test-review-flow"), { recursive: true, force: true });

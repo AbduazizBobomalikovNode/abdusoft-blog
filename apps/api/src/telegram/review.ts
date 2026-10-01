@@ -1,5 +1,5 @@
 import { isChannelComboValid, type ChannelMode, type ChannelVariant } from "@blog/shared";
-import { InlineKeyboard } from "grammy";
+import { InlineKeyboard, type Context } from "grammy";
 import { desc, eq } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
@@ -19,6 +19,7 @@ import {
 } from "./channel-send.js";
 import { computeChannelPreflight, summarizePreflightErrors } from "./channel-preflight.js";
 import { findAdminUser } from "./comments.js";
+import { parseStoredChoice, resolveChannelChoice } from "./channel-choice.js";
 import { escapeHtml, escapeHtmlAttr, stripHtml, truncate } from "./format.js";
 import type { ChannelPreflightResponse } from "@blog/shared";
 
@@ -136,8 +137,17 @@ function reviewKeyboard(postId: string): InlineKeyboard {
  * Callback data KOMPAKT: `cs:<m|t><s|m|l|x>:<postId>`. 🖼 qatori FAQAT postda
  * kover yoki band ichida rasm bo'lsa ko'rsatiladi (`hasMedia`).
  */
-function channelVariantKeyboard(postId: string, hasMedia: boolean, versions: VersionChoice[] = []): InlineKeyboard {
+function channelVariantKeyboard(
+  postId: string,
+  hasMedia: boolean,
+  versions: VersionChoice[] = [],
+  /** Postda belgilangan versiya bo'lsa — birinchi qatordagi "⭐ Belgilangan" tugmasi (`cm:<postId>` = 3 + 36 bayt <= 64). */
+  markedLabel: string | null = null,
+): InlineKeyboard {
   const kb = new InlineKeyboard();
+  if (markedLabel) {
+    kb.text(`⭐ Belgilangan: ${truncate(markedLabel, VERSION_LABEL_MAX)}`, `cm:${postId}`).row();
+  }
   if (hasMedia) {
     kb.text("🖼 O'rtacha", `cs:${modeVariantCode("media", "m")}:${postId}`)
       .text("🖼 Batafsil", `cs:${modeVariantCode("media", "l")}:${postId}`)
@@ -167,6 +177,15 @@ function versionConfirmKeyboard(versionId: string): InlineKeyboard {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Variant tanlash klaviaturasini quradi: rasm bor-yo'qligi, maxsus versiyalar va (bo'lsa) belgilangan versiya. */
+async function buildVariantKeyboard(postId: string): Promise<InlineKeyboard> {
+  const mediaCheck = await computeChannelPost(postId, "media", "m");
+  const versions = await listVersionChoices(postId);
+  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  const marked = post && parseStoredChoice(post.channelChoice) ? await resolveChannelChoice(post) : null;
+  return channelVariantKeyboard(postId, mediaCheck.ok, versions, marked?.label ?? null);
+}
+
 /** Versiya id'sidan postId (versiya yo'q yoki id noto'g'ri bo'lsa `null`). */
 async function postIdForVersion(versionId: string): Promise<string | null> {
   if (!UUID_RE.test(versionId)) return null;
@@ -188,13 +207,16 @@ function channelConfirmKeyboard(postId: string, mode: ChannelMode, variant: Chan
 }
 
 async function notificationText(payload: PostSubmittedEventPayload): Promise<string> {
-  const [row] = await db.select({ contentText: posts.contentText }).from(posts).where(eq(posts.id, payload.id)).limit(1);
+  const [row] = await db.select().from(posts).where(eq(posts.id, payload.id)).limit(1);
   const excerpt = truncate(stripHtml(row?.contentText ?? ""), EXCERPT_LIMIT);
+  // Xodim kanal versiyasini tayyorlagan bo'lsa — qaysi biri ekani xabarda ko'rinadi.
+  const marked = row && parseStoredChoice(row.channelChoice) ? await resolveChannelChoice(row) : null;
   return [
     "📝 Ko'rib chiqish uchun yangi post",
     "",
     `<b>${escapeHtml(payload.title)}</b>`,
     `Yozgan: ${escapeHtml(payload.authorName)}`,
+    ...(marked ? [`⭐ Kanal versiyasi tayyorlangan: ${escapeHtml(truncate(marked.label, 60))}`] : []),
     "",
     escapeHtml(excerpt),
   ].join("\n");
@@ -269,6 +291,95 @@ export async function handleReviewNoteReply(
   await ctx.reply("✅ Izoh yuborildi — xodim admin panelda ko'radi.");
 }
 
+/**
+ * Avtomatik rejim+uzunlik tanlandi (`cs:` yoki ⭐ `cm:`): preflight -> aniq preview -> tasdiqlash tugmalari.
+ * Tasdiqlash (`cc:ok:`) keyin `sendPostToChannel` ni chaqiradi (idempotent).
+ */
+async function handleAutoSelection(ctx: Context, postId: string, mode: ChannelMode, variant: ChannelVariant): Promise<void> {
+  const computed = await computeChannelPost(postId, mode, variant);
+  if (!computed.ok) {
+    const text =
+      computed.reason === "not_found"
+        ? "Post topilmadi"
+        : computed.reason === "not_published"
+          ? "Post chop etilmagan"
+          : computed.reason === "no_media"
+            ? "Postda rasm yo'q — 📝 Rasmsiz rejimni tanlang"
+            : "Noto'g'ri kombinatsiya";
+    await ctx.answerCallbackQuery({ text });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+  const chatId = ctx.chat?.id ?? ctx.callbackQuery?.message?.chat.id;
+  if (!chatId) return;
+
+  try {
+    // Server preflight (panel bilan bir xil): o'tmasa sabablar ko'rsatiladi, tugmalar qoladi.
+    const check = await computeChannelPreflight(postId, { mode, variant }, { requirePublished: true });
+    if (check.ok && !check.preflight.canSend) {
+      await bot!.api.sendMessage(chatId, preflightReasonsHtml(check.preflight), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    }
+    // AYNAN shu ko'rinish kanalga yuboriladi — admin chatida oldindan namuna.
+    await sendChannelPreviewToChat(chatId, computed.data);
+    await bot!.api.sendMessage(chatId, "Shu ko'rinishda kanalga yuborilsinmi?", {
+      reply_markup: channelConfirmKeyboard(postId, mode, variant),
+    });
+  } catch (error: unknown) {
+    console.error("Kanal oldindan ko'rishni yuborishda xatolik:", error);
+    await bot!.api.sendMessage(chatId, "Oldindan ko'rishni tayyorlashda xatolik yuz berdi.");
+  }
+}
+
+/** Maxsus versiya tanlandi (`cv:` yoki ⭐ `cm:`): preflight -> aniq preview -> tasdiqlash tugmalari (`cvc:ok:` keyin yuboradi). */
+async function handleVersionSelection(ctx: Context, versionId: string): Promise<void> {
+  const postId = await postIdForVersion(versionId);
+  if (!postId) {
+    await ctx.answerCallbackQuery({ text: "Versiya topilmadi" });
+    return;
+  }
+
+  const computed = await computeChannelVersionPost(postId, versionId);
+  if (!computed.ok) {
+    await ctx.answerCallbackQuery({
+      text:
+        computed.reason === "not_published"
+          ? "Post chop etilmagan"
+          : computed.reason === "no_media"
+            ? "Versiyada rasm yo'q"
+            : "Versiya topilmadi",
+    });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+  const chatId = ctx.chat?.id ?? ctx.callbackQuery?.message?.chat.id;
+  if (!chatId) return;
+
+  try {
+    const check = await computeChannelPreflight(postId, { versionId }, { requirePublished: true });
+    if (check.ok && !check.preflight.canSend) {
+      await bot!.api.sendMessage(chatId, preflightReasonsHtml(check.preflight), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    }
+    await sendChannelPreviewToChat(chatId, computed.data);
+    await bot!.api.sendMessage(chatId, `Shu ko'rinishda (✍️ ${escapeHtml(truncate(computed.data.versionName ?? "", 60))}) kanalga yuborilsinmi?`, {
+      parse_mode: "HTML",
+      reply_markup: versionConfirmKeyboard(versionId),
+    });
+  } catch (error: unknown) {
+    console.error("Versiya oldindan ko'rishni yuborishda xatolik:", error);
+    await bot!.api.sendMessage(chatId, "Oldindan ko'rishni tayyorlashda xatolik yuz berdi.");
+  }
+}
+
 /** `bot.ts` — bot instansi (qayta) yaratilganda chaqiradi — callback_query handler'ini JORIY bot'ga ulaydi. */
 export function registerReviewHandlers(): void {
   if (!bot) return;
@@ -305,15 +416,13 @@ export function registerReviewHandlers(): void {
         // Kanalga yuborish ENDI avtomatik EMAS — shu yerda rejim+uzunlik so'raymiz.
         // 🖼 qatori faqat postda kover yoki band ichida rasm bo'lsa ko'rsatiladi.
         try {
-          const mediaCheck = await computeChannelPost(postId, "media", "m");
-          const versions = await listVersionChoices(postId);
           await bot!.api.sendMessage(
             message.chat.id,
             `Kanalga yuborish uchun rejim va uzunlikni tanlang: <b>${escapeHtml(result.post.title)}</b>`,
             {
               parse_mode: "HTML",
               link_preview_options: { is_disabled: true },
-              reply_markup: channelVariantKeyboard(postId, mediaCheck.ok, versions),
+              reply_markup: await buildVariantKeyboard(postId),
             },
           );
         } catch (error: unknown) {
@@ -360,45 +469,7 @@ export function registerReviewHandlers(): void {
 
     const parsed = parseModeVariantCode(code);
     if (!parsed) return next();
-    const { mode, variant } = parsed;
-
-    const computed = await computeChannelPost(postId, mode, variant);
-    if (!computed.ok) {
-      const text =
-        computed.reason === "not_found"
-          ? "Post topilmadi"
-          : computed.reason === "not_published"
-            ? "Post chop etilmagan"
-            : computed.reason === "no_media"
-              ? "Postda rasm yo'q — 📝 Rasmsiz rejimni tanlang"
-              : "Noto'g'ri kombinatsiya";
-      await ctx.answerCallbackQuery({ text });
-      return;
-    }
-
-    await ctx.answerCallbackQuery();
-    const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
-    if (!chatId) return;
-
-    try {
-      // Server preflight (panel bilan bir xil): o'tmasa sabablar ko'rsatiladi, tugmalar qoladi.
-      const check = await computeChannelPreflight(postId, { mode, variant }, { requirePublished: true });
-      if (check.ok && !check.preflight.canSend) {
-        await bot!.api.sendMessage(chatId, preflightReasonsHtml(check.preflight), {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        });
-        return;
-      }
-      // AYNAN shu ko'rinish kanalga yuboriladi — admin chatida oldindan namuna.
-      await sendChannelPreviewToChat(chatId, computed.data);
-      await bot!.api.sendMessage(chatId, "Shu ko'rinishda kanalga yuborilsinmi?", {
-        reply_markup: channelConfirmKeyboard(postId, mode, variant),
-      });
-    } catch (error: unknown) {
-      console.error("Kanal oldindan ko'rishni yuborishda xatolik:", error);
-      await bot!.api.sendMessage(chatId, "Oldindan ko'rishni tayyorlashda xatolik yuz berdi.");
-    }
+    await handleAutoSelection(ctx, postId, parsed.mode, parsed.variant);
   });
 
   // Rejim+uzunlik tasdiqlash (`cc:<ok|back|cancel>:<kod|->:<postId>`).
@@ -416,10 +487,8 @@ export function registerReviewHandlers(): void {
       await ctx.answerCallbackQuery();
       const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
       if (!chatId) return;
-      const mediaCheck = await computeChannelPost(postId, "media", "m");
-      const versions = await listVersionChoices(postId);
       await bot!.api.sendMessage(chatId, "Kanalga yuborish uchun rejim va uzunlikni tanlang:", {
-        reply_markup: channelVariantKeyboard(postId, mediaCheck.ok, versions),
+        reply_markup: await buildVariantKeyboard(postId),
       });
       return;
     }
@@ -458,46 +527,27 @@ export function registerReviewHandlers(): void {
     const [prefix, versionId] = ctx.callbackQuery.data.split(":");
     if (prefix !== "cv" || !versionId) return next();
 
-    const postId = await postIdForVersion(versionId);
-    if (!postId) {
-      await ctx.answerCallbackQuery({ text: "Versiya topilmadi" });
+    await handleVersionSelection(ctx, versionId);
+  });
+
+  // ⭐ Belgilangan versiya (`cm:<postId>`) — postdagi JORIY belgi hal qilinadi, so'ng boshqa variantlar bilan bir xil oqim.
+  bot.on("callback_query:data", async (ctx, next) => {
+    const [prefix, postId] = ctx.callbackQuery.data.split(":");
+    if (prefix !== "cm" || !postId) return next();
+    if (!UUID_RE.test(postId)) {
+      await ctx.answerCallbackQuery({ text: "Post topilmadi" });
       return;
     }
-
-    const computed = await computeChannelVersionPost(postId, versionId);
-    if (!computed.ok) {
-      await ctx.answerCallbackQuery({
-        text:
-          computed.reason === "not_published"
-            ? "Post chop etilmagan"
-            : computed.reason === "no_media"
-              ? "Versiyada rasm yo'q"
-              : "Versiya topilmadi",
-      });
+    const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+    const choice = post ? parseStoredChoice(post.channelChoice) : null;
+    if (!choice) {
+      await ctx.answerCallbackQuery({ text: "Belgilangan versiya yo'q" });
       return;
     }
-
-    await ctx.answerCallbackQuery();
-    const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
-    if (!chatId) return;
-
-    try {
-      const check = await computeChannelPreflight(postId, { versionId }, { requirePublished: true });
-      if (check.ok && !check.preflight.canSend) {
-        await bot!.api.sendMessage(chatId, preflightReasonsHtml(check.preflight), {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        });
-        return;
-      }
-      await sendChannelPreviewToChat(chatId, computed.data);
-      await bot!.api.sendMessage(chatId, `Shu ko'rinishda (✍️ ${escapeHtml(truncate(computed.data.versionName ?? "", 60))}) kanalga yuborilsinmi?`, {
-        parse_mode: "HTML",
-        reply_markup: versionConfirmKeyboard(versionId),
-      });
-    } catch (error: unknown) {
-      console.error("Versiya oldindan ko'rishni yuborishda xatolik:", error);
-      await bot!.api.sendMessage(chatId, "Oldindan ko'rishni tayyorlashda xatolik yuz berdi.");
+    if (choice.kind === "version") {
+      await handleVersionSelection(ctx, choice.versionId);
+    } else {
+      await handleAutoSelection(ctx, postId, choice.mode, choice.variant);
     }
   });
 
@@ -521,10 +571,8 @@ export function registerReviewHandlers(): void {
     if (action === "back") {
       await ctx.answerCallbackQuery();
       if (!chatId) return;
-      const mediaCheck = await computeChannelPost(postId, "media", "m");
-      const versions = await listVersionChoices(postId);
       await bot!.api.sendMessage(chatId, "Kanalga yuborish uchun rejim va uzunlikni tanlang:", {
-        reply_markup: channelVariantKeyboard(postId, mediaCheck.ok, versions),
+        reply_markup: await buildVariantKeyboard(postId),
       });
       return;
     }

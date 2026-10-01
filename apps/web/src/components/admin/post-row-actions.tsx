@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Archive, BarChart3, Eye, MoreHorizontal, Pencil, Pin, PinOff, Send, Trash2, Undo2 } from "lucide-react";
+import { Archive, BarChart3, Eye, MoreHorizontal, Pencil, Pin, PinOff, Send, Star, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import type { AdminPostListItem } from "@blog/shared";
 import {
@@ -33,6 +33,11 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
   const [pending, startTransition] = useTransition();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [channelSendOpen, setChannelSendOpen] = useState(false);
+  // Admin: chop etilgan post — yuborish, aks holda tayyorlash; xodim: faqat o'z postlari (draft/changes_requested/in_review) uchun taklif.
+  const channelMode = !isAdmin ? "suggest" : post.status === "published" ? "send" : "prepare";
+  const canOpenChannel = isAdmin
+    ? post.status !== "archived"
+    : post.status === "draft" || post.status === "changes_requested" || post.status === "in_review";
 
   function run(action: () => Promise<unknown>, successMessage: string) {
     startTransition(async () => {
@@ -110,13 +115,19 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
               Statistika
             </Link>
           </DropdownMenuItem>
+          {!isAdmin && canOpenChannel ? (
+            <DropdownMenuItem onSelect={() => setChannelSendOpen(true)}>
+              <Star />
+              Kanal versiyasi
+            </DropdownMenuItem>
+          ) : null}
           {isAdmin ? (
             <>
               <DropdownMenuSeparator />
-              {post.status === "published" ? (
+              {canOpenChannel ? (
                 <DropdownMenuItem onSelect={() => setChannelSendOpen(true)}>
-                  <Send />
-                  Kanalga yuborish
+                  {post.status === "published" ? <Send /> : <Star />}
+                  {post.status === "published" ? "Kanalga yuborish" : "Kanal versiyasi"}
                 </DropdownMenuItem>
               ) : null}
               {post.status === "published" ? (
@@ -175,8 +186,18 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
         </AlertDialogContent>
       </AlertDialog>
 
-      {isAdmin && post.status === "published" ? (
-        <ChannelSendDialog postId={post.id} open={channelSendOpen} onOpenChange={setChannelSendOpen} />
+      {canOpenChannel ? (
+        <ChannelSendDialog
+          postId={post.id}
+          open={channelSendOpen}
+          onOpenChange={(next) => {
+            setChannelSendOpen(next);
+            // Belgi/yuborish o'zgargan bo'lishi mumkin — ro'yxat (★ belgisi) yangilansin.
+            if (!next) router.refresh();
+          }}
+          mode={channelMode}
+          readOnly={!isAdmin && post.status === "in_review"}
+        />
       ) : null}
     </>
   );

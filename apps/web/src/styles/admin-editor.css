@@ -3,23 +3,28 @@
 .slash-menu {
   z-index: 60;
   display: flex;
-  min-width: 12rem;
-  max-height: 16rem;
+  width: 20rem;
+  max-width: calc(100vw - 1rem);
+  max-height: min(18rem, 45svh);
   flex-direction: column;
   gap: 0.125rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 0.75rem;
   border: 1px solid var(--border);
   background: var(--popover);
   color: var(--popover-foreground);
   padding: 0.25rem;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
   font-size: 0.8125rem;
 }
 
 .slash-menu-item {
-  display: block;
+  display: flex;
   width: 100%;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.625rem;
   border-radius: 0.5rem;
   padding: 0.375rem 0.5rem;
   text-align: left;
@@ -31,6 +36,36 @@
 .slash-menu-item.is-selected,
 .slash-menu-item:hover {
   background: var(--muted);
+}
+
+.slash-menu-icon {
+  display: flex;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--background);
+}
+
+.slash-menu-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.slash-menu-title {
+  font-weight: 500;
+}
+
+.slash-menu-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
 }
 
 .slash-menu-empty {
@@ -101,4 +136,379 @@
   background: var(--popover);
   padding: 0.25rem;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
+/* ------------------------------------------------------------------ yozish muhiti */
+
+.tiptap-editor-content .tiptap {
+  padding-bottom: calc(30vh + var(--editor-kb, 0px));
+}
+
+.tiptap-editor-content .tiptap h2,
+.tiptap-editor-content .tiptap h3 {
+  scroll-margin-top: 9rem;
+}
+
+/* Rasm: tanlanganda halqa, alt matn yo'q bo'lsa — yumshoq ogohlantirish. */
+.tiptap img {
+  cursor: pointer;
+}
+.tiptap img.ProseMirror-selectednode {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.tiptap img.is-missing-alt {
+  outline: 2px dashed color-mix(in oklab, #d97706 70%, transparent);
+  outline-offset: 2px;
+}
+.tiptap img.ProseMirror-selectednode.is-missing-alt {
+  outline-style: solid;
+}
+
+/* Yuklanayotgan rasm uchun joy egallovchi. */
+.upload-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-content: center;
+  min-height: 7rem;
+  margin: 1.25em 0;
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.upload-placeholder-bar {
+  display: block;
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+.upload-placeholder-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--primary);
+  transition: width 0.2s ease;
+}
+.upload-placeholder::after {
+  content: "";
+  height: 0;
+}
+
+/* Kod bloki: ko'rinib turadigan til tanlagich. */
+.tiptap .code-block-view {
+  position: relative;
+  margin-top: 1.25em;
+}
+.tiptap .code-block-view pre {
+  margin-top: 0;
+  padding-top: 2.25rem;
+  background: var(--muted);
+}
+.tiptap .code-block-bar {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
+  z-index: 1;
+  display: flex;
+}
+.tiptap .code-lang-select {
+  min-height: 1.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--background);
+  padding: 0 0.375rem;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--foreground);
+  outline: none;
+}
+.tiptap .code-lang-select:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+/* Shablon maslahat matni — yozilgach yo'qoladi. */
+.tiptap p.is-template-hint {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+/* Jadval: tor ekranda gorizontal scroll jadval ichida qoladi. */
+.tiptap .tableWrapper {
+  overflow-x: auto;
+}
+.tiptap td,
+.tiptap th {
+  min-width: 4rem;
+  vertical-align: top;
+}
+.tiptap .selectedCell {
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+}
+
+/* ------------------------------------------------------------------ asboblar paneli */
+
+.editor-toolbar {
+  z-index: 20;
+  background: color-mix(in oklab, var(--background) 96%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+@media (min-width: 768px) {
+  .editor-toolbar {
+    position: sticky;
+    top: var(--editor-header-h, 3.5rem);
+    margin-inline: -2rem;
+    padding-inline: 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 767px) {
+  .editor-toolbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 70;
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+  .editor-toolbar[data-visible="false"] {
+    transform: translateY(110%);
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+.editor-toolbar-scroll {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 0.25rem 0.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+.editor-toolbar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-tb-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+@media (max-width: 767px) {
+  .editor-tb-btn {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  .editor-tb-btn.is-menu {
+    min-width: 2.75rem;
+  }
+}
+.editor-tb-btn.is-menu {
+  width: auto;
+  gap: 0.125rem;
+  padding-inline: 0.375rem;
+}
+.editor-tb-btn:hover:not(:disabled) {
+  background: var(--muted);
+}
+.editor-tb-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.editor-tb-btn.is-active {
+  background: var(--muted);
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.editor-tb-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.editor-tb-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 1.25rem;
+  margin-inline: 0.25rem;
+  background: var(--border);
+}
+
+.editor-tb-menu {
+  z-index: 80;
+  display: flex;
+  min-width: 13rem;
+  max-width: calc(100vw - 1rem);
+  flex-direction: column;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+  font-size: 0.875rem;
+}
+.editor-tb-menu-item {
+  display: flex;
+  min-height: 2.25rem;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0 0.5rem;
+  background: transparent;
+  cursor: pointer;
+}
+@media (max-width: 767px) {
+  .editor-tb-menu-item {
+    min-height: 2.75rem;
+  }
+}
+.editor-tb-menu-item:hover,
+.editor-tb-menu-item.is-active {
+  background: var(--muted);
+}
+
+/* Suzuvchi panellar (havola / rasm / jadval). */
+.editor-floating-panel {
+  z-index: 75;
+  max-width: calc(100vw - 1rem);
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+  font-size: 0.8125rem;
+}
+.editor-panel-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 1.75rem;
+  border-radius: 0.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+@media (max-width: 767px) {
+  .editor-panel-btn {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+    justify-content: center;
+  }
+}
+.editor-panel-btn:hover {
+  background: var(--muted);
+}
+.editor-panel-btn.is-primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.editor-panel-btn.is-danger {
+  color: var(--destructive);
+}
+.editor-panel-input {
+  min-height: 1.875rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--background);
+  padding: 0 0.5rem;
+  font-size: 0.8125rem;
+  outline: none;
+}
+@media (max-width: 767px) {
+  .editor-panel-input {
+    min-height: 2.75rem;
+    font-size: 1rem; /* iOS fokusda zoom qilmasin */
+  }
+}
+.editor-panel-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.editor-panel-input.is-warn {
+  border-color: color-mix(in oklab, #d97706 70%, var(--border));
+}
+.editor-panel-input[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+.editor-insert-plus {
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.editor-insert-plus:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+/* Pastki holat paneli (desktop). */
+.editor-status-footer {
+  display: none;
+}
+@media (min-width: 768px) {
+  .editor-status-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-inline: -2rem;
+    padding: 0.375rem 2rem;
+    border-top: 1px solid var(--border);
+    background: color-mix(in oklab, var(--background) 96%, transparent);
+    backdrop-filter: blur(6px);
+  }
+}
+
+/* Diqqat rejimi: admin navigatsiyasi va yon panel yashiriladi, ustun markazda. */
+html[data-editor-focus] [data-admin-chrome] {
+  display: none !important;
+}
+html[data-editor-focus] [data-editor-focus-hide] {
+  display: none !important;
+}
+html[data-editor-focus] [data-editor-column] {
+  margin-inline: auto;
+  max-width: 46rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-toolbar,
+  .upload-placeholder-fill {
+    transition: none;
+  }
+}
+
+html[data-editor-focus] .editor-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
