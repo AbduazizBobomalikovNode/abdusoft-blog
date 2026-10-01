@@ -65,7 +65,7 @@ export function StaffEditorPanel({
                 <button
                   type="button"
                   onClick={onExcerptAuto}
-                  className="rounded text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                  className="-mr-2 rounded px-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring max-md:min-h-11"
                 >
                   Avtomatik
                 </button>

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PostSettingsSchema } from "./post-settings.js";
+import { TELEGRAM_LIMITS } from "./telegram-limits.js";
 
 export const TagSchema = z.object({
   id: z.string(),
@@ -153,6 +154,8 @@ export const AdminPostListItemSchema = z.object({
   createdBy: PostAuthorRefSchema.nullable().default(null),
   /** `changes_requested` holatida admin qoldirgan izoh. */
   reviewNote: z.string().nullable().default(null),
+  /** Rejalashtirilgan post uchun kanal rejasi mavjudmi ("→ kanal" belgisi). */
+  hasChannelPlan: z.boolean().default(false),
 });
 export type AdminPostListItem = z.infer<typeof AdminPostListItemSchema>;
 
@@ -208,8 +211,8 @@ export const ChannelVariantSchema = z.union([z.literal("s"), z.literal("m"), z.l
 export type ChannelVariant = z.infer<typeof ChannelVariantSchema>;
 
 /** Telegramning qattiq (haqiqiy API) chegaralari — variant byudjetlari doim shundan past. */
-export const CHANNEL_CAPTION_HARD_LIMIT = 1024;
-export const CHANNEL_TEXT_HARD_LIMIT = 4096;
+export const CHANNEL_CAPTION_HARD_LIMIT: number = TELEGRAM_LIMITS.captionMaxChars;
+export const CHANNEL_TEXT_HARD_LIMIT: number = TELEGRAM_LIMITS.textMaxChars;
 
 /** Har bir rejim uchun ruxsat etilgan variantlar (tartib — UI tugmalari tartibi bilan mos). */
 export const CHANNEL_MODE_VARIANTS: Record<ChannelMode, readonly ChannelVariant[]> = {
@@ -236,6 +239,37 @@ export function channelVariantBudget(mode: ChannelMode, variant: ChannelVariant)
   return CHANNEL_VARIANT_BUDGETS[mode][variant];
 }
 
+/**
+ * Rejalashtirilgan postning kanal rejasi — post saytga chiqqach, `delayMinutes`
+ * daqiqadan keyin kanalga yuboriladi: yo avtomatik `variant` bilan, yo
+ * `versionId` (maxsus versiya, `channel_post_versions`) bilan. `attempts` —
+ * scheduler'ning (server tomonidagi) qayta urinishlar hisoblagichi.
+ */
+export const ChannelPlanSchema = z
+  .object({
+    mode: ChannelModeSchema,
+    variant: ChannelVariantSchema.optional(),
+    versionId: z.string().uuid().optional(),
+    delayMinutes: z.number().int().min(0).max(10080),
+    attempts: z.number().int().min(0).max(100).optional(),
+  })
+  .refine((plan) => (plan.versionId ? true : plan.variant !== undefined && isChannelComboValid(plan.mode, plan.variant)), {
+    message: "Bu uzunlik ushbu rejim uchun mos emas",
+    path: ["variant"],
+  });
+export type ChannelPlan = z.infer<typeof ChannelPlanSchema>;
+
+/** Yuborish/ko'rish tanlovi: avtomatik `{mode, variant}` yoki maxsus `{versionId}`. */
+export const ChannelAutoSelectionSchema = z
+  .object({ mode: ChannelModeSchema, variant: ChannelVariantSchema })
+  .refine((v) => isChannelComboValid(v.mode, v.variant), {
+    message: "Bu uzunlik ushbu rejim uchun mos emas",
+    path: ["variant"],
+  });
+export const ChannelVersionSelectionSchema = z.object({ versionId: z.string().uuid() });
+export const ChannelSelectionSchema = z.union([ChannelVersionSelectionSchema, ChannelAutoSelectionSchema]);
+export type ChannelSelection = z.infer<typeof ChannelSelectionSchema>;
+
 export const ChannelMessageTypeSchema = z.union([z.literal("text"), z.literal("photo"), z.literal("album")]);
 export type ChannelMessageTypeValue = z.infer<typeof ChannelMessageTypeSchema>;
 
@@ -253,46 +287,181 @@ export const ChannelAlreadySentSchema = z
   .object({
     at: z.string(),
     mode: ChannelModeSchema,
-    variant: ChannelVariantSchema,
+    /** Avtomatik variant bilan yuborilgan bo'lsa; maxsus versiya bilan yuborilgan bo'lsa `null`. */
+    variant: ChannelVariantSchema.nullable(),
+    versionId: z.string().nullable().default(null),
+    versionName: z.string().nullable().default(null),
     messageUrl: z.string().nullable(),
   })
   .nullable();
 export type ChannelAlreadySent = z.infer<typeof ChannelAlreadySentSchema>;
 
-export const ChannelPreviewRequestSchema = z.object({
-  mode: ChannelModeSchema,
-  variant: ChannelVariantSchema,
-});
+export const ChannelPreviewRequestSchema = ChannelSelectionSchema;
 export type ChannelPreviewRequest = z.infer<typeof ChannelPreviewRequestSchema>;
+
+export const ChannelInfoSchema = z.object({
+  /** `getChat` dan kanal nomi — topilmasa `null` (UI sozlangan id'ni ko'rsatadi). */
+  title: z.string().nullable(),
+  username: z.string().nullable(),
+});
+export type ChannelInfo = z.infer<typeof ChannelInfoSchema>;
 
 export const ChannelPreviewResponseSchema = z.object({
   mode: ChannelModeSchema,
-  variant: ChannelVariantSchema,
+  variant: ChannelVariantSchema.nullable(),
+  versionId: z.string().nullable().default(null),
   captionHtml: z.string(),
   visibleLength: z.number(),
   limit: z.number(),
   truncated: z.boolean(),
   media: z.array(ChannelMediaItemSchema),
   alreadySent: ChannelAlreadySentSchema,
+  channel: ChannelInfoSchema,
 });
 export type ChannelPreviewResponse = z.infer<typeof ChannelPreviewResponseSchema>;
 
-export const ChannelSendRequestSchema = z.object({
-  mode: ChannelModeSchema,
-  variant: ChannelVariantSchema,
-  replaceExisting: z.boolean().optional(),
-});
+export const ChannelSendRequestSchema = z.union([
+  z.object({ versionId: z.string().uuid(), replaceExisting: z.boolean().optional() }),
+  z.object({ mode: ChannelModeSchema, variant: ChannelVariantSchema, replaceExisting: z.boolean().optional() }),
+]);
 export type ChannelSendRequest = z.infer<typeof ChannelSendRequestSchema>;
 
 export const ChannelSendResponseSchema = z.object({
   mode: ChannelModeSchema,
-  variant: ChannelVariantSchema,
+  variant: ChannelVariantSchema.nullable(),
+  versionId: z.string().nullable().default(null),
   messageType: ChannelMessageTypeSchema,
   messageIds: z.array(z.number()),
   messageUrl: z.string().nullable(),
   sentAt: z.string(),
 });
 export type ChannelSendResponse = z.infer<typeof ChannelSendResponseSchema>;
+
+// --- Preflight ("Telegram cheklovlari") ---
+
+export const ChannelCheckStatusSchema = z.union([z.literal("ok"), z.literal("warn"), z.literal("error")]);
+export type ChannelCheckStatus = z.infer<typeof ChannelCheckStatusSchema>;
+
+/** UI guruhlari: Matn / Rasmlar / Albom / Sozlamalar. */
+export const ChannelCheckGroupSchema = z.union([
+  z.literal("text"),
+  z.literal("media"),
+  z.literal("album"),
+  z.literal("config"),
+]);
+export type ChannelCheckGroup = z.infer<typeof ChannelCheckGroupSchema>;
+
+export const ChannelCheckSchema = z.object({
+  /** Barqaror kalit, masalan `media.aspect`, `text.length`. */
+  id: z.string(),
+  group: ChannelCheckGroupSchema,
+  status: ChannelCheckStatusSchema,
+  /** Qisqa sarlavha (masalan "Nisbat"). */
+  title: z.string(),
+  /** Qisqa o'zbekcha xabar (masalan "nisbat 24:1, ruxsat 20:1 — rasmni qirqing"). */
+  message: z.string(),
+  /** Joriy qiymat (inson o'qiydigan matn) va ruxsat etilgan chegara. */
+  value: z.string().nullable(),
+  limit: z.string().nullable(),
+  /** Rasm bilan bog'liq tekshiruvlar uchun rasm URL'i. */
+  imageUrl: z.string().nullable(),
+});
+export type ChannelCheck = z.infer<typeof ChannelCheckSchema>;
+
+export const ChannelMediaFileInfoSchema = z.object({
+  bytes: z.number(),
+  width: z.number(),
+  height: z.number(),
+  format: z.string(),
+});
+
+export const ChannelMediaReportSchema = z.object({
+  url: z.string(),
+  /** Fayl nomi (UI uchun), masalan "cover.webp". */
+  name: z.string(),
+  kind: ChannelMediaKindSchema,
+  original: ChannelMediaFileInfoSchema.extend({ animated: z.boolean() }).nullable(),
+  sent: ChannelMediaFileInfoSchema.nullable(),
+  error: z.string().nullable(),
+});
+export type ChannelMediaReport = z.infer<typeof ChannelMediaReportSchema>;
+
+export const ChannelPreflightResponseSchema = z.object({
+  canSend: z.boolean(),
+  checks: z.array(ChannelCheckSchema),
+  media: z.array(ChannelMediaReportSchema),
+  text: z.object({ visibleLength: z.number(), limit: z.number() }),
+  /** Albom bo'yicha jami yuklanadigan bayt (JPEG'ga aylantirilgandan keyin). */
+  totalUploadBytes: z.number(),
+  errorCount: z.number(),
+  warnCount: z.number(),
+});
+export type ChannelPreflightResponse = z.infer<typeof ChannelPreflightResponseSchema>;
+
+/** Preflight rad etganda 422 javobi. */
+export const ChannelPreflightFailedSchema = z.object({
+  error: z.string(),
+  preflight: ChannelPreflightResponseSchema,
+});
+export type ChannelPreflightFailed = z.infer<typeof ChannelPreflightFailedSchema>;
+
+// --- Maxsus (custom) kanal versiyalari ---
+
+export const CHANNEL_VERSION_NAME_MAX = 80;
+
+export const ChannelVersionSchema = z.object({
+  id: z.string(),
+  postId: z.string(),
+  name: z.string(),
+  mode: ChannelModeSchema,
+  /** Cheklangan Tiptap hujjati (paragraph, hardBreak, bold/italic/underline/strike/code/link, blockquote, ro'yxatlar). */
+  contentJson: z.unknown(),
+  textHtml: z.string(),
+  visibleLength: z.number(),
+  /** Rejimga mos Telegram qattiq chegarasi (1024 / 4096). */
+  limit: z.number(),
+  overLimit: z.boolean(),
+  imageUrls: z.array(z.string()),
+  baseVariant: ChannelVariantSchema.nullable(),
+  /** Manba post versiyadan keyin o'zgargan ("post o'zgargan" ishorasi). */
+  postChanged: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ChannelVersion = z.infer<typeof ChannelVersionSchema>;
+
+/** Postdagi tanlanishi mumkin bo'lgan rasmlar (kover birinchi). */
+export const ChannelPostImageOptionSchema = z.object({
+  url: z.string(),
+  kind: ChannelMediaKindSchema,
+  alt: z.string().nullable(),
+});
+export type ChannelPostImageOption = z.infer<typeof ChannelPostImageOptionSchema>;
+
+export const ChannelVersionsResponseSchema = z.object({
+  versions: z.array(ChannelVersionSchema),
+  /** Avtomatik variantlar xulosasi (UI "Avtomatik" bo'limi uchun). */
+  autoVariants: z.array(z.object({ mode: ChannelModeSchema, variant: ChannelVariantSchema, limit: z.number() })),
+  /** Postdagi rasmlar (kover + kontent) — rasm tanlagich uchun. */
+  postImages: z.array(ChannelPostImageOptionSchema),
+});
+export type ChannelVersionsResponse = z.infer<typeof ChannelVersionsResponseSchema>;
+
+export const CreateChannelVersionBodySchema = z.object({
+  mode: ChannelModeSchema,
+  fromVariant: ChannelVariantSchema.optional(),
+  fromVersionId: z.string().uuid().optional(),
+  name: z.string().trim().min(1).max(CHANNEL_VERSION_NAME_MAX).optional(),
+});
+export type CreateChannelVersionBody = z.infer<typeof CreateChannelVersionBodySchema>;
+
+export const UpdateChannelVersionBodySchema = z.object({
+  name: z.string().trim().min(1).max(CHANNEL_VERSION_NAME_MAX).optional(),
+  contentJson: z.unknown().optional(),
+  imageUrls: z.array(z.string()).max(TELEGRAM_LIMITS.mediaGroupMaxItems).optional(),
+  mode: ChannelModeSchema.optional(),
+});
+export type UpdateChannelVersionBody = z.infer<typeof UpdateChannelVersionBodySchema>;
 
 export const AdminPostDetailSchema = z.object({
   id: z.string(),
@@ -304,6 +473,10 @@ export const AdminPostDetailSchema = z.object({
   status: AdminPostStatusSchema,
   publishedAt: z.string().nullable(),
   scheduledAt: z.string().nullable(),
+  /** Rejalashtirilgan post uchun kanal rejasi (yo'q bo'lsa `null`). */
+  channelPlan: ChannelPlanSchema.nullable().default(null),
+  /** Post chop etilgach kanalga yuborish vaqti (hali yuborilmagan bo'lsa). */
+  channelSendAt: z.string().nullable().default(null),
   pinned: z.boolean(),
   settings: PostSettingsSchema,
   tags: z.array(TagSchema),
@@ -331,6 +504,8 @@ export const UpdatePostBodySchema = z.object({
   settings: PostSettingsSchema.partial().optional(),
   pinned: z.boolean().optional(),
   scheduledAt: z.string().nullable().optional(),
+  /** Faqat admin; rejalashtirilgan postda kanal rejasini o'rnatadi/`null` bilan o'chiradi. */
+  channelPlan: ChannelPlanSchema.nullable().optional(),
 });
 export type UpdatePostBody = z.infer<typeof UpdatePostBodySchema>;
 
@@ -368,6 +543,8 @@ export type UpdatePostResponse = z.infer<typeof UpdatePostResponseSchema>;
 
 export const SchedulePostBodySchema = z.object({
   scheduledAt: z.string(),
+  /** `null`/yo'q — kanalga yuborilmaydi. */
+  channelPlan: ChannelPlanSchema.nullable().optional(),
 });
 export type SchedulePostBody = z.infer<typeof SchedulePostBodySchema>;
 

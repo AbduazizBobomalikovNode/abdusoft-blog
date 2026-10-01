@@ -6,9 +6,16 @@ import type {
   AdminPostDetail,
   BansListResponse,
   ChannelMode,
+  ChannelPlan,
+  ChannelPreflightResponse,
   ChannelPreviewResponse,
+  ChannelSelection,
   ChannelSendResponse,
   ChannelVariant,
+  ChannelVersion,
+  ChannelVersionsResponse,
+  CreateChannelVersionBody,
+  UpdateChannelVersionBody,
   CreatePostResponse,
   CreateStaffInviteResponse,
   CreateTagBody,
@@ -36,6 +43,8 @@ export class AdminApiError extends Error {
     message: string,
     /** `PUT /admin/settings` validatsiya xatosi bo'lsa — `{"telegram.webhookSecret": "..."}` ko'rinishida. */
     public fields?: Record<string, string>,
+    /** 422 (Telegram cheklovlari) javobida — tekshiruv hisoboti. */
+    public preflight?: ChannelPreflightResponse,
   ) {
     super(message);
     this.name = "AdminApiError";
@@ -96,7 +105,11 @@ async function adminJson<T>(path: string, options: RequestInit = {}): Promise<T>
       data && typeof data === "object" && "fields" in data && data.fields && typeof data.fields === "object"
         ? (data.fields as Record<string, string>)
         : undefined;
-    throw new AdminApiError(res.status, message, fields);
+    const preflight =
+      data && typeof data === "object" && "preflight" in data && data.preflight && typeof data.preflight === "object"
+        ? (data.preflight as ChannelPreflightResponse)
+        : undefined;
+    throw new AdminApiError(res.status, message, fields, preflight);
   }
 
   return data as T;
@@ -122,10 +135,10 @@ export const adminApi = {
   archivePost: (id: string) =>
     adminJson<LifecycleSummary>(`/admin/posts/${id}/archive`, { method: "POST" }),
 
-  schedulePost: (id: string, scheduledAt: string) =>
+  schedulePost: (id: string, scheduledAt: string, channelPlan?: ChannelPlan | null) =>
     adminJson<LifecycleSummary>(`/admin/posts/${id}/schedule`, {
       method: "POST",
-      ...jsonBody({ scheduledAt }),
+      ...jsonBody({ scheduledAt, channelPlan: channelPlan ?? null }),
     }),
 
   deletePost: (id: string) => adminJson<{ ok: true }>(`/admin/posts/${id}`, { method: "DELETE" }),
@@ -214,17 +227,40 @@ export const adminApi = {
   refreshTelegraph: (postId: string) =>
     adminJson<{ telegraphUrl: string | null }>(`/admin/posts/${postId}/telegram/telegraph`, { method: "POST" }),
 
-  channelPreview: (postId: string, mode: ChannelMode, variant: ChannelVariant) =>
+  /** Eski imzo (`mode, variant`) ham, yangi (`{ versionId }` yoki `{ mode, variant }`) ham ishlaydi. */
+  channelPreview: (postId: string, selectionOrMode: ChannelSelection | ChannelMode, variant?: ChannelVariant) =>
     adminJson<ChannelPreviewResponse>(`/admin/posts/${postId}/channel/preview`, {
       method: "POST",
-      ...jsonBody({ mode, variant }),
+      ...jsonBody(typeof selectionOrMode === "string" ? { mode: selectionOrMode, variant } : selectionOrMode),
     }),
 
-  channelSend: (postId: string, mode: ChannelMode, variant: ChannelVariant, replaceExisting?: boolean) =>
+  /** `forPlan: true` — rejalashtirish tekshiruvi (post chop etilgan bo'lishi shart emas). */
+  channelPreflight: (postId: string, selection: ChannelSelection, forPlan?: boolean) =>
+    adminJson<ChannelPreflightResponse>(`/admin/posts/${postId}/channel/preflight`, {
+      method: "POST",
+      ...jsonBody(forPlan ? { ...selection, forPlan: true } : selection),
+    }),
+
+  channelSend: (postId: string, selection: ChannelSelection, replaceExisting?: boolean) =>
     adminJson<ChannelSendResponse>(`/admin/posts/${postId}/channel/send`, {
       method: "POST",
-      ...jsonBody({ mode, variant, replaceExisting }),
+      ...jsonBody({ ...selection, replaceExisting }),
     }),
+
+  listChannelVersions: (postId: string) =>
+    adminJson<ChannelVersionsResponse>(`/admin/posts/${postId}/channel/versions`),
+
+  createChannelVersion: (postId: string, body: CreateChannelVersionBody) =>
+    adminJson<ChannelVersion>(`/admin/posts/${postId}/channel/versions`, { method: "POST", ...jsonBody(body) }),
+
+  updateChannelVersion: (postId: string, versionId: string, body: UpdateChannelVersionBody) =>
+    adminJson<ChannelVersion>(`/admin/posts/${postId}/channel/versions/${versionId}`, {
+      method: "PATCH",
+      ...jsonBody(body),
+    }),
+
+  deleteChannelVersion: (postId: string, versionId: string) =>
+    adminJson<{ ok: true }>(`/admin/posts/${postId}/channel/versions/${versionId}`, { method: "DELETE" }),
 
   channelResyncCaption: (postId: string) =>
     adminJson<{ ok: true }>(`/admin/posts/${postId}/channel/resync-caption`, { method: "POST" }),

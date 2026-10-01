@@ -40,7 +40,7 @@ function NavLinks({
             href={item.href}
             onClick={onNavigate}
             className={cn(
-              "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
+              "flex min-h-11 items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors md:min-h-0",
               active
                 ? "bg-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -95,7 +95,7 @@ export function AdminShell({
             href={site.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            className="flex min-h-11 items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground md:min-h-0"
           >
             <ExternalLink className="size-4" />
             Saytga o&apos;tish
@@ -110,10 +110,10 @@ export function AdminShell({
 
       <div className="flex min-h-svh min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
-        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background px-4 py-3 md:hidden">
+        <header className="sticky top-0 z-40 flex h-13 items-center justify-between border-b border-border bg-background px-4 md:hidden">
           <span className="text-sm font-semibold tracking-tight">{titleForPath(pathname, me.role)}</span>
-          <Button variant="ghost" size="icon-sm" onClick={() => setMobileNavOpen(true)} aria-label="Menyu">
-            <Menu className="size-4" />
+          <Button variant="ghost" size="icon-sm" className="-mr-2 size-11" onClick={() => setMobileNavOpen(true)} aria-label="Menyu">
+            <Menu className="size-5" />
           </Button>
         </header>
 
@@ -133,7 +133,7 @@ export function AdminShell({
                 href={site.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                className="flex min-h-11 items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground md:min-h-0"
               >
                 <ExternalLink className="size-4" />
                 Saytga o&apos;tish
@@ -208,7 +208,7 @@ export function AdminShell({
                 href={site.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                className="flex min-h-11 items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground md:min-h-0"
               >
                 <ExternalLink className="size-4" />
                 Saytga o&apos;tish

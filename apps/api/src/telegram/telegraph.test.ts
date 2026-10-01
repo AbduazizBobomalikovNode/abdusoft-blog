@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { config } from "../config";
 import { tiptapToTelegraphNodes, type TelegraphNode } from "./telegraph";
 
 const options = {
@@ -98,21 +99,100 @@ describe("tiptapToTelegraphNodes", () => {
     expect(nodes.length).toBe(2);
   });
 
-  it("falls back tables to pipe-joined paragraphs (Telegraph has no table support)", () => {
-    const table = {
-      type: "table",
-      content: [
-        {
-          type: "tableRow",
-          content: [
-            { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] },
-            { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "B" }] }] },
-          ],
-        },
-      ],
-    };
-    const nodes = tiptapToTelegraphNodes(doc(table), options);
-    const p = findTag(nodes, "p");
-    expect(p).toBeTruthy();
+  it("prepends the cover as the FIRST node (absolute URL) and skips it when the first node is the same image", () => {
+    const withCover = tiptapToTelegraphNodes(doc({ type: "paragraph", content: [{ type: "text", text: "Matn" }] }), {
+      ...options,
+      coverUrl: "/uploads/cover.jpg",
+    });
+    const first = withCover[0] as { tag: string; children: { tag: string; attrs: { src: string } }[] };
+    expect(first.tag).toBe("figure");
+    expect(first.children[0]!.tag).toBe("img");
+    expect(first.children[0]!.attrs.src).toBe(`${config.API_ORIGIN}/uploads/cover.jpg`);
+
+    const duplicate = tiptapToTelegraphNodes(
+      doc({ type: "image", attrs: { src: `${config.API_ORIGIN}/uploads/cover.jpg` } }),
+      { ...options, coverUrl: "/uploads/cover.jpg" },
+    );
+    // figure (kover o'zi) + footer — ikkinchi nusxa yo'q.
+    expect(duplicate.length).toBe(2);
+
+    const noCover = tiptapToTelegraphNodes(doc({ type: "paragraph", content: [{ type: "text", text: "Matn" }] }), options);
+    expect((noCover[0] as { tag: string }).tag).toBe("p");
+  });
+
+  it("makes relative content image sources absolute", () => {
+    const nodes = tiptapToTelegraphNodes(doc({ type: "image", attrs: { src: "/uploads/a.png" } }), options);
+    const img = findTag(nodes, "img") as unknown as { attrs: { src: string } };
+    expect(img.attrs.src).toBe(`${config.API_ORIGIN}/uploads/a.png`);
+  });
+
+  it("counts the cover node in the 64 KB size limit", () => {
+    const bigContent = Array.from({ length: 2000 }, (_, i) => ({
+      type: "paragraph",
+      content: [{ type: "text", text: `Uzun matn qatori ${i} - takrorlanuvchi kontent to'ldirish uchun.` }],
+    }));
+    const nodes = tiptapToTelegraphNodes(doc(...bigContent), { ...options, coverUrl: "https://x/cover.jpg" });
+    expect(new TextEncoder().encode(JSON.stringify(nodes)).length).toBeLessThanOrEqual(60_000);
+    expect((nodes[0] as { tag: string }).tag).toBe("figure");
+  });
+
+  describe("tables", () => {
+    const cell = (type: string, text: string) => ({
+      type,
+      content: [{ type: "paragraph", content: text ? [{ type: "text", text }] : [] }],
+    });
+    const row = (...cells: unknown[]) => ({ type: "tableRow", content: cells });
+
+    it("renders each data row as <p><strong>cell0</strong><br>Header: value...</p>", () => {
+      const table = {
+        type: "table",
+        content: [
+          row(cell("tableHeader", "Model"), cell("tableHeader", "Narx"), cell("tableHeader", "Tezlik")),
+          row(cell("tableCell", "A"), cell("tableCell", "10"), cell("tableCell", "Tez")),
+          row(cell("tableCell", "B"), cell("tableCell", "20"), cell("tableCell", "Sekin")),
+        ],
+      };
+      const nodes = tiptapToTelegraphNodes(doc(table), options);
+      // 2 ta qator-paragraf + footer
+      expect(nodes.length).toBe(3);
+      expect(nodes[0]).toEqual({
+        tag: "p",
+        children: [
+          { tag: "strong", children: ["A"] },
+          { tag: "br" },
+          "Narx: ",
+          "10",
+          { tag: "br" },
+          "Tezlik: ",
+          "Tez",
+        ],
+      });
+      expect(JSON.stringify(nodes)).not.toContain("|");
+    });
+
+    it("keeps links inside cells", () => {
+      const linkCell = {
+        type: "tableCell",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "docs", marks: [{ type: "link", attrs: { href: "https://d.example" } }] }] },
+        ],
+      };
+      const table = {
+        type: "table",
+        content: [row(cell("tableHeader", "Nom"), cell("tableHeader", "Havola")), row(cell("tableCell", "X"), linkCell)],
+      };
+      const nodes = tiptapToTelegraphNodes(doc(table), options);
+      const a = findTag(nodes, "a") as unknown as { attrs: { href: string } };
+      expect(a.attrs.href).toBe("https://d.example");
+    });
+
+    it("joins cells with an em dash when there is no usable header row", () => {
+      const table = {
+        type: "table",
+        content: [row(cell("tableCell", "A"), cell("tableCell", "B"), cell("tableCell", "C"))],
+      };
+      const nodes = tiptapToTelegraphNodes(doc(table), options);
+      expect(nodes[0]).toEqual({ tag: "p", children: ["A", " \u2014 ", "B", " \u2014 ", "C"] });
+    });
   });
 });

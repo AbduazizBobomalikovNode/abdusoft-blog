@@ -62,6 +62,8 @@
   width: 100%;
   resize: none;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  max-width: 100%;
   border: none;
   background: transparent;
   font-family: var(--font-sans);

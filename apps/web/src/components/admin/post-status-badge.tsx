@@ -22,3 +22,13 @@ const STATUS_VARIANT: Record<AdminPostStatus, "default" | "secondary" | "outline
 export function PostStatusBadge({ status }: { status: AdminPostStatus }) {
   return <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>;
 }
+
+/** Rejalashtirilgan postda kanal rejasi bo'lsa — kichik "→ kanal" belgisi. */
+export function PostChannelPlanHint({ status, hasChannelPlan }: { status: AdminPostStatus; hasChannelPlan?: boolean }) {
+  if (status !== "scheduled" || !hasChannelPlan) return null;
+  return (
+    <span className="text-xs text-muted-foreground whitespace-nowrap" title="Chop etilgach Telegram kanalga yuboriladi">
+      → kanal
+    </span>
+  );
+}

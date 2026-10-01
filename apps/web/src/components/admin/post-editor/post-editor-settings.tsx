@@ -1,6 +1,6 @@
 "use client";
 
-import type { AdminPostStatus, PostSettings, TagWithCount, TelegramRef } from "@blog/shared";
+import type { AdminPostStatus, ChannelPlan, PostSettings, TagWithCount, TelegramRef } from "@blog/shared";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { SETTING_SWITCHES } from "@/components/admin/post-settings-fields";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDateTime } from "@/lib/format";
+import { ChannelPlanFields } from "./channel-plan-fields";
 import { CoverImagePicker } from "./cover-image-picker";
 import { TagMultiselect } from "./tag-multiselect";
 
@@ -46,6 +47,16 @@ export interface PostEditorSettingsProps {
   onScheduledAtLocalChange: (value: string) => void;
   onSchedule: () => void;
   scheduling: boolean;
+  /** Postning ID'si — kanal rejasining oldindan ko'rinishi uchun. */
+  postId?: string;
+  /** Rejalashtirish bilan birga kanalga yuborish rejasi (`null` — yuborilmaydi). */
+  channelPlan?: ChannelPlan | null;
+  onChannelPlanChange?: (plan: ChannelPlan | null) => void;
+  /** Kanal rejasida Telegram cheklovi xatolari bor bo'lsa `true` — "Rejalashtirish" o'chiriladi. */
+  onChannelPlanBlockingChange?: (blocked: boolean) => void;
+  channelPlanBlocked?: boolean;
+  /** "Rejani bekor qilish" — rejalashtirilgan postni qoralamaga qaytaradi (kanal rejasi ham o'chadi). */
+  onCancelSchedule?: () => void;
   telegram: TelegramRef | null;
   channelUrl: string | null;
   onRefreshTelegraph: () => void;
@@ -97,11 +108,11 @@ function SwitchRow({
 }) {
   return (
     <div className="flex min-h-11 items-center justify-between gap-3">
-      <div className="flex flex-col gap-0.5">
-        <Label htmlFor={id}>{label}</Label>
-        <p className="text-xs text-muted-foreground">{hint}</p>
-      </div>
-      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+      <Label htmlFor={id} className="min-h-11 min-w-0 flex-1 cursor-pointer flex-col items-start justify-center gap-0.5 leading-snug">
+        <span>{label}</span>
+        <span className="text-xs font-normal text-muted-foreground">{hint}</span>
+      </Label>
+      <Switch id={id} checked={checked} onCheckedChange={onChange} className="max-md:after:-inset-x-4 max-md:after:-inset-y-3.5" />
     </div>
   );
 }
@@ -123,6 +134,12 @@ export function PostEditorSettings({
   onScheduledAtLocalChange,
   onSchedule,
   scheduling,
+  postId,
+  channelPlan = null,
+  onChannelPlanChange,
+  onChannelPlanBlockingChange,
+  channelPlanBlocked = false,
+  onCancelSchedule,
   telegram,
   channelUrl,
   onRefreshTelegraph,
@@ -158,12 +175,26 @@ export function PostEditorSettings({
                 type="datetime-local"
                 value={scheduledAtLocal}
                 onChange={(event) => onScheduledAtLocalChange(event.target.value)}
-                className="w-fit"
+                className="w-fit max-md:h-11 max-md:w-full"
               />
-              <Button type="button" variant="outline" size="sm" disabled={scheduling || !scheduledAtLocal} onClick={onSchedule}>
-                {scheduling ? "Yuborilmoqda…" : "Rejalashtirish"}
+              <Button type="button" variant="outline" size="sm" className="max-md:h-11 max-md:flex-1" disabled={scheduling || !scheduledAtLocal || (channelPlan !== null && channelPlanBlocked)} onClick={onSchedule}>
+                {scheduling ? "Yuborilmoqda…" : status === "scheduled" ? "Qayta rejalashtirish" : "Rejalashtirish"}
               </Button>
+              {status === "scheduled" && onCancelSchedule ? (
+                <Button type="button" variant="ghost" size="sm" className="max-md:h-11 max-md:flex-1" onClick={onCancelSchedule}>
+                  Rejani bekor qilish
+                </Button>
+              ) : null}
             </div>
+            {postId && onChannelPlanChange ? (
+              <ChannelPlanFields
+                postId={postId}
+                value={channelPlan}
+                onChange={onChannelPlanChange}
+                scheduledAtLocal={scheduledAtLocal}
+                onBlockingChange={onChannelPlanBlockingChange}
+              />
+            ) : null}
           </div>
         </SettingsCard>
       ) : null}
@@ -180,7 +211,7 @@ export function PostEditorSettings({
             <button
               type="button"
               onClick={onExcerptAuto}
-              className="rounded text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+              className="-mr-2 rounded px-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring max-md:min-h-11"
             >
               Avtomatik
             </button>
@@ -245,9 +276,9 @@ export function PostEditorSettings({
               href={telegram.telegraphUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="truncate text-xs text-primary underline underline-offset-2"
+              className="flex min-h-11 items-center text-xs text-primary underline underline-offset-2 md:block md:min-h-0"
             >
-              {telegram.telegraphUrl}
+              <span className="block min-w-0 truncate">{telegram.telegraphUrl}</span>
             </a>
           ) : (
             <p className="text-xs text-muted-foreground">Telegraph nusxa hali yaratilmagan</p>
@@ -257,18 +288,18 @@ export function PostEditorSettings({
               href={channelUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="truncate text-xs text-primary underline underline-offset-2"
+              className="flex min-h-11 items-center text-xs text-primary underline underline-offset-2 md:block md:min-h-0"
             >
-              Kanaldagi post
+              <span className="block min-w-0 truncate">Kanaldagi post</span>
             </a>
           ) : (
             <p className="text-xs text-muted-foreground">Kanalga hali yuborilmagan</p>
           )}
           <div className="flex flex-wrap gap-2 pt-1">
-            <Button type="button" variant="outline" size="sm" disabled={refreshingTelegraph} onClick={onRefreshTelegraph}>
+            <Button type="button" variant="outline" size="sm" className="max-md:h-11 max-md:flex-1" disabled={refreshingTelegraph} onClick={onRefreshTelegraph}>
               {refreshingTelegraph ? "Yangilanmoqda…" : "Telegraph'ni yangilash"}
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={onOpenChannelSend}>
+            <Button type="button" variant="outline" size="sm" className="max-md:h-11 max-md:flex-1" onClick={onOpenChannelSend}>
               Kanalga yuborish
             </Button>
           </div>

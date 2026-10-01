@@ -2,8 +2,11 @@ import { Hono, type Context } from "hono";
 import { and, asc, desc, eq, gt, ilike, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  ChannelPlanSchema,
   ChannelPreviewRequestSchema,
+  ChannelSelectionSchema,
   ChannelSendRequestSchema,
+  CreateChannelVersionBodySchema,
   CreatePostBodySchema,
   DEFAULT_POST_SETTINGS,
   PostSettingsSchema,
@@ -11,9 +14,11 @@ import {
   RESERVED_SLUGS,
   SchedulePostBodySchema,
   STAFF_EDITABLE_POST_FIELDS,
+  UpdateChannelVersionBodySchema,
   UpdatePostBodySchema,
   slugify,
   type AdminPostStatus,
+  type ChannelPlan,
   type PostAuthorRef,
   type PostListItem,
   type Tag,
@@ -31,10 +36,22 @@ import { approvePost, requestPostChanges, submitPostForReview } from "../lib/pos
 import { pathsForPost, revalidateWeb } from "../lib/revalidate.js";
 import {
   computeChannelPost,
+  computeChannelVersionPost,
   editChannelCaptionForPost,
   getChannelAlreadySent,
   sendPostToChannel,
+  sendVersionToChannel,
+  type SendChannelPostResult,
 } from "../telegram/channel-send.js";
+import { computeChannelPreflight, summarizePreflightErrors } from "../telegram/channel-preflight.js";
+import { getChannelInfo } from "../telegram/channel-info.js";
+import { loadVersion } from "../telegram/channel-versions.js";
+import {
+  createChannelVersion,
+  deleteChannelVersion,
+  listChannelVersions,
+  updateChannelVersion,
+} from "../telegram/channel-version-service.js";
 import { getTelegramRefForPost, refreshTelegraphMirror } from "../telegram/publish.js";
 
 const DEFAULT_LIMIT = 20;
@@ -80,6 +97,7 @@ const adminPostSelectColumns = {
   ...postSelectColumns,
   status: posts.status,
   scheduledAt: posts.scheduledAt,
+  channelPlan: posts.channelPlan,
   updatedAt: posts.updatedAt,
   createdBy: posts.createdBy,
   reviewNote: posts.reviewNote,
@@ -99,6 +117,7 @@ type AdminPostRow = {
   commentsCount: number;
   status: AdminPostStatus;
   scheduledAt: Date | null;
+  channelPlan: unknown;
   updatedAt: Date;
   createdBy: string | null;
   reviewNote: string | null;
@@ -125,6 +144,7 @@ function toAdminListItem(row: AdminPostRow, tagMap: Map<string, Tag[]>, authorMa
     status: row.status,
     publishedAt: row.publishedAt?.toISOString() ?? null,
     scheduledAt: row.scheduledAt?.toISOString() ?? null,
+    hasChannelPlan: row.status === "scheduled" && row.channelPlan != null,
     updatedAt: row.updatedAt.toISOString(),
     pinned: row.pinned,
     tags: tagMap.get(row.id) ?? [],
@@ -206,6 +226,90 @@ async function resolveTagIds(tagSlugs: string[]): Promise<{ id: string; slug: st
 async function loadPostOr404(id: string) {
   const [post] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
   return post ?? null;
+}
+
+/** DB'dagi `channel_plan` jsonb'ni tekshiradi (buzilgan qiymat -> `null`). */
+function parseStoredPlan(value: unknown): ChannelPlan | null {
+  if (value == null) return null;
+  const parsed = ChannelPlanSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Klientdan kelgan rejadan `attempts` (server hisoblagichi)ni olib tashlaydi. */
+function cleanPlan(plan: ChannelPlan): ChannelPlan {
+  return plan.versionId
+    ? { mode: plan.mode, versionId: plan.versionId, delayMinutes: plan.delayMinutes }
+    : { mode: plan.mode, variant: plan.variant, delayMinutes: plan.delayMinutes };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Kanal rejasini saqlashdan oldin preflight (post chop etilganligi talab qilinmaydi).
+ * Muvaffaqiyatli bo'lsa — tozalangan reja (versiya bo'lsa `mode` versiyadan olinadi);
+ * aks holda tayyor javob (404/400/422 + tekshiruvlar).
+ */
+async function preparePlanOrReject(
+  c: Context,
+  postId: string,
+  plan: ChannelPlan,
+): Promise<{ plan: ChannelPlan } | { response: Response }> {
+  let cleaned = cleanPlan(plan);
+  if (plan.versionId) {
+    const version = await loadVersion(postId, plan.versionId);
+    if (!version) return { response: c.json({ error: "Versiya topilmadi" }, 404) };
+    cleaned = { ...cleaned, mode: version.mode };
+  }
+  const selection = cleaned.versionId
+    ? { versionId: cleaned.versionId }
+    : { mode: cleaned.mode, variant: cleaned.variant! };
+  const result = await computeChannelPreflight(postId, selection, {
+    requirePublished: false,
+    planFallback: !cleaned.versionId,
+  });
+  if (!result.ok) {
+    return { response: c.json({ error: result.reason === "not_found" ? "Topilmadi" : "Noto'g'ri kanal rejasi" }, result.reason === "not_found" ? 404 : 400) };
+  }
+  if (!result.preflight.canSend) {
+    return {
+      response: c.json(
+        {
+          error: `Telegram cheklovlari bajarilmagan: ${summarizePreflightErrors(result.preflight)}`,
+          preflight: result.preflight,
+        },
+        422,
+      ),
+    };
+  }
+  return { plan: cleaned };
+}
+
+/** `sendPostToChannel`/`sendVersionToChannel` xatosini HTTP javobiga aylantiradi. */
+function sendFailureResponse(c: Context, result: Extract<SendChannelPostResult, { ok: false }>): Response {
+  switch (result.reason) {
+    case "not_found":
+      return c.json({ error: "Topilmadi" }, 404);
+    case "version_not_found":
+      return c.json({ error: "Versiya topilmadi" }, 404);
+    case "not_published":
+      return c.json({ error: "Faqat chop etilgan post kanalga yuboriladi" }, 409);
+    case "telegram_disabled":
+      return c.json({ error: "Telegram bot yoki kanal sozlanmagan" }, 409);
+    case "invalid_combo":
+      return c.json({ error: "Bu uzunlik ushbu rejim uchun mos emas" }, 400);
+    case "no_media":
+      return c.json({ error: "🖼 Rasmli rejim uchun postda kover yoki band ichida rasm bo'lishi kerak" }, 400);
+    case "preflight_failed":
+      return c.json(
+        {
+          error: `Telegram cheklovlari bajarilmagan: ${result.preflight ? summarizePreflightErrors(result.preflight) : ""}`,
+          preflight: result.preflight,
+        },
+        422,
+      );
+    default:
+      return c.json({ error: "Post allaqachon kanalga yuborilgan — replaceExisting bilan qayta yuboring" }, 409);
+  }
 }
 
 function toLifecycleSummary(post: typeof posts.$inferSelect) {
@@ -382,6 +486,8 @@ export const adminPostsRoute = new Hono()
       status: post.status,
       publishedAt: post.publishedAt?.toISOString() ?? null,
       scheduledAt: post.scheduledAt?.toISOString() ?? null,
+      channelPlan: parseStoredPlan(post.channelPlan),
+      channelSendAt: post.channelSendAt?.toISOString() ?? null,
       pinned: post.pinned,
       settings,
       tags: tagMap.get(post.id) ?? [],
@@ -429,11 +535,17 @@ export const adminPostsRoute = new Hono()
     const id = c.req.param("id");
     const body = await c.req.json().catch(() => null);
     const parsed = ChannelPreviewRequestSchema.safeParse(body);
-    if (!parsed.success) return c.json({ error: "mode va variant majburiy (mode: media|text)" }, 400);
+    if (!parsed.success) return c.json({ error: "mode va variant (yoki versionId) majburiy (mode: media|text)" }, 400);
 
-    const computed = await computeChannelPost(id, parsed.data.mode, parsed.data.variant);
+    // Rejalashtirish paytida post hali chop etilmagan bo'ladi — ko'rinish baribir quriladi.
+    const computed =
+      "versionId" in parsed.data
+        ? // Maxsus versiyada rasmlar olib tashlangan bo'lishi mumkin (tahrirlash jarayoni) — ko'rinish quriladi, preflight o'zi xato ko'rsatadi.
+          await computeChannelVersionPost(id, parsed.data.versionId, { allowUnpublished: true, allowEmptyMedia: true })
+        : await computeChannelPost(id, parsed.data.mode, parsed.data.variant, { allowUnpublished: true });
     if (!computed.ok) {
       if (computed.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      if (computed.reason === "version_not_found") return c.json({ error: "Versiya topilmadi" }, 404);
       if (computed.reason === "not_published") {
         return c.json({ error: "Faqat chop etilgan post uchun kanal ko'rinishi tayyorlanadi" }, 409);
       }
@@ -444,18 +556,85 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "🖼 Rasmli rejim uchun postda kover yoki band ichida rasm bo'lishi kerak" }, 400);
     }
 
-    const alreadySent = await getChannelAlreadySent(id);
+    const [alreadySent, channel] = await Promise.all([getChannelAlreadySent(id), getChannelInfo()]);
 
     return c.json({
-      mode: parsed.data.mode,
-      variant: parsed.data.variant,
+      mode: computed.data.mode,
+      variant: computed.data.variant,
+      versionId: computed.data.versionId,
       captionHtml: computed.data.captionHtml,
       visibleLength: computed.data.visibleLength,
       limit: computed.data.limit,
       truncated: computed.data.truncated,
       media: computed.data.media,
       alreadySent,
+      channel,
     });
+  })
+  .post("/:id/channel/preflight", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => null);
+    const parsed = ChannelSelectionSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "mode va variant (yoki versionId) majburiy" }, 400);
+
+    // `forPlan: true` — rejalashtirish tekshiruvi: post chop etilgan bo'lishi shart emas, avtomatik rejada rasm yo'qligi ogohlantirish.
+    const forPlan = (body as { forPlan?: unknown } | null)?.forPlan === true;
+    const result = await computeChannelPreflight(id, parsed.data, {
+      requirePublished: !forPlan,
+      planFallback: forPlan && !("versionId" in parsed.data),
+    });
+    if (!result.ok) {
+      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      if (result.reason === "version_not_found") return c.json({ error: "Versiya topilmadi" }, 404);
+      return c.json({ error: "Bu uzunlik ushbu rejim uchun mos emas" }, 400);
+    }
+    return c.json(result.preflight);
+  })
+  .get("/:id/channel/versions", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const post = await loadPostOr404(c.req.param("id"));
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+    return c.json(await listChannelVersions(post));
+  })
+  .post("/:id/channel/versions", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const post = await loadPostOr404(c.req.param("id"));
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const body = await c.req.json().catch(() => null);
+    const parsed = CreateChannelVersionBodySchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
+    const result = await createChannelVersion(post, parsed.data, c.get("adminUser").id);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json(result.data, 201);
+  })
+  .patch("/:id/channel/versions/:vid", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const vid = c.req.param("vid");
+    if (!UUID_RE.test(vid)) return c.json({ error: "Versiya topilmadi" }, 404);
+    const post = await loadPostOr404(c.req.param("id"));
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const body = await c.req.json().catch(() => null);
+    const parsed = UpdateChannelVersionBodySchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
+    const result = await updateChannelVersion(post, vid, parsed.data);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json(result.data);
+  })
+  .delete("/:id/channel/versions/:vid", async (c) => {
+    const forbidden = forbidUnlessAdmin(c);
+    if (forbidden) return forbidden;
+    const vid = c.req.param("vid");
+    if (!UUID_RE.test(vid)) return c.json({ error: "Versiya topilmadi" }, 404);
+    const post = await loadPostOr404(c.req.param("id"));
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const result = await deleteChannelVersion(post, vid);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ ok: true });
   })
   .post("/:id/channel/send", async (c) => {
     const forbidden = forbidUnlessAdmin(c);
@@ -469,30 +648,17 @@ export const adminPostsRoute = new Hono()
 
     const body = await c.req.json().catch(() => null);
     const parsed = ChannelSendRequestSchema.safeParse(body);
-    if (!parsed.success) return c.json({ error: "mode va variant majburiy (mode: media|text)" }, 400);
+    if (!parsed.success) return c.json({ error: "mode va variant (yoki versionId) majburiy (mode: media|text)" }, 400);
 
-    const result = await sendPostToChannel(id, parsed.data.mode, parsed.data.variant, {
-      replaceExisting: parsed.data.replaceExisting,
-    });
+    // Preflight `sendPostToChannel`/`sendVersionToChannel` ichida server tomonida ishlaydi — o'tmasa 422 va HECH NARSA yuborilmaydi.
+    const result =
+      "versionId" in parsed.data
+        ? await sendVersionToChannel(id, parsed.data.versionId, { replaceExisting: parsed.data.replaceExisting })
+        : await sendPostToChannel(id, parsed.data.mode, parsed.data.variant, {
+            replaceExisting: parsed.data.replaceExisting,
+          });
 
-    if (!result.ok) {
-      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
-      if (result.reason === "not_published") {
-        return c.json({ error: "Faqat chop etilgan post kanalga yuboriladi" }, 409);
-      }
-      if (result.reason === "telegram_disabled") {
-        return c.json({ error: "Telegram bot yoki kanal sozlanmagan" }, 409);
-      }
-      if (result.reason === "invalid_combo") {
-        return c.json({ error: "Bu uzunlik ushbu rejim uchun mos emas" }, 400);
-      }
-      if (result.reason === "no_media") {
-        return c.json({ error: "🖼 Rasmli rejim uchun postda kover yoki band ichida rasm bo'lishi kerak" }, 400);
-      }
-      // already_sent
-      return c.json({ error: "Post allaqachon kanalga yuborilgan — replaceExisting bilan qayta yuboring" }, 409);
-    }
-
+    if (!result.ok) return sendFailureResponse(c, result);
     return c.json(result);
   })
   .post("/:id/channel/resync-caption", async (c) => {
@@ -662,6 +828,24 @@ export const adminPostsRoute = new Hono()
     if (data.pinned !== undefined) update.pinned = data.pinned;
     if (data.scheduledAt !== undefined) {
       update.scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;
+      // Rejalashtirish olib tashlansa — kanal rejasi ham o'chadi.
+      if (!data.scheduledAt && data.channelPlan === undefined) {
+        update.channelPlan = null;
+        update.channelSendAt = null;
+      }
+    }
+    if (data.channelPlan !== undefined) {
+      if (data.channelPlan === null) {
+        update.channelPlan = null;
+        update.channelSendAt = null;
+      } else {
+        if (post.status !== "scheduled") {
+          return c.json({ error: "Kanal rejasi faqat rejalashtirilgan postga o'rnatiladi" }, 409);
+        }
+        const prepared = await preparePlanOrReject(c, id, data.channelPlan);
+        if ("response" in prepared) return prepared.response;
+        update.channelPlan = prepared.plan;
+      }
     }
 
     if (data.settings !== undefined) {
@@ -802,7 +986,13 @@ export const adminPostsRoute = new Hono()
     const now = new Date();
     await db
       .update(posts)
-      .set({ status: "published", publishedAt: post.publishedAt ?? now, updatedAt: now })
+      .set({
+        status: "published",
+        publishedAt: post.publishedAt ?? now,
+        // Qo'lda chop etilsa — rejalashtirilgan kanal rejasi bekor (kanalga yuborish qo'lda).
+        ...(post.status === "scheduled" ? { channelPlan: null, channelSendAt: null } : {}),
+        updatedAt: now,
+      })
       .where(eq(posts.id, id));
 
     const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
@@ -822,7 +1012,10 @@ export const adminPostsRoute = new Hono()
     if (!post) return c.json({ error: "Topilmadi" }, 404);
 
     const wasPublished = post.status === "published";
-    await db.update(posts).set({ status: "draft", updatedAt: new Date() }).where(eq(posts.id, id));
+    await db
+      .update(posts)
+      .set({ status: "draft", channelPlan: null, channelSendAt: null, updatedAt: new Date() })
+      .where(eq(posts.id, id));
 
     const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!fresh) return c.json({ error: "Topilmadi" }, 404);
@@ -843,7 +1036,10 @@ export const adminPostsRoute = new Hono()
     if (!post) return c.json({ error: "Topilmadi" }, 404);
 
     const wasPublished = post.status === "published";
-    await db.update(posts).set({ status: "archived", updatedAt: new Date() }).where(eq(posts.id, id));
+    await db
+      .update(posts)
+      .set({ status: "archived", channelPlan: null, channelSendAt: null, updatedAt: new Date() })
+      .where(eq(posts.id, id));
 
     const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
     if (!fresh) return c.json({ error: "Topilmadi" }, 404);
@@ -866,7 +1062,11 @@ export const adminPostsRoute = new Hono()
     const body = await c.req.json().catch(() => null);
     const parsed = SchedulePostBodySchema.safeParse(body);
     if (!parsed.success) {
-      return c.json({ error: "scheduledAt majburiy" }, 400);
+      const planInvalid = parsed.error.issues.some((issue) => issue.path[0] === "channelPlan");
+      return c.json(
+        { error: planInvalid ? "Noto'g'ri kanal rejasi" : "scheduledAt majburiy", issues: parsed.error.issues },
+        400,
+      );
     }
 
     const scheduledAt = new Date(parsed.data.scheduledAt);
@@ -874,10 +1074,23 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "Noto'g'ri sana" }, 400);
     }
 
+    let storedPlan: ChannelPlan | null = null;
+    if (parsed.data.channelPlan) {
+      const prepared = await preparePlanOrReject(c, id, parsed.data.channelPlan);
+      if ("response" in prepared) return prepared.response;
+      storedPlan = prepared.plan;
+    }
+
     const wasPublished = post.status === "published";
     await db
       .update(posts)
-      .set({ status: "scheduled", scheduledAt, updatedAt: new Date() })
+      .set({
+        status: "scheduled",
+        scheduledAt,
+        channelPlan: storedPlan,
+        channelSendAt: null,
+        updatedAt: new Date(),
+      })
       .where(eq(posts.id, id));
 
     const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);

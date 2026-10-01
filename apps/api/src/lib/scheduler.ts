@@ -1,7 +1,9 @@
 import { Cron } from "croner";
+import { ChannelPlanSchema } from "@blog/shared";
 import { and, eq, lt, lte } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { posts, postViewDedupe } from "../db/schema.js";
+import { recoverInterruptedChannelSends, runDueChannelSends } from "../telegram/channel-plan.js";
 import { sendDigestNow } from "../telegram/digest.js";
 import { events } from "./events.js";
 import { pathsForPost, revalidateWeb } from "./revalidate.js";
@@ -18,11 +20,23 @@ const DEDUPE_RETENTION_DAYS = 7;
  * chaqiriladi.
  */
 export function startScheduler(): Cron[] {
+  void recoverInterruptedChannelSends()
+    .then((count) => {
+      if (count > 0) console.log(`Uzilib qolgan kanal rejalari qayta navbatga qo'yildi: ${count}`);
+    })
+    .catch((error: unknown) => console.error("Kanal rejalarini tiklashda xatolik:", error));
+
   const publishJob = new Cron("* * * * *", async () => {
     try {
       await publishDuePosts();
     } catch (error: unknown) {
       console.error("Scheduler xatosi:", error);
+    }
+    // Kanal rejasi alohida try/catch'da — chop etishdagi xato yuborishni to'smasin (va aksincha).
+    try {
+      await runDueChannelSends();
+    } catch (error: unknown) {
+      console.error("Kanalga rejalashtirilgan yuborish xatosi:", error);
     }
   });
 
@@ -52,18 +66,31 @@ export function startScheduler(): Cron[] {
   return [publishJob, cleanupJob, digestJob];
 }
 
-async function publishDuePosts(): Promise<void> {
+export async function publishDuePosts(): Promise<void> {
   const now = new Date();
 
   const due = await db
-    .select({ id: posts.id, slug: posts.slug })
+    .select({ id: posts.id, slug: posts.slug, channelPlan: posts.channelPlan })
     .from(posts)
     .where(and(eq(posts.status, "scheduled"), lte(posts.scheduledAt, now)));
 
   for (const post of due) {
+    const plan = ChannelPlanSchema.safeParse(post.channelPlan);
     await db
       .update(posts)
-      .set({ status: "published", publishedAt: now, scheduledAt: null, updatedAt: now })
+      .set({
+        status: "published",
+        publishedAt: now,
+        scheduledAt: null,
+        updatedAt: now,
+        // Kanal rejasi bor bo'lsa — chop etilgan vaqt + kechikish.
+        ...(plan.success
+          ? {
+              channelPlan: { ...plan.data, attempts: 0 },
+              channelSendAt: new Date(now.getTime() + plan.data.delayMinutes * 60_000),
+            }
+          : { channelPlan: null, channelSendAt: null }),
+      })
       .where(eq(posts.id, post.id));
 
     events.emit("post.published", { id: post.id, slug: post.slug });

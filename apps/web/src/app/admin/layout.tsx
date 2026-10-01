@@ -13,7 +13,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     redirect("/login");
   }
 
-  const pendingComments = await getAdminCommentPendingCount(cookie);
+  // Xodim (staff) `/admin/comments`ga kira olmaydi (403) — hisoblagich faqat admin uchun.
+  const pendingComments = me.role === "admin" ? await getAdminCommentPendingCount(cookie) : 0;
 
   return (
     <AdminShell me={me} pendingComments={pendingComments}>

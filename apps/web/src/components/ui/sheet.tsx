@@ -72,7 +72,7 @@ function SheetContent({
           <SheetPrimitive.Close data-slot="sheet-close" asChild>
             <Button
               variant="ghost"
-              className="absolute top-3 right-3"
+              className="absolute top-3 right-3 max-sm:top-1.5 max-sm:right-1.5 max-sm:size-11"
               size="icon-sm"
             >
               <XIcon

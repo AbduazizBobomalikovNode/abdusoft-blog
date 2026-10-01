@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Hono } from "hono";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
-import { posts, telegramRefs } from "../db/schema.js";
+import { channelPostVersions, posts, telegramRefs } from "../db/schema.js";
 import { uploadsDir } from "../lib/media/store.js";
 import { invalidateSettingsCache, saveSettings } from "../lib/settings.js";
 import { initTelegram } from "./bot.js";
@@ -279,6 +279,155 @@ describe("Telegram approval -> variant -> preview -> send flow (fake webhook cal
     const post = await db.select().from(posts).where(eq(posts.id, created.id)).then((r) => r[0]);
     // Admin-gate middleware yo'lni to'sgani sababli post HALI HAM `in_review`da qolishi kerak.
     expect(post?.status).toBe("in_review");
+  });
+});
+
+type MockCall = { method: string; body: Record<string, unknown> };
+
+/** `reply_markup`dagi barcha inline tugmalar (qatorlar bo'yicha). */
+function buttonRows(call: MockCall | undefined): { text: string; callback_data?: string }[][] {
+  const markup = call?.body.reply_markup as { inline_keyboard?: { text: string; callback_data?: string }[][] } | undefined;
+  return markup?.inline_keyboard ?? [];
+}
+
+function findPrompt(calls: MockCall[], needle: string): MockCall | undefined {
+  return calls.find((c) => c.method === "sendMessage" && JSON.stringify(c.body.reply_markup ?? "").includes(needle));
+}
+
+async function createPublishedViaReview(title: string, patch: Record<string, unknown> = {}): Promise<string> {
+  const createRes = await postJson("/admin/posts", staff.cookie, { title });
+  expect(createRes.status).toBe(201);
+  const created = await json<{ id: string }>(createRes);
+  if (Object.keys(patch).length > 0) {
+    const patchRes = await req(`/admin/posts/${created.id}`, staff.cookie, { method: "PATCH", body: JSON.stringify(patch) });
+    expect(patchRes.status).toBe(200);
+  }
+  expect((await postJson(`/admin/posts/${created.id}/submit`, staff.cookie)).status).toBe(200);
+  return created.id;
+}
+
+async function insertTextVersion(postId: string, name: string, textHtml: string, createdAt: Date) {
+  const [row] = await db
+    .insert(channelPostVersions)
+    .values({
+      postId,
+      name,
+      mode: "text",
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: name }] }] },
+      textHtml,
+      visibleLength: textHtml.replace(/<[^>]+>/g, "").length,
+      imageUrls: [],
+      createdAt,
+      updatedAt: createdAt,
+    })
+    .returning();
+  return row!;
+}
+
+describe("custom versions in the Telegram approval flow", () => {
+  it("shows version buttons only when versions exist (newest first, max 6, callback data <= 64 bytes)", async () => {
+    // Versiyasiz post — `cv:` tugmalari YO'Q.
+    const plainId = await createPublishedViaReview("Versiyasiz post");
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${plainId}`, 9301, "📝 Ko'rib chiqish uchun yangi post"));
+    const plainPrompt = findPrompt(await mockCalls(), `cs:ts:${plainId}`);
+    expect(plainPrompt).toBeTruthy();
+    expect(JSON.stringify(plainPrompt?.body.reply_markup)).not.toContain('"cv:');
+
+    // 8 ta versiyali post — eng yangi 6 tasi, har biri alohida qatorda, "Yubormaslik"dan oldin.
+    const id = await createPublishedViaReview("Versiyali post");
+    const base = Date.now() - 100_000;
+    const created: string[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const long = i === 7 ? "Juda uzun nomli maxsus versiya — kanal uchun mo'ljallangan variant" : `Versiya ${i + 1}`;
+      const v = await insertTextVersion(id, long, `Matn ${i + 1}`, new Date(base + i * 1000));
+      created.push(v.id);
+    }
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${id}`, 9302, "📝 Ko'rib chiqish uchun yangi post"));
+    const prompt = findPrompt(await mockCalls(), `cs:ts:${id}`);
+    expect(prompt).toBeTruthy();
+    const rows = buttonRows(prompt);
+    const versionRows = rows.filter((r) => r[0]?.callback_data?.startsWith("cv:"));
+    expect(versionRows).toHaveLength(6);
+    expect(versionRows.every((r) => r.length === 1)).toBe(true);
+    expect(versionRows.map((r) => r[0]!.callback_data)).toEqual(created.slice(2).reverse().map((vid) => `cv:${vid}`));
+    expect(versionRows[0]![0]!.text.startsWith("✍️ ")).toBe(true);
+    expect(versionRows[0]![0]!.text.length).toBeLessThanOrEqual(2 + 1 + 28);
+    // "Yubormaslik" oxirgi qator, versiyalardan keyin.
+    const lastRow = rows[rows.length - 1]!;
+    expect(lastRow[0]?.callback_data).toBe(`cs:no:${id}`);
+    for (const row of rows) for (const b of row) expect(Buffer.byteLength(b.callback_data ?? "", "utf8")).toBeLessThanOrEqual(64);
+  });
+
+  it("previews a chosen version, confirms, sends it (records channel_version_id) and is idempotent", async () => {
+    const id = await createPublishedViaReview("Versiya yuborish sinovi");
+    const v = await insertTextVersion(id, "Maxsus matn", "Maxsus <b>versiya</b> matni", new Date());
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${id}`, 9311, "📝"));
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    expect((await sendWebhookUpdate(callbackUpdate(`cv:${v.id}`, 9312))).status).toBe(200);
+    const afterPick = await mockCalls();
+    // Oldindan ko'rish (admin chatiga) + tasdiqlash tugmalari; hali kanalga yuborilmagan.
+    const confirm = findPrompt(afterPick, `cvc:ok:${v.id}`);
+    expect(confirm).toBeTruthy();
+    const confirmData = buttonRows(confirm).flat().map((b) => b.callback_data ?? "");
+    expect(confirmData).toEqual([`cvc:ok:${v.id}`, `cvc:back:${v.id}`, `cvc:cancel:${v.id}`]);
+    for (const d of confirmData) expect(Buffer.byteLength(d, "utf8")).toBeLessThanOrEqual(64);
+    expect(afterPick.some((c) => c.method === "sendMessage" && String(c.body.text).includes("Maxsus"))).toBe(true);
+    const refBefore = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, id)).then((r) => r[0]);
+    expect(refBefore?.channelSentAt ?? null).toBeNull();
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    expect((await sendWebhookUpdate(callbackUpdate(`cvc:ok:${v.id}`, 9313))).status).toBe(200);
+    const ref = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, id)).then((r) => r[0]);
+    expect(ref?.channelSentAt).toBeTruthy();
+    expect(ref?.channelVersionId).toBe(v.id);
+    expect(ref?.channelVariant ?? null).toBeNull();
+    const ids = ref?.channelMessageIds ?? [];
+
+    // Ikkinchi tasdiqlash — qayta yubormaydi.
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`cvc:ok:${v.id}`, 9314));
+    expect((await mockCalls()).some((c) => c.method === "sendMessage" && String(c.body.chat_id).startsWith("@"))).toBe(false);
+    const again = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, id)).then((r) => r[0]);
+    expect(again?.channelMessageIds).toEqual(ids);
+  });
+
+  it("reports preflight reasons for a failing version and does not send it", async () => {
+    const id = await createPublishedViaReview("Versiya xato sinovi");
+    const bad = await insertTextVersion(id, "Bo'sh <versiya>", "", new Date());
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${id}`, 9321, "📝"));
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`cv:${bad.id}`, 9322));
+    const calls = await mockCalls();
+    expect(findPrompt(calls, `cvc:ok:${bad.id}`)).toBeUndefined();
+    const reasons = calls.find((c) => c.method === "sendMessage" && String(c.body.text).includes("Telegram cheklovi"));
+    expect(reasons).toBeTruthy();
+    expect(String(reasons?.body.text)).toContain("Matn bo'sh");
+    expect(reasons?.body.parse_mode).toBe("HTML");
+
+    // To'g'ridan-to'g'ri tasdiqlash ham yubormaydi (server preflight), sabablar chiqadi.
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`cvc:ok:${bad.id}`, 9323));
+    const ref = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, id)).then((r) => r[0]);
+    expect(ref?.channelSentAt ?? null).toBeNull();
+    expect((await mockCalls()).some((c) => c.method === "sendMessage" && String(c.body.text).includes("Matn bo'sh"))).toBe(true);
+  });
+
+  it("an auto variant that fails preflight shows the reasons instead of a generic error", async () => {
+    // Kover URL'i mavjud emas — 🖼 rejim preflight'da rasm xatosi beradi.
+    const missing = `${config.API_ORIGIN}/uploads/test-review-flow/missing-${Date.now()}.png`;
+    const id = await createPublishedViaReview("Avto xato sinovi", { coverUrl: missing });
+    await sendWebhookUpdate(callbackUpdate(`pr:ok:${id}`, 9331, "📝"));
+
+    await fetch(`${MOCK_ROOT}/__calls`, { method: "DELETE" });
+    await sendWebhookUpdate(callbackUpdate(`cs:mm:${id}`, 9332));
+    const calls = await mockCalls();
+    expect(findPrompt(calls, `cc:ok:mm:${id}`)).toBeUndefined();
+    expect(calls.some((c) => c.method === "sendMessage" && String(c.body.text).includes("Telegram cheklovi"))).toBe(true);
+    expect(calls.some((c) => c.method === "sendMessage" && String(c.body.text).includes("xatolik yuz berdi"))).toBe(false);
   });
 });
 

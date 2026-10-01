@@ -51,6 +51,14 @@ function record(method: string, path: string, body: unknown) {
   calls.push({ method, path, body, at: new Date().toISOString() });
 }
 
+/** Testlar uchun: `POST /__fail {method, count}` — keyingi `count` ta shu metod chaqiruvi 400 xato bilan qaytadi (0 — o'chirish). */
+const failures = new Map<string, number>();
+app.post("/__fail", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { method?: string; count?: number };
+  if (body.method) failures.set(body.method, body.count ?? 0);
+  return c.json({ ok: true });
+});
+
 app.get("/__calls", (c) => c.json({ calls }));
 app.delete("/__calls", (c) => {
   calls.length = 0;
@@ -116,6 +124,12 @@ app.post("/:botToken/:method", async (c) => {
     body = await c.req.json().catch(() => ({}));
   }
   record(method, c.req.path, body);
+
+  const remainingFailures = failures.get(method) ?? 0;
+  if (remainingFailures > 0) {
+    failures.set(method, remainingFailures - 1);
+    return c.json({ ok: false, error_code: 400, description: "Bad Request: mock failure" }, 400);
+  }
 
   switch (method) {
     case "getMe":
@@ -221,7 +235,7 @@ app.post("/:botToken/:method", async (c) => {
         ok({
           id: numericId,
           type: "channel",
-          title: String(chatIdRaw),
+          title: username ? `Mock kanal @${username}` : `Mock kanal ${chatIdRaw}`,
           username,
         }),
       );

@@ -6,7 +6,7 @@ import { posts } from "../db/schema.js";
 import { deleteChannelMessages, editChannelCaptionForPost, loadTelegramRef, upsertTelegramRef } from "./channel-send.js";
 import { events, type PostEventPayload } from "../lib/events.js";
 import { getSettings } from "../lib/settings.js";
-import { createOrUpdateTelegraphPage, tiptapToTelegraphNodes } from "./telegraph.js";
+import { createOrUpdateTelegraphPage, resolveTelegraphAuthorName, tiptapToTelegraphNodes } from "./telegraph.js";
 
 /**
  * Chop etilgan/yangilangan postni Telegraph'ga ko'zguladi (agar
@@ -33,19 +33,17 @@ async function syncPostToTelegram(postId: string): Promise<void> {
   if (postSettings.telegraphMirror && integrationSettings.telegraph.enabled) {
     try {
       const ref = await loadTelegramRef(post.id);
-      const nodes = tiptapToTelegraphNodes(post.contentJson, {
+      const pageOptions = {
         title: post.title,
-        authorName: config.API_ORIGIN,
-        authorUrl: postUrl,
+        authorName: await resolveTelegraphAuthorName(),
+        authorUrl: config.WEB_ORIGIN,
         postUrl,
-      });
-      const page = await createOrUpdateTelegraphPage(ref?.telegraphPath ?? null, nodes, {
-        title: post.title,
-        authorName: "Blog",
-        authorUrl: postUrl,
-        postUrl,
-      });
-      await upsertTelegramRef(post.id, { telegraphPath: page.path, telegraphUrl: page.url });
+        coverUrl: post.coverUrl,
+      };
+      const nodes = tiptapToTelegraphNodes(post.contentJson, pageOptions);
+      // editPage idempotent — kontent o'zgarmagan bo'lsa ham xato emas ("CONTENT_NOT_CHANGED" xato sifatida log qilinmaydi).
+      const page = await createOrUpdateTelegraphPage(ref?.telegraphPath ?? null, nodes, pageOptions);
+      if (!page.unchanged) await upsertTelegramRef(post.id, { telegraphPath: page.path, telegraphUrl: page.url });
     } catch (error: unknown) {
       console.error(`Telegraph mirror xatosi (${post.slug}):`, error);
     }
@@ -61,8 +59,23 @@ async function syncPostToTelegram(postId: string): Promise<void> {
   }
 }
 
+/**
+ * Hozir bajarilayotgan sinxronizatsiyalar (post id -> promise). Rejalashtirilgan
+ * kanalga yuborish ishi Telegraph havolasi tayyor bo'lishi uchun shuni kutadi.
+ */
+const pendingSyncs = new Map<string, Promise<void>>();
+
+/** Postning joriy Telegraph/caption sinxronizatsiyasi tugashini kutadi (yo'q bo'lsa darhol qaytadi). */
+export async function awaitPostSync(postId: string): Promise<void> {
+  await pendingSyncs.get(postId)?.catch(() => undefined);
+}
+
 function handlePublishedOrUpdated(payload: PostEventPayload): void {
-  void syncPostToTelegram(payload.id);
+  const run = syncPostToTelegram(payload.id).finally(() => {
+    if (pendingSyncs.get(payload.id) === run) pendingSyncs.delete(payload.id);
+  });
+  pendingSyncs.set(payload.id, run);
+  void run;
 }
 
 function handleUnpublished(payload: PostEventPayload): void {

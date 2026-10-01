@@ -1,5 +1,26 @@
 import { config } from "../config.js";
+import { getSettings } from "../lib/settings.js";
 import { getStoredTelegraphToken, storeTelegraphToken } from "../lib/site-settings.js";
+
+const FALLBACK_AUTHOR_NAME = "Blog";
+
+/** Telegraph muallif nomi — sozlamalardagi sayt nomi (`general.siteName`), topilmasa "Blog". */
+export async function resolveTelegraphAuthorName(): Promise<string> {
+  try {
+    const settings = await getSettings();
+    return settings.general.siteName?.trim() || FALLBACK_AUTHOR_NAME;
+  } catch {
+    return FALLBACK_AUTHOR_NAME;
+  }
+}
+
+/** Nisbiy (`/uploads/...`) manzilni API origin'i bilan mutlaq URL'ga aylantiradi — Telegraph faqat mutlaq URL'ni ko'ra oladi. */
+export function absolutizeImageSrc(src: string): string {
+  if (/^https?:\/\//i.test(src)) return src;
+  if (src.startsWith("//")) return `https:${src}`;
+  if (src.startsWith("/")) return `${config.API_ORIGIN}${src}`;
+  return src;
+}
 
 /** https://telegra.ph/api — Node DOM formati: string yoki {tag, attrs, children}. */
 export type TelegraphNode =
@@ -48,7 +69,7 @@ export async function ensureTelegraphToken(): Promise<string> {
 
   const account = await telegraphCall<{ access_token: string }>("createAccount", {
     short_name: "blog",
-    author_name: "Blog",
+    author_name: await resolveTelegraphAuthorName(),
   });
 
   await storeTelegraphToken(account.access_token);
@@ -101,6 +122,60 @@ function textOf(node: TiptapNode): string {
   return (node.content ?? []).map(textOf).join(" ");
 }
 
+/** Katak ichidagi inline kontent (paragraflar " " bilan birlashtiriladi), marks/havolalar saqlanadi. */
+function cellInline(cell: TiptapNode): TelegraphNode[] {
+  const out: TelegraphNode[] = [];
+  for (const block of cell.content ?? []) {
+    const inline = block.type === "paragraph" ? convertChildren(block.content) : convertNode(block);
+    if (inline.length === 0) continue;
+    if (out.length > 0) out.push(" ");
+    out.push(...inline);
+  }
+  return out;
+}
+
+/**
+ * Jadval -> paragraflar. Birinchi qator sarlavha (barcha kataklari to'la va
+ * kamida bitta ma'lumot qatori bor bo'lsa): har bir ma'lumot qatori uchun bitta
+ * `p` — `<strong>katak0</strong>` + har bir keyingi katak uchun `br` va
+ * `sarlavha_i: katak_i`. Sarlavha yaroqsiz bo'lsa — kataklar " — " bilan birlashtiriladi.
+ */
+function convertTable(table: TiptapNode): TelegraphNode[] {
+  const rows = (table.content ?? []).map((row) =>
+    (row.content ?? []).map((cell) => ({ inline: cellInline(cell), text: textOf(cell).trim() })),
+  );
+  const nonEmptyRows = rows.filter((cells) => cells.some((c) => c.text));
+  if (nonEmptyRows.length === 0) return [];
+
+  const header = rows[0];
+  const hasHeader = rows.length >= 2 && header !== undefined && header.length > 0 && header.every((c) => c.text);
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+
+  const result: TelegraphNode[] = [];
+  for (const cells of dataRows) {
+    if (!cells.some((c) => c.text)) continue;
+    const children: TelegraphNode[] = [];
+
+    if (hasHeader) {
+      const [first, ...rest] = cells;
+      if (first?.text) children.push({ tag: "strong", children: first.inline });
+      rest.forEach((cell, i) => {
+        if (!cell.text) return;
+        if (children.length > 0) children.push({ tag: "br" });
+        children.push(`${header[i + 1]?.text ?? ""}${header[i + 1]?.text ? ": " : ""}`, ...cell.inline);
+      });
+    } else {
+      const filled = cells.filter((c) => c.text);
+      filled.forEach((cell, i) => {
+        if (i > 0) children.push(" \u2014 ");
+        children.push(...cell.inline);
+      });
+    }
+    if (children.length > 0) result.push({ tag: "p", children });
+  }
+  return result;
+}
+
 /** Bitta Tiptap tugunini bir yoki bir nechta Telegraph Node'ga aylantiradi (masalan `doc` — bir nechta bolalarga yoyiladi). */
 function convertNode(node: TiptapNode): TelegraphNode[] {
   switch (node.type) {
@@ -133,8 +208,9 @@ function convertNode(node: TiptapNode): TelegraphNode[] {
     case "hardBreak":
       return [{ tag: "br" }];
     case "image": {
-      const src = typeof node.attrs?.src === "string" ? node.attrs.src : null;
-      if (!src) return [];
+      const rawSrc = typeof node.attrs?.src === "string" ? node.attrs.src : null;
+      if (!rawSrc) return [];
+      const src = absolutizeImageSrc(rawSrc);
       const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
       const img: TelegraphNode = { tag: "img", attrs: { src } };
       if (alt) {
@@ -142,13 +218,9 @@ function convertNode(node: TiptapNode): TelegraphNode[] {
       }
       return [{ tag: "figure", children: [img] }];
     }
-    // Jadvallar Telegraph'da qo'llab-quvvatlanmaydi — oddiy paragraflarga tushiriladi (fallback).
-    case "table": {
-      const rows = (node.content ?? [])
-        .map((row) => (row.content ?? []).map((cell) => textOf(cell).trim()).filter(Boolean).join(" | "))
-        .filter(Boolean);
-      return rows.map((row) => ({ tag: "p", children: [row] }));
-    }
+    // Jadvallar Telegraph'da qo'llab-quvvatlanmaydi — har bir qator alohida paragrafga aylantiriladi.
+    case "table":
+      return convertTable(node);
     case "text": {
       if (!node.text) return [];
       return wrapMarks(node, [node.text]);
@@ -164,6 +236,8 @@ export interface TelegraphPageOptions {
   authorName: string;
   authorUrl: string;
   postUrl: string;
+  /** Post koveri — bo'lsa sahifaning BIRINCHI tuguni sifatida qo'shiladi (Instant View preview uchun). */
+  coverUrl?: string | null;
 }
 
 function byteLength(nodes: TelegraphNode[]): number {
@@ -190,9 +264,23 @@ function enforceSizeLimit(body: TelegraphNode[], footer: TelegraphNode, postUrl:
   return kept;
 }
 
+/** Birinchi kontent tuguni aynan shu `src`li rasmmi (kover ikki marta chiqmasligi uchun). */
+function startsWithImage(body: TelegraphNode[], src: string): boolean {
+  const first = body[0];
+  if (!first || typeof first === "string" || first.tag !== "figure") return false;
+  const img = (first.children ?? []).find((c) => typeof c !== "string" && c.tag === "img");
+  return typeof img !== "string" && img?.attrs?.src === src;
+}
+
 /** Tiptap JSON doc'ni Telegraph Node massiviga aylantiradi, oxirida saytga havola qo'shadi. */
 export function tiptapToTelegraphNodes(json: unknown, options: TelegraphPageOptions): TelegraphNode[] {
   const body = convertNode((json ?? { type: "doc", content: [] }) as TiptapNode);
+  if (options.coverUrl) {
+    const coverSrc = absolutizeImageSrc(options.coverUrl);
+    if (!startsWithImage(body, coverSrc)) {
+      body.unshift({ tag: "figure", children: [{ tag: "img", attrs: { src: coverSrc } }] });
+    }
+  }
   const footer: TelegraphNode = {
     tag: "p",
     children: [{ tag: "a", attrs: { href: options.postUrl }, children: ["Saytda o'qish va fikr bildirish →"] }],
@@ -203,6 +291,8 @@ export function tiptapToTelegraphNodes(json: unknown, options: TelegraphPageOpti
 export interface TelegraphPageResult {
   path: string;
   url: string;
+  /** `editPage` "CONTENT_NOT_CHANGED" qaytargan — sahifa allaqachon shu kontentda (xato emas). */
+  unchanged?: boolean;
 }
 
 /**
@@ -218,15 +308,21 @@ export async function createOrUpdateTelegraphPage(
   const accessToken = await ensureTelegraphToken();
 
   if (existingPath) {
-    const result = await telegraphCall<{ path: string; url: string }>("editPage", {
-      access_token: accessToken,
-      path: existingPath,
-      title: options.title,
-      content: nodes,
-      author_name: options.authorName,
-      author_url: options.authorUrl,
-    });
-    return result;
+    try {
+      return await telegraphCall<{ path: string; url: string }>("editPage", {
+        access_token: accessToken,
+        path: existingPath,
+        title: options.title,
+        content: nodes,
+        author_name: options.authorName,
+        author_url: options.authorUrl,
+      });
+    } catch (error: unknown) {
+      if (error instanceof Error && /CONTENT_NOT_CHANGED/.test(error.message)) {
+        return { path: existingPath, url: `https://telegra.ph/${existingPath}`, unchanged: true };
+      }
+      throw error;
+    }
   }
 
   const result = await telegraphCall<{ path: string; url: string }>("createPage", {

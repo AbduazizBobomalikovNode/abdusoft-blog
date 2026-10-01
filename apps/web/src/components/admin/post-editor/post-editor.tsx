@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { JSONContent } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
@@ -14,11 +13,10 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { Settings2 } from "lucide-react";
 import { toast } from "sonner";
-import { slugify, type AdminPostDetail, type AdminPostStatus, type Me, type PostSettings, type TagWithCount, type TelegramRef, type UpdatePostBody } from "@blog/shared";
+import { slugify, type AdminPostDetail, type AdminPostStatus, type ChannelPlan, type Me, type PostSettings, type TagWithCount, type TelegramRef, type UpdatePostBody } from "@blog/shared";
 import { ChannelSendDialog } from "./channel-send-dialog";
-import { PostEditorHeader, type SaveState } from "./post-editor-header";
+import { PostEditorHeader, StaffEditorHeader, type SaveState } from "./post-editor-header";
 import { PostEditorSettings } from "./post-editor-settings";
-import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { CodeBlockLanguageMenu, PostEditorBubbleMenu } from "./post-editor-toolbar";
 import { AdminReviewActions, StaffReviewBanner } from "./review-banner";
 import { SlashCommand } from "./slash-command";
@@ -36,7 +34,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
-import { formatTime } from "@/lib/format";
 import { site } from "@/lib/site";
 
 const AUTOSAVE_DELAY_MS = 1500;
@@ -69,6 +66,8 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   const [submitting, setSubmitting] = useState(false);
   const [scheduledAtLocal, setScheduledAtLocal] = useState(toDatetimeLocal(post.scheduledAt));
   const [scheduling, setScheduling] = useState(false);
+  // Faqat rejalashtirilgan postda server tomonda saqlanadi — boshqa holatda "rejalashtirish" bosilganda yuboriladi.
+  const [channelPlan, setChannelPlan] = useState<ChannelPlan | null>(post.status === "scheduled" ? post.channelPlan : null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(post.updatedAt);
@@ -77,6 +76,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   const [telegramChannel, setTelegramChannel] = useState<string | null>(null);
   const [refreshingTelegraph, setRefreshingTelegraph] = useState(false);
   const [channelSendOpen, setChannelSendOpen] = useState(false);
+  const [channelPlanBlocked, setChannelPlanBlocked] = useState(false);
 
   // Xodim (staff) uchun — post ko'rib chiqishda bo'lsa butunlay o'qish uchun
   // (API ham shu holatda PATCH'ni 409 bilan rad etadi — bu shunchaki mos UI).
@@ -164,6 +164,8 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   }, []);
 
   useEffect(() => {
+    // Xodim (staff) `/admin/telegram/status`ga kira olmaydi (403) — kanal ma'lumoti faqat admin uchun.
+    if (isStaff) return;
     adminApi
       .getTelegramStatus()
       .then((status) => {
@@ -172,6 +174,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
       .catch(() => {
         // Telegram holatini olishda xatolik bo'lsa ham tahrirlagich ishlashda davom etadi.
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleRefreshTelegraph() {
@@ -271,7 +274,8 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   });
 
   useEffect(() => {
-    editor?.setEditable(!readOnly);
+    // emitUpdate=false: aks holda `update` hodisasi chiqib, o'qish-uchun postda 409 PATCH ketadi.
+    editor?.setEditable(!readOnly, false);
   }, [editor, readOnly]);
 
   async function handleSubmit() {
@@ -339,6 +343,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     try {
       const result = await adminApi.unpublishPost(post.id);
       setStatus(result.status);
+      setChannelPlan(null); // server ham rejani tozalaydi
       toast.success("Post qoralamaga qaytarildi");
     } catch (error) {
       toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
@@ -370,7 +375,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     setScheduling(true);
     try {
       const iso = new Date(scheduledAtLocal).toISOString();
-      const result = await adminApi.schedulePost(post.id, iso);
+      const result = await adminApi.schedulePost(post.id, iso, channelPlan);
       setStatus(result.status);
       toast.success("Post rejalashtirildi");
     } catch (error) {
@@ -429,6 +434,16 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     onScheduledAtLocalChange: setScheduledAtLocal,
     onSchedule: () => void handleSchedule(),
     scheduling,
+    postId: post.id,
+    channelPlan,
+    channelPlanBlocked,
+    onChannelPlanBlockingChange: setChannelPlanBlocked,
+    onChannelPlanChange: (plan: ChannelPlan | null) => {
+      setChannelPlan(plan);
+      // Allaqachon rejalashtirilgan postda o'zgarish avtosaqlash orqali serverga boradi (faqat admin).
+      if (status === "scheduled") queueSave({ channelPlan: plan });
+    },
+    onCancelSchedule: () => void handleUnpublish(),
     telegram,
     channelUrl,
     onRefreshTelegraph: () => void handleRefreshTelegraph(),
@@ -451,32 +466,15 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   return (
     <div className="flex flex-col gap-4">
       {isStaff ? (
-        <div className="sticky top-0 z-30 -mx-4 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur-sm md:-mx-8 md:px-8">
-          <div className="flex items-center gap-2.5">
-            <PostStatusBadge status={status} />
-            <span className="text-xs text-muted-foreground">
-              {saveState === "saving"
-                ? "Saqlanmoqda…"
-                : saveState === "error"
-                  ? `Xato: ${saveError ?? "saqlanmadi"}`
-                  : saveState === "saved" && lastSavedAt
-                    ? `Saqlandi ${formatTime(lastSavedAt)}`
-                    : ""}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Button variant="ghost" size="sm" asChild>
-              <Link href={`/admin/postlar/${post.id}/preview`} target="_blank">
-                Ko&apos;rish
-              </Link>
-            </Button>
-            {canSubmit ? (
-              <Button size="sm" onClick={() => setSubmitOpen(true)}>
-                Ko&apos;rib chiqishga yuborish
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        <StaffEditorHeader
+          postId={post.id}
+          status={status}
+          saveState={saveState}
+          saveError={saveError}
+          lastSavedAt={lastSavedAt}
+          canSubmit={canSubmit}
+          onSubmit={() => setSubmitOpen(true)}
+        />
       ) : (
         <PostEditorHeader
           postId={post.id}
@@ -522,13 +520,13 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
             className="post-editor-title"
           />
 
-          <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs text-muted-foreground">
-            <span className="truncate">{site.url}/</span>
+          <div className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground md:flex-wrap">
+            <span className="max-w-full truncate max-md:max-w-[38%] max-md:shrink-0">{site.url}/</span>
             <input
               value={slug}
               onChange={(event) => handleSlugChange(event.target.value)}
               disabled={readOnly}
-              className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 hover:border-border focus:border-border focus:outline-none"
+              className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 hover:border-border focus:border-border focus:outline-none max-md:min-h-11 max-md:truncate"
             />
             {!readOnly ? (
               <button
@@ -536,7 +534,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
                 onClick={() => setSlugAuto((v) => !v)}
                 aria-pressed={slugAuto}
                 title={slugAuto ? "Slug sarlavhadan avtomatik yangilanadi" : "Slug qulflangan"}
-                className="rounded-md px-1.5 py-0.5 hover:bg-muted"
+                className="shrink-0 rounded-md px-1.5 py-0.5 hover:bg-muted max-md:min-h-11 max-md:min-w-11"
               >
                 {slugAuto ? "🔓" : "🔒"}
               </button>
@@ -547,7 +545,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
             type="button"
             variant="outline"
             size="sm"
-            className="w-fit lg:hidden"
+            className="w-fit max-lg:h-11 max-lg:px-4 lg:hidden"
             onClick={() => setSettingsOpen(true)}
           >
             <Settings2 className="size-4" />
@@ -572,7 +570,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
       </div>
 
       <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <SheetContent side="right" className="overflow-y-auto p-4">
+        <SheetContent side="right" className="overflow-y-auto p-4 max-sm:data-[side=right]:w-full">
           <SheetHeader className="p-0">
             <SheetTitle>{isStaff ? "Qo'shimcha" : "Sozlamalar"}</SheetTitle>
           </SheetHeader>

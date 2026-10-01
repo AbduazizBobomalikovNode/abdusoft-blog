@@ -95,11 +95,11 @@ export function AdminReviewActions({
       <span className="text-blue-700 dark:text-blue-400">
         📝 <strong>{authorName}</strong> ko&apos;rib chiqishga yubordi.
       </span>
-      <div className="flex gap-2">
-        <Button type="button" size="sm" onClick={() => setApproveOpen(true)}>
+      <div className="flex gap-2 max-sm:w-full">
+        <Button type="button" size="sm" className="max-sm:h-11 max-sm:flex-1" onClick={() => setApproveOpen(true)}>
           ✅ Chop etish
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={() => setChangesOpen(true)}>
+        <Button type="button" size="sm" variant="outline" className="max-sm:h-11 max-sm:flex-1" onClick={() => setChangesOpen(true)}>
           ✏️ Qaytarish
         </Button>
       </div>

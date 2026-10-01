@@ -23,12 +23,12 @@ import { escapeHtml, escapeHtmlAttr, tagsToHashtags } from "./format.js";
  * byudjetidan (`CHANNEL_VARIANT_BUDGETS`, `@blog/shared`) oshmasligi SHART.
  */
 
-interface TiptapMark {
+export interface TiptapMark {
   type: string;
   attrs?: Record<string, unknown>;
 }
 
-interface TiptapNode {
+export interface TiptapNode {
   type?: string;
   attrs?: Record<string, unknown>;
   content?: TiptapNode[];
@@ -53,7 +53,10 @@ function isHttpUrl(value: unknown): value is string {
   return typeof value === "string" && /^https?:\/\//i.test(value);
 }
 
-function wrapInlineMarks(node: TiptapNode, innerHtml: string): string {
+/** Maxsus versiyalar uchun kengaytirilgan jadval — `underline` ham qo'llab-quvvatlanadi (avtomatik variantlar eski jadvaldan foydalanadi, xatti-harakati o'zgarmagan). */
+export const CUSTOM_MARK_TAGS: Record<string, string> = { ...INLINE_MARK_TAGS, underline: "u" };
+
+function wrapInlineMarks(node: TiptapNode, innerHtml: string, tagMap: Record<string, string> = INLINE_MARK_TAGS): string {
   let html = innerHtml;
   for (const mark of node.marks ?? []) {
     if (mark.type === "link") {
@@ -63,23 +66,23 @@ function wrapInlineMarks(node: TiptapNode, innerHtml: string): string {
       }
       continue;
     }
-    const tag = INLINE_MARK_TAGS[mark.type];
+    const tag = tagMap[mark.type];
     if (tag) html = `<${tag}>${html}</${tag}>`;
   }
   return html;
 }
 
 /** Inline (paragraph/heading/blockquote/listItem ichidagi) tugunlarni HTML matnga aylantiradi. */
-function inlineHtml(nodes: TiptapNode[] | undefined): string {
+export function inlineHtml(nodes: TiptapNode[] | undefined, tagMap: Record<string, string> = INLINE_MARK_TAGS): string {
   if (!nodes) return "";
   return nodes
     .map((node) => {
       if (node.type === "text") {
-        return wrapInlineMarks(node, escapeHtml(node.text ?? ""));
+        return wrapInlineMarks(node, escapeHtml(node.text ?? ""), tagMap);
       }
       if (node.type === "hardBreak") return "\n";
       // Noma'lum inline tugun — bolalarini xavfsiz tekislab qo'shamiz.
-      return inlineHtml(node.content);
+      return inlineHtml(node.content, tagMap);
     })
     .join("");
 }
@@ -136,7 +139,7 @@ function blockHtml(node: TiptapNode): string | null {
   }
 }
 
-function stripTagsPlain(html: string): string {
+export function stripTagsPlain(html: string): string {
   return html
     .replace(/<[^>]+>/g, "")
     .replace(/&amp;/g, "&")
@@ -147,7 +150,7 @@ function stripTagsPlain(html: string): string {
 }
 
 /** Telegram HTML matnini "ko'rinadigan" uzunligiga aylantiradi (teglar olib tashlanadi, entity'lar dekod qilinadi). */
-function visibleLength(html: string): number {
+export function visibleLength(html: string): number {
   return stripTagsPlain(html).length;
 }
 

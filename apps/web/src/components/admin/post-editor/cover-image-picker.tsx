@@ -58,7 +58,7 @@ export function CoverImagePicker({
             type="button"
             variant="secondary"
             size="icon-sm"
-            className="absolute top-2 right-2"
+            className="absolute top-2 right-2 max-md:size-11"
             onClick={() => onChange(null)}
             aria-label="Muqovani olib tashlash"
           >
@@ -76,6 +76,7 @@ export function CoverImagePicker({
           type="button"
           variant="outline"
           size="sm"
+          className="max-md:h-11 max-md:flex-1"
           disabled={uploading}
           onClick={() => fileInputRef.current?.click()}
         >
@@ -84,7 +85,7 @@ export function CoverImagePicker({
         </Button>
         <Popover open={libraryOpen} onOpenChange={setLibraryOpen}>
           <PopoverTrigger asChild>
-            <Button type="button" variant="outline" size="sm" onClick={openLibrary}>
+            <Button type="button" variant="outline" size="sm" className="max-md:h-11 max-md:flex-1" onClick={openLibrary}>
               Media dan tanlash
             </Button>
           </PopoverTrigger>

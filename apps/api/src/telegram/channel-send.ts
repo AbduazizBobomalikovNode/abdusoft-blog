@@ -1,17 +1,22 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { eq } from "drizzle-orm";
 import { GrammyError, InputFile, InputMediaBuilder } from "grammy";
-import sharp from "sharp";
-import { isChannelComboValid, type ChannelMediaKind, type ChannelMode, type ChannelVariant } from "@blog/shared";
+import {
+  isChannelComboValid,
+  type ChannelMediaKind,
+  type ChannelMode,
+  type ChannelPreflightResponse,
+  type ChannelVariant,
+} from "@blog/shared";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { posts, telegramRefs } from "../db/schema.js";
-import { uploadsDir } from "../lib/media/store.js";
 import { getSettings } from "../lib/settings.js";
 import { tagsForPostIds } from "../routes/posts.js";
 import { bot } from "./client.js";
 import { buildChannelPost, MAX_CHANNEL_MEDIA } from "./channel-post.js";
+import { getPreparedImage } from "./channel-media.js";
+import { collectPostImages, loadVersion, versionHardLimit } from "./channel-versions.js";
+import { computeChannelPreflightFor } from "./channel-preflight.js";
 
 /**
  * "Kanalga yuborish" dialogi (admin panel) va Telegram tasdiqlash oqimi
@@ -19,11 +24,6 @@ import { buildChannelPost, MAX_CHANNEL_MEDIA } from "./channel-post.js";
  * xil funksiyalarni chaqiradi, shu sabab ikkalasi ham bir xil natijaga olib
  * keladi (idempotentlik ham shu yerda ta'minlanadi).
  */
-
-const DOWNLOAD_TIMEOUT_MS = 10_000;
-const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
-const JPEG_QUALITY = 88;
-const MAX_SIDE = 2560;
 
 type ChannelMessageType = "text" | "photo" | "album";
 
@@ -34,8 +34,13 @@ export interface ChannelMediaEntry {
 }
 
 export interface ChannelComputed {
-  post: { id: string; slug: string; title: string; coverUrl: string | null };
+  post: { id: string; slug: string; title: string; coverUrl: string | null; status: string };
   mode: ChannelMode;
+  /** Avtomatik variant (maxsus versiya bo'lsa `null`). */
+  variant: ChannelVariant | null;
+  /** Maxsus versiya (avtomatik bo'lsa `null`). */
+  versionId: string | null;
+  versionName: string | null;
   captionHtml: string;
   visibleLength: number;
   limit: number;
@@ -45,7 +50,7 @@ export interface ChannelComputed {
 
 export type ComputeChannelPostResult =
   | { ok: true; data: ChannelComputed }
-  | { ok: false; reason: "not_found" | "not_published" | "invalid_combo" | "no_media" };
+  | { ok: false; reason: "not_found" | "not_published" | "invalid_combo" | "no_media" | "version_not_found" };
 
 export async function loadTelegramRef(postId: string) {
   const [row] = await db.select().from(telegramRefs).where(eq(telegramRefs.postId, postId)).limit(1);
@@ -61,6 +66,7 @@ export async function upsertTelegramRef(
     channelMessageType: ChannelMessageType | null;
     channelVariant: ChannelVariant | null;
     channelMode: ChannelMode | null;
+    channelVersionId: string | null;
     channelMessageIds: number[] | null;
     channelSentAt: Date | null;
   }>,
@@ -92,12 +98,14 @@ export async function computeChannelPost(
   postId: string,
   mode: ChannelMode,
   variant: ChannelVariant,
+  /** `true` — chop etilmagan post uchun ham quriladi (faqat ko'rinishni oldindan ko'rish: rejalashtirishda). Yuborish HECH QACHON buni ishlatmaydi. */
+  opts: { allowUnpublished?: boolean; /** `true` — rasmli rejimda rasm bo'lmasa ham natija quriladi (preflight o'zi xato ko'rsatadi). */ allowEmptyMedia?: boolean } = {},
 ): Promise<ComputeChannelPostResult> {
   if (!isChannelComboValid(mode, variant)) return { ok: false, reason: "invalid_combo" };
 
   const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
   if (!post) return { ok: false, reason: "not_found" };
-  if (post.status !== "published") return { ok: false, reason: "not_published" };
+  if (post.status !== "published" && !opts.allowUnpublished) return { ok: false, reason: "not_published" };
 
   const ref = await loadTelegramRef(postId);
   const tagMap = await tagsForPostIds([postId]);
@@ -125,14 +133,17 @@ export async function computeChannelPost(
       media.push({ url: image.url, kind: "content", alt: image.alt });
     }
     // 🖼 Rasmli tanlangan, lekin postda na kover, na band ichidagi rasm bor — UI oldindan taqiqlaydi, bu yerda ikkinchi himoya qatlami.
-    if (media.length === 0) return { ok: false, reason: "no_media" };
+    if (media.length === 0 && !opts.allowEmptyMedia) return { ok: false, reason: "no_media" };
   }
 
   return {
     ok: true,
     data: {
-      post: { id: post.id, slug: post.slug, title: post.title, coverUrl: post.coverUrl },
+      post: { id: post.id, slug: post.slug, title: post.title, coverUrl: post.coverUrl, status: post.status },
       mode,
+      variant,
+      versionId: null,
+      versionName: null,
       captionHtml: built.html,
       visibleLength: built.visibleLength,
       limit: built.limit,
@@ -142,10 +153,56 @@ export async function computeChannelPost(
   };
 }
 
+/** Maxsus versiya asosida caption/matn va media ro'yxatini quradi. */
+export async function computeChannelVersionPost(
+  postId: string,
+  versionId: string,
+  opts: { allowUnpublished?: boolean; allowEmptyMedia?: boolean } = {},
+): Promise<ComputeChannelPostResult> {
+  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  if (!post) return { ok: false, reason: "not_found" };
+  if (post.status !== "published" && !opts.allowUnpublished) return { ok: false, reason: "not_published" };
+
+  const version = await loadVersion(postId, versionId);
+  if (!version) return { ok: false, reason: "version_not_found" };
+
+  const media: ChannelMediaEntry[] = [];
+  if (version.mode === "media") {
+    const options = new Map(collectPostImages(post).map((i) => [i.url, i]));
+    for (const url of version.imageUrls ?? []) {
+      const option = options.get(url);
+      media.push({
+        url,
+        kind: url === post.coverUrl ? "cover" : "content",
+        alt: option?.alt ?? null,
+      });
+    }
+    if (media.length === 0 && !opts.allowEmptyMedia) return { ok: false, reason: "no_media" };
+  }
+
+  return {
+    ok: true,
+    data: {
+      post: { id: post.id, slug: post.slug, title: post.title, coverUrl: post.coverUrl, status: post.status },
+      mode: version.mode,
+      variant: null,
+      versionId: version.id,
+      versionName: version.name,
+      captionHtml: version.textHtml,
+      visibleLength: version.visibleLength,
+      limit: versionHardLimit(version.mode),
+      truncated: false,
+      media,
+    },
+  };
+}
+
 export interface ChannelAlreadySentInfo {
   at: string;
   mode: ChannelMode;
-  variant: ChannelVariant;
+  variant: ChannelVariant | null;
+  versionId: string | null;
+  versionName: string | null;
   messageUrl: string | null;
 }
 
@@ -162,63 +219,26 @@ function resolveChannelMode(ref: { channelMode: ChannelMode | null; channelMessa
 /** Post allaqachon kanalga yuborilgan bo'lsa — qachon, qaysi rejim/variant bilan va havolasi (bo'lsa). */
 export async function getChannelAlreadySent(postId: string): Promise<ChannelAlreadySentInfo | null> {
   const ref = await loadTelegramRef(postId);
-  if (!ref?.channelSentAt || !ref.channelVariant) return null;
+  if (!ref?.channelSentAt || (!ref.channelVariant && !ref.channelVersionId)) return null;
   const settings = await getSettings();
   const messageUrl = ref.channelMessageId ? messageUrlFor(settings.telegram.channelId, ref.channelMessageId) : null;
-  return { at: ref.channelSentAt.toISOString(), mode: resolveChannelMode(ref), variant: ref.channelVariant, messageUrl };
-}
-
-/** Mahalliy yuklamalar (`/uploads/...`) diskdan to'g'ridan-to'g'ri o'qiladi — tashqi URL'lar HTTP orqali (timeout + hajm chegarasi bilan) olinadi. */
-async function fetchImageBytes(url: string): Promise<Buffer> {
-  const localPrefix = `${config.API_ORIGIN}/uploads/`;
-  if (url.startsWith(localPrefix)) {
-    const key = url.slice(localPrefix.length);
-    return readFile(path.join(uploadsDir, key));
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const contentLength = res.headers.get("content-length");
-    if (contentLength && Number(contentLength) > MAX_DOWNLOAD_BYTES) {
-      throw new Error("Fayl hajmi 10 MB dan katta");
-    }
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (buffer.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("Fayl hajmi 10 MB dan katta");
-    return buffer;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** JPEG'ga aylantiradi (sifat ~88, uzun tomoni ko'pi bilan 2560px) — `sharp` metadata'ni standart holatda saqlamaydi (strip). */
-async function convertToJpeg(buffer: Buffer): Promise<Buffer> {
-  return sharp(buffer)
-    .rotate()
-    .resize({ width: MAX_SIDE, height: MAX_SIDE, fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: JPEG_QUALITY })
-    .toBuffer();
-}
-
-/** Bitta media elementini yuklab, JPEG'ga aylantiradi — muvaffaqiyatsiz bo'lsa `null` (log qilinib, o'sha rasm o'tkazib yuboriladi). */
-async function prepareMediaFile(url: string): Promise<InputFile | null> {
-  try {
-    const raw = await fetchImageBytes(url);
-    const jpeg = await convertToJpeg(raw);
-    return new InputFile(jpeg, "photo.jpg");
-  } catch (error) {
-    console.error(`Kanal uchun rasmni tayyorlashda xatolik (${url}):`, error);
-    return null;
-  }
+  const version = ref.channelVersionId ? await loadVersion(postId, ref.channelVersionId) : null;
+  return {
+    at: ref.channelSentAt.toISOString(),
+    mode: resolveChannelMode(ref),
+    variant: ref.channelVariant,
+    versionId: ref.channelVersionId,
+    versionName: version?.name ?? null,
+    messageUrl,
+  };
 }
 
 export type SendChannelPostResult =
   | {
       ok: true;
       mode: ChannelMode;
-      variant: ChannelVariant;
+      variant: ChannelVariant | null;
+      versionId: string | null;
       messageType: ChannelMessageType;
       messageIds: number[];
       messageUrl: string | null;
@@ -226,7 +246,17 @@ export type SendChannelPostResult =
     }
   | {
       ok: false;
-      reason: "not_found" | "not_published" | "telegram_disabled" | "already_sent" | "invalid_combo" | "no_media";
+      reason:
+        | "not_found"
+        | "not_published"
+        | "telegram_disabled"
+        | "already_sent"
+        | "invalid_combo"
+        | "no_media"
+        | "version_not_found"
+        | "preflight_failed";
+      /** `preflight_failed` bo'lganda — qaysi tekshiruvlar o'tmagani. */
+      preflight?: ChannelPreflightResponse;
     };
 
 /** Kanalning barcha saqlangan xabarlarini (albom bo'lsa hammasini) o'chiradi va `telegram_refs`dagi kanal maydonlarini tozalaydi. */
@@ -262,6 +292,7 @@ export async function deleteChannelMessages(postId: string): Promise<void> {
       channelMessageId: null,
       channelMessageType: null,
       channelVariant: null,
+      channelVersionId: null,
       channelMessageIds: null,
       channelSentAt: null,
       discussionChatId: null,
@@ -291,7 +322,12 @@ interface DeliverResult {
  * yozmaydi, faqat Telegram'ga yuborish mexanikasi (rasm yuklash/JPEG'ga
  * aylantirish/sendPhoto/sendMediaGroup/matn fallback) shu yerda markazlashgan.
  */
-async function deliverChannelMessage(chatId: number | string, data: ChannelComputed): Promise<DeliverResult> {
+async function deliverChannelMessage(
+  chatId: number | string,
+  data: ChannelComputed,
+  /** `true` (haqiqiy yuborish) — rasm tayyorlanmasa xato tashlanadi, jimgina o'tkazib yuborilmaydi. `false` (admin chatidagi namuna) — eski yumshoq xatti-harakat. */
+  strict: boolean,
+): Promise<DeliverResult> {
   if (!bot) throw new Error("Telegram bot sozlanmagan");
 
   // 📝 Rasmsiz — har doim oddiy matn xabari (preview o'chirilgan), rasm umuman ishlatilmaydi.
@@ -305,15 +341,20 @@ async function deliverChannelMessage(chatId: number | string, data: ChannelCompu
 
   const prepared: { file: InputFile; alt: string | null }[] = [];
   for (const item of data.media) {
-    const file = await prepareMediaFile(item.url);
-    if (file) prepared.push({ file, alt: item.alt });
+    const image = await getPreparedImage(item.url);
+    if (image.ok) {
+      prepared.push({ file: new InputFile(image.buffer, "photo.jpg"), alt: item.alt });
+    } else if (strict) {
+      throw new Error(`Rasmni tayyorlab bo'lmadi (${item.url}): ${image.error}`);
+    } else {
+      console.error(`Kanal uchun rasmni tayyorlashda xatolik (${item.url}): ${image.error}`);
+    }
   }
 
   const caption = data.captionHtml;
 
   if (prepared.length === 0) {
-    // 🖼 Rasmli tanlangan, lekin rasm yuklab bo'lmadi (masalan tarmoq xatosi) — oxirgi chora sifatida matn.
-
+    // Faqat yumshoq (namuna) rejimda — oxirgi chora sifatida matn.
     const sent = await bot.api.sendMessage(chatId, caption, {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
@@ -339,14 +380,18 @@ async function deliverChannelMessage(chatId: number | string, data: ChannelCompu
  * ko'rsatadi. Hech narsa saqlamaydi (DB write yo'q) — faqat jonli namuna.
  */
 export async function sendChannelPreviewToChat(chatId: number | string, data: ChannelComputed): Promise<void> {
-  await deliverChannelMessage(chatId, data);
+  await deliverChannelMessage(chatId, data, false);
 }
 
-export async function sendPostToChannel(
+/**
+ * Umumiy yuborish yo'li: sozlamalar -> allaqachon yuborilganmi -> preflight (server
+ * tomonida, o'tmasa HECH NARSA yuborilmaydi) -> (kerak bo'lsa) eski xabarlarni
+ * o'chirish -> yuborish -> `telegram_refs`ni yozish.
+ */
+async function sendComputed(
   postId: string,
-  mode: ChannelMode,
-  variant: ChannelVariant,
-  opts: { replaceExisting?: boolean } = {},
+  compute: () => Promise<ComputeChannelPostResult>,
+  opts: { replaceExisting?: boolean },
 ): Promise<SendChannelPostResult> {
   const settings = await getSettings();
   if (!settings.telegram.enabled || !bot || !settings.telegram.channelId) {
@@ -358,35 +403,58 @@ export async function sendPostToChannel(
     return { ok: false, reason: "already_sent" };
   }
 
-  const computed = await computeChannelPost(postId, mode, variant);
+  const computed = await compute();
   if (!computed.ok) return computed;
+
+  const preflight = await computeChannelPreflightFor(computed.data, { requirePublished: true });
+  if (!preflight.canSend) return { ok: false, reason: "preflight_failed", preflight };
 
   if (existingRef?.channelSentAt && opts.replaceExisting) {
     await deleteChannelMessages(postId);
   }
 
   const channelId = settings.telegram.channelId;
-  const { messageType, messageIds } = await deliverChannelMessage(channelId, computed.data);
+  const { messageType, messageIds } = await deliverChannelMessage(channelId, computed.data, true);
 
   const sentAt = new Date();
   await upsertTelegramRef(postId, {
     channelMessageId: messageIds[0] ?? null,
     channelMessageType: messageType,
-    channelVariant: variant,
-    channelMode: mode,
+    channelVariant: computed.data.variant,
+    channelVersionId: computed.data.versionId,
+    channelMode: computed.data.mode,
     channelMessageIds: messageIds,
     channelSentAt: sentAt,
   });
 
   return {
     ok: true,
-    mode,
-    variant,
+    mode: computed.data.mode,
+    variant: computed.data.variant,
+    versionId: computed.data.versionId,
     messageType,
     messageIds,
     messageUrl: messageIds[0] !== undefined ? messageUrlFor(channelId, messageIds[0]) : null,
     sentAt: sentAt.toISOString(),
   };
+}
+
+export async function sendPostToChannel(
+  postId: string,
+  mode: ChannelMode,
+  variant: ChannelVariant,
+  opts: { replaceExisting?: boolean } = {},
+): Promise<SendChannelPostResult> {
+  return sendComputed(postId, () => computeChannelPost(postId, mode, variant), opts);
+}
+
+/** Maxsus versiya bilan yuborish — `computeChannelVersionPost` + shu umumiy yo'l. */
+export async function sendVersionToChannel(
+  postId: string,
+  versionId: string,
+  opts: { replaceExisting?: boolean } = {},
+): Promise<SendChannelPostResult> {
+  return sendComputed(postId, () => computeChannelVersionPost(postId, versionId), opts);
 }
 
 /**
@@ -401,6 +469,8 @@ export async function editChannelCaptionForPost(postId: string): Promise<void> {
 
   const ref = await loadTelegramRef(postId);
   if (!ref?.channelSentAt || !ref.channelMessageId || !ref.channelVariant) return;
+  // Maxsus versiyadan yuborilgan xabar post o'zgarganda AVTOMATIK qayta sinxronlanmaydi.
+  if (ref.channelVersionId) return;
 
   // Saqlangan rejim bilan qayta quramiz (eski qatorlarda `channelMode` `null` — `resolveChannelMode` orqali aniqlanadi).
   const mode = resolveChannelMode(ref);

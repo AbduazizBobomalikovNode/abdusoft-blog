@@ -63,6 +63,10 @@ export const posts = pgTable(
     publishedAt: timestamp("published_at", { withTimezone: true }),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
     pinned: boolean("pinned").notNull().default(false),
+    /** Rejalashtirilgan postning kanal rejasi: `{ mode, variant, delayMinutes, attempts? }` (`ChannelPlanSchema`). */
+    channelPlan: jsonb("channel_plan"),
+    /** Post chop etilgach kanalga yuboriladigan vaqt — scheduler shu ustun bo'yicha ishlaydi. */
+    channelSendAt: timestamp("channel_send_at", { withTimezone: true }),
     settings: jsonb("settings").notNull().default({}),
     viewsCount: integer("views_count").notNull().default(0),
     likesCount: integer("likes_count").notNull().default(0),
@@ -85,6 +89,7 @@ export const posts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    index("posts_channel_send_at_idx").on(table.channelSendAt),
     index("posts_search_idx").using(
       "gin",
       sql`to_tsvector('simple', coalesce(${table.title}, '') || ' ' || coalesce(${table.contentText}, ''))`,
@@ -245,6 +250,36 @@ export const staffInvites = pgTable(
   (table) => [index("staff_invites_token_hash_idx").on(table.tokenHash)],
 );
 
+/**
+ * "Kanalga yuborish" uchun maxsus (custom) post versiyalari — avtomatik
+ * variantlardan tashqari, admin qo'lda tahrirlagan matn + tanlangan rasmlar.
+ * Manba post keyin o'zgarsa ham versiya AVTOMATIK o'zgarmaydi.
+ */
+export const channelPostVersions = pgTable(
+  "channel_post_versions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    mode: channelModeEnum("mode").notNull(),
+    /** Cheklangan Tiptap hujjati. */
+    contentJson: jsonb("content_json").notNull(),
+    /** `contentJson`dan hosil qilingan Telegram HTML. */
+    textHtml: text("text_html").notNull().default(""),
+    visibleLength: integer("visible_length").notNull().default(0),
+    /** Tanlangan rasmlar (tartib bilan); `text` rejimida bo'sh. */
+    imageUrls: jsonb("image_urls").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    /** Qaysi avtomatik variantdan nusxa olingan (bo'lsa). */
+    baseVariant: channelVariantEnum("base_variant"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("channel_post_versions_post_idx").on(table.postId)],
+);
+
 export const telegramRefs = pgTable("telegram_refs", {
   postId: uuid("post_id")
     .primaryKey()
@@ -259,6 +294,8 @@ export const telegramRefs = pgTable("telegram_refs", {
   channelVariant: channelVariantEnum("channel_variant"),
   /** "Kanalga yuborish" dialogida tanlangan rejim (rasmli/rasmsiz) — resync shu rejim bilan qayta quradi. Eski qatorlarda `null`. */
   channelMode: channelModeEnum("channel_mode"),
+  /** Kanalga maxsus versiyadan yuborilgan bo'lsa — shu versiya (`channelVariant` bu holda `null`); `post.updated`da caption qayta sinxronlanmaydi. */
+  channelVersionId: uuid("channel_version_id").references(() => channelPostVersions.id, { onDelete: "set null" }),
   /** Kanalga yuborilgan BARCHA xabar id'lari (album bo'lsa bir nechta) — hujjat tartibida, `channelMessageId` shularning birinchisi. */
   channelMessageIds: jsonb("channel_message_ids").$type<number[]>(),
   /** "Kanalga yuborish" bosilgan payt — `null` bo'lsa hali qo'lda yuborilmagan. */
