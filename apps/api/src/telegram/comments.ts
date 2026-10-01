@@ -4,7 +4,7 @@ import { events, type CommentCreatedEventPayload } from "../lib/events.js";
 import { config } from "../config.js";
 import { getSettings } from "../lib/settings.js";
 import { setPendingReply, takePendingReply } from "../lib/site-settings.js";
-import { banCommentAuthor, deleteCommentCascade, loadCommentRow, replyToCommentAsAdmin, setCommentStatus } from "../lib/comments-admin.js";
+import { banCommentAuthor, deleteCommentCascade, isBanAvailable, loadCommentRow, replyToCommentAsAdmin, setCommentStatus, TelegramReplyError } from "../lib/comments-admin.js";
 import { db } from "../db/index.js";
 import { user as userTable } from "../db/auth-schema.js";
 import { posts } from "../db/schema.js";
@@ -130,8 +130,13 @@ export function registerCommentBotHandlers(): void {
       const updated = await deleteCommentCascade(commentId);
       statusLine = updated ? "🗑 O'chirildi" : "Topilmadi";
     } else if (action === "ban") {
-      const updated = await banCommentAuthor(commentId);
-      statusLine = updated ? "🚫 Bloklandi" : "Topilmadi";
+      const target = await loadCommentRow(commentId);
+      if (target && !isBanAvailable(target)) {
+        statusLine = "Bloklab bo'lmaydi";
+      } else {
+        const updated = await banCommentAuthor(commentId);
+        statusLine = updated ? "🚫 Bloklandi" : "Topilmadi";
+      }
     } else {
       await ctx.answerCallbackQuery();
       return;
@@ -161,7 +166,16 @@ export function registerCommentBotHandlers(): void {
       return;
     }
 
-    const created = await replyToCommentAsAdmin(pending.commentId, ctx.message.text, adminUser);
+    let created: Awaited<ReturnType<typeof replyToCommentAsAdmin>>;
+    try {
+      created = await replyToCommentAsAdmin(pending.commentId, ctx.message.text, adminUser);
+    } catch (error) {
+      if (error instanceof TelegramReplyError) {
+        await ctx.reply(error.message);
+        return;
+      }
+      throw error;
+    }
     if (!created) {
       await ctx.reply("Izoh topilmadi — javob yaratilmadi.");
       return;

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ExternalLink, Eye, EyeOff, MessageCircle, MoreHorizontal, Reply, ShieldBan, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Check, ExternalLink, Eye, EyeOff, MessageCircle, MoreHorizontal, Reply, Send, ShieldBan, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { AdminCommentItem } from "@blog/shared";
 import {
@@ -92,6 +92,9 @@ function CommentRowActions({ comment }: { comment: AdminCommentItem }) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [banReason, setBanReason] = useState("");
+  const [replyPending, setReplyPending] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const isTelegram = comment.source === "telegram";
 
   function run(action: () => Promise<unknown>, successMessage: string) {
     setPending(true);
@@ -130,15 +133,20 @@ function CommentRowActions({ comment }: { comment: AdminCommentItem }) {
   }
 
   async function handleReply() {
-    if (!replyBody.trim()) return;
+    if (!replyBody.trim() || replyPending) return;
+    setReplyPending(true);
+    setReplyError(null);
     try {
       await adminApi.replyToComment(comment.id, replyBody.trim());
-      toast.success("Javob yuborildi");
+      toast.success(isTelegram ? "Javob Telegram guruhiga yuborildi" : "Javob yuborildi");
       setReplyOpen(false);
       setReplyBody("");
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof AdminApiError ? error.message : "Javob yuborilmadi");
+      // Dialog ochiq qoladi va yozilgan matn saqlanadi — xato dialog ichida ko'rsatiladi.
+      setReplyError(error instanceof AdminApiError ? error.message : "Javob yuborilmadi");
+    } finally {
+      setReplyPending(false);
     }
   }
 
@@ -183,15 +191,28 @@ function CommentRowActions({ comment }: { comment: AdminCommentItem }) {
               Ko&apos;rinadigan qilish
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuItem onSelect={() => setReplyOpen(true)}>
+          <DropdownMenuItem
+            onSelect={() => {
+              setReplyError(null);
+              setReplyOpen(true);
+            }}
+          >
             <Reply />
             Javob berish
           </DropdownMenuItem>
+          {comment.canSendToTelegram ? (
+            <DropdownMenuItem onSelect={() => run(() => adminApi.sendCommentToTelegram(comment.id), "Telegram guruhiga yuborildi")}>
+              <Send />
+              Telegramga yuborish
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setBanOpen(true)}>
-            <ShieldBan />
-            Bloklash
-          </DropdownMenuItem>
+          {comment.canBan ? (
+            <DropdownMenuItem onSelect={() => setBanOpen(true)}>
+              <ShieldBan />
+              Bloklash
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
             <Trash2 />
             O&apos;chirish
@@ -241,7 +262,11 @@ function CommentRowActions({ comment }: { comment: AdminCommentItem }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Javob berish</DialogTitle>
-            <DialogDescription>Admin nomidan javob yuboriladi va darhol ko&apos;rinadi bo&apos;ladi.</DialogDescription>
+            <DialogDescription>
+              {isTelegram
+                ? "Javob Telegram guruhiga bot nomidan yuboriladi"
+                : "Admin nomidan javob yuboriladi va darhol ko'rinadi bo'ladi."}
+            </DialogDescription>
           </DialogHeader>
           <Textarea
             value={replyBody}
@@ -249,12 +274,17 @@ function CommentRowActions({ comment }: { comment: AdminCommentItem }) {
             className="min-h-24"
             placeholder="Javob matni…"
           />
+          {replyError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {replyError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setReplyOpen(false)}>
               Bekor qilish
             </Button>
-            <Button onClick={() => void handleReply()} disabled={!replyBody.trim()}>
-              Yuborish
+            <Button onClick={() => void handleReply()} disabled={!replyBody.trim() || replyPending}>
+              {isTelegram ? "Telegramga yuborish" : "Yuborish"}
             </Button>
           </DialogFooter>
         </DialogContent>

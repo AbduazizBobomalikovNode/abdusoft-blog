@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { and, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   AdminCommentBanBodySchema,
@@ -10,8 +11,17 @@ import {
 import { db } from "../db/index.js";
 import { bannedDevices, comments, posts } from "../db/schema.js";
 import { user } from "../db/auth-schema.js";
-import { recountPostComments, shortHash } from "../lib/comments.js";
-import { banCommentAuthor, deleteCommentCascade, replyToCommentAsAdmin, setCommentStatus } from "../lib/comments-admin.js";
+import { shortHash } from "../lib/comments.js";
+import {
+  banCommentAuthor,
+  deleteCommentCascade,
+  isBanAvailable,
+  loadCommentRow,
+  replyToCommentAsAdmin,
+  sendAdminReplyToTelegram,
+  setCommentStatus,
+  TelegramReplyError,
+} from "../lib/comments-admin.js";
 import { requireAdmin } from "../lib/require-admin.js";
 import { escapeLike } from "../lib/like.js";
 
@@ -33,6 +43,9 @@ const ListQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
+
+/** Ota izoh (admin javoblari "Telegramga yuborish" mumkinligini aniqlash uchun). */
+const parentComment = alias(comments, "parent_comment");
 
 const adminCommentColumns = {
   id: comments.id,
@@ -57,6 +70,9 @@ const adminCommentColumns = {
   tgUsername: comments.tgUsername,
   tgChatId: comments.tgChatId,
   tgMessageId: comments.tgMessageId,
+  tgUserId: comments.tgUserId,
+  parentSource: parentComment.source,
+  parentTgMessageId: parentComment.tgMessageId,
 } as const;
 
 type AdminCommentRow = {
@@ -82,6 +98,9 @@ type AdminCommentRow = {
   tgUsername: string | null;
   tgChatId: number | null;
   tgMessageId: number | null;
+  tgUserId: number | null;
+  parentSource: "web" | "telegram" | null;
+  parentTgMessageId: number | null;
 };
 
 /** Guruhdagi (odatda xususiy) izoh xabariga to'g'ridan-to'g'ri ochish havolasi — `t.me/c/<ichki_id>/<message_id>` (a'zo bo'lmagan brauzerda ochilmasligi mumkin, lekin Telegram ilovasida ishlaydi). */
@@ -115,6 +134,13 @@ function toAdminItem(row: AdminCommentRow) {
     source: row.source,
     tgUsername: row.tgUsername,
     tgThreadUrl: row.source === "telegram" ? tgThreadUrlFor(row.tgChatId, row.tgMessageId) : null,
+    canBan: isBanAvailable(row),
+    canSendToTelegram:
+      row.source === "web" &&
+      row.userRole === "admin" &&
+      row.status === "visible" &&
+      row.parentSource === "telegram" &&
+      Boolean(row.parentTgMessageId),
   };
 }
 
@@ -185,6 +211,7 @@ export const adminCommentsRoute = new Hono()
         .from(comments)
         .innerJoin(posts, eq(comments.postId, posts.id))
         .leftJoin(user, eq(comments.authorUserId, user.id))
+        .leftJoin(parentComment, eq(comments.parentId, parentComment.id))
         .where(whereClause)
         .orderBy(desc(comments.createdAt))
         .limit(limit)
@@ -225,22 +252,13 @@ export const adminCommentsRoute = new Hono()
     const parsed = AdminCommentBulkBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
-    const rows = await db
-      .select({ id: comments.id, postId: comments.postId })
-      .from(comments)
-      .where(inArray(comments.id, parsed.data.ids));
-
-    if (rows.length === 0) return c.json({ ok: true, updated: 0 });
-
-    const bulkUpdate: { status: "visible" | "hidden" | "deleted"; deletedAt?: Date } = {
-      status: parsed.data.status,
-    };
-    if (parsed.data.status === "deleted") bulkUpdate.deletedAt = new Date();
-
-    await db.update(comments).set(bulkUpdate).where(inArray(comments.id, parsed.data.ids));
-
-    const postIds = [...new Set(rows.map((r) => r.postId))];
-    await Promise.all(postIds.map((postId) => recountPostComments(postId)));
+    // Har bir izoh yakka amal bilan bir xil yo'ldan o'tadi: Telegram manbali izoh
+    // yashirilsa/o'chirilsa, guruhdagi xabar ham o'chiriladi va hisoblagichlar yangilanadi.
+    const rows: { id: string }[] = [];
+    for (const id of parsed.data.ids) {
+      const updated = await setCommentStatus(id, parsed.data.status);
+      if (updated) rows.push({ id: updated.id });
+    }
 
     return c.json({ ok: true, updated: rows.length });
   })
@@ -252,13 +270,28 @@ export const adminCommentsRoute = new Hono()
     const parsed = AdminCommentReplyBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
-    const created = await replyToCommentAsAdmin(id, parsed.data.body, {
-      id: adminUser.id,
-      name: adminUser.name ?? adminUser.email,
-    });
-    if (!created) return c.json({ error: "Topilmadi" }, 404);
+    try {
+      const created = await replyToCommentAsAdmin(id, parsed.data.body, {
+        id: adminUser.id,
+        name: adminUser.name ?? adminUser.email,
+      });
+      if (!created) return c.json({ error: "Topilmadi" }, 404);
 
-    return c.json({ id: created.id }, 201);
+      return c.json({ id: created.id }, 201);
+    } catch (error) {
+      if (error instanceof TelegramReplyError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
+  })
+  .post("/:id/send-to-telegram", async (c) => {
+    try {
+      const sent = await sendAdminReplyToTelegram(c.req.param("id"));
+      if (!sent) return c.json({ error: "Topilmadi" }, 404);
+      return c.json({ ok: true, id: sent.id });
+    } catch (error) {
+      if (error instanceof TelegramReplyError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
   })
   .delete("/:id", async (c) => {
     const deleted = await deleteCommentCascade(c.req.param("id"));
@@ -270,6 +303,12 @@ export const adminCommentsRoute = new Hono()
     const body = await c.req.json().catch(() => ({}));
     const parsed = AdminCommentBanBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
+
+    const target = await loadCommentRow(id);
+    if (!target) return c.json({ error: "Topilmadi" }, 404);
+    if (!isBanAvailable(target)) {
+      return c.json({ error: "Bu izoh muallifini bloklab bo'lmaydi (Telegram foydalanuvchi id'si yo'q)" }, 409);
+    }
 
     const banned = await banCommentAuthor(id, parsed.data.reason);
     if (!banned) return c.json({ error: "Topilmadi" }, 404);

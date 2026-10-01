@@ -251,6 +251,9 @@ export const adminApi = {
   replyToComment: (id: string, body: string) =>
     adminJson<{ id: string }>(`/admin/comments/${id}/reply`, { method: "POST", ...jsonBody({ body }) }),
 
+  sendCommentToTelegram: (id: string) =>
+    adminJson<{ ok: true; id: string }>(`/admin/comments/${id}/send-to-telegram`, { method: "POST" }),
+
   deleteComment: (id: string) =>
     adminJson<{ ok: true }>(`/admin/comments/${id}`, { method: "DELETE" }),
 

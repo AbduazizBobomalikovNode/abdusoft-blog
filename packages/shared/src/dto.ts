@@ -1138,6 +1138,10 @@ export const AdminCommentItemSchema = z.object({
   tgUsername: z.string().nullable(),
   /** Telegram guruhidagi ushbu izoh xabariga ochish havolasi ("Telegram'da ochish") — faqat `source==='telegram'` va aniqlansa. */
   tgThreadUrl: z.string().nullable(),
+  /** Muallifni bloklash mumkinmi (Telegram izohlarida `tg_user_id` bo'lmasa — yo'q). */
+  canBan: z.boolean(),
+  /** Tuzatishdan oldingi admin javobi (web manbali, ota izohi Telegram'da) — "Telegramga yuborish" mumkin. */
+  canSendToTelegram: z.boolean(),
 });
 export type AdminCommentItem = z.infer<typeof AdminCommentItemSchema>;
 
