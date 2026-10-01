@@ -111,6 +111,25 @@ export async function mapForwardToPost(chatId: number, forward: ForwardLike): Pr
   return true;
 }
 
+/** `sender_chat` nomidan yozilgan izoh muallifi: kanal/guruh nomi, guruhning o'zi bo'lsa — anonim admin. */
+function senderChatName(senderChat: { id: number; title?: string; username?: string }, groupChatId: number): string {
+  if (senderChat.id === groupChatId) return senderChat.title ? `${senderChat.title} (admin)` : "Anonim admin";
+  return senderChat.title ?? (senderChat.username ? `@${senderChat.username}` : "Kanal");
+}
+
+/**
+ * Guruhdan kelgan, lekin izoh sifatida saqlanmagan xabar uchun diagnostika (matn log qilinmaydi).
+ * "Izohlar kelmayapti" holatida sababni journal'dan ko'rish uchun.
+ */
+function logIgnored(reason: string, ctx: Context): void {
+  const m = ctx.message;
+  console.log(
+    `TG guruh xabari izoh sifatida olinmadi: sabab=${reason} chat=${ctx.chat?.id} msg=${m?.message_id}` +
+      ` thread=${m?.message_thread_id ?? "-"} reply=${m?.reply_to_message?.message_id ?? "-"}` +
+      ` from_bot=${ctx.from?.is_bot ?? "-"} sender_chat=${m && "sender_chat" in m && m.sender_chat ? m.sender_chat.id : "-"}`,
+  );
+}
+
 /** Kanaldan avtomatik forward qilingan xabarni tegishli postga bog'laydi. `true` — ushbu xabar shu tarzda ishlov berilgani (boshqa handler urinmasin). */
 async function tryHandleAutomaticForward(ctx: Context): Promise<boolean> {
   const message = ctx.message;
@@ -119,13 +138,21 @@ async function tryHandleAutomaticForward(ctx: Context): Promise<boolean> {
 }
 
 /** Guruhdagi (forward'ning o'zi bo'lmagan) xabarni izoh sifatida saqlaydi — mos kelmasa `false`. */
-async function tryHandleGroupComment(ctx: Context): Promise<boolean> {
+export async function tryHandleGroupComment(ctx: Context): Promise<boolean> {
   const message = ctx.message;
   if (!message) return false;
-  if (!ctx.from || ctx.from.is_bot) return false;
-  if ("sender_chat" in message && message.sender_chat) return false; // kanal nomidan yozilgan xabar — o'zimizning forward emas, e'tiborsiz
+  if (!ctx.from) return false;
+  if (message.is_automatic_forward) return false; // bizga tegishli bo'lmagan kanal posti forward'i — izoh emas
 
   const chatId = ctx.chat!.id;
+  // Kanal nomidan ("send as channel") yoki anonim admin sifatida yozilgan izohlarda Telegram
+  // `sender_chat`ni to'ldiradi, `from` esa xizmat boti (Channel_Bot / GroupAnonymousBot) bo'ladi.
+  // Kanal egasi o'z postiga ko'pincha aynan shunday izoh yozadi — bular ham izoh sifatida olinadi.
+  const senderChat = "sender_chat" in message && message.sender_chat ? message.sender_chat : null;
+  if (!senderChat && ctx.from.is_bot) {
+    logIgnored("bot_message", ctx);
+    return false; // haqiqiy bot (shu jumladan o'zimiz) yozgan xabar
+  }
   const threadId = message.message_thread_id ?? null;
   const replyToId = message.reply_to_message?.message_id ?? null;
 
@@ -136,7 +163,10 @@ async function tryHandleGroupComment(ctx: Context): Promise<boolean> {
     await mapForwardToPost(chatId, message.reply_to_message);
   }
   const candidateRootId = threadId ?? replyToId;
-  if (!candidateRootId) return false;
+  if (!candidateRootId) {
+    logIgnored("not_in_thread", ctx);
+    return false;
+  }
 
   let postId: string | null = null;
   let parentCommentId: string | null = null;
@@ -164,12 +194,18 @@ async function tryHandleGroupComment(ctx: Context): Promise<boolean> {
       .from(comments)
       .where(and(eq(comments.tgChatId, chatId), eq(comments.tgMessageId, replyToId), eq(comments.source, "telegram")))
       .limit(1);
-    if (!parentComment) return false;
+    if (!parentComment) {
+      logIgnored("unmapped_thread", ctx);
+      return false;
+    }
     postId = parentComment.postId;
     parentCommentId = parentComment.id;
   }
 
-  if (!postId) return false; // guruhdagi boshqa (bizga aloqasi bo'lmagan) xabar — e'tiborsiz qoldiriladi
+  if (!postId) {
+    logIgnored("unmapped_thread", ctx);
+    return false; // guruhdagi boshqa (bizga aloqasi bo'lmagan) xabar — e'tiborsiz qoldiriladi
+  }
 
   const [existing] = await db
     .select({ id: comments.id })
@@ -201,15 +237,16 @@ async function tryHandleGroupComment(ctx: Context): Promise<boolean> {
       parentId: parentCommentId,
       path,
       depth,
-      authorName: authorNameFrom(ctx.from),
+      authorName: senderChat ? senderChatName(senderChat, chatId) : authorNameFrom(ctx.from),
       body,
       bodyHtml,
       status: "visible",
       source: "telegram",
       tgChatId: chatId,
       tgMessageId: message.message_id,
-      tgUsername: ctx.from.username ?? null,
-      tgUserId: ctx.from.id,
+      tgUsername: senderChat ? (senderChat.username ?? null) : (ctx.from.username ?? null),
+      // Kanal/anonim admin nomidan yozilganda haqiqiy foydalanuvchi id'si yo'q (bloklab bo'lmaydi).
+      tgUserId: senderChat ? null : ctx.from.id,
     })
     .onConflictDoNothing()
     .returning();
