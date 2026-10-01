@@ -12,7 +12,6 @@ npm-debug.log*
 !.env.example
 .DS_Store
 apps/api/.data/
-apps/api/drizzle/meta/
 coverage/
 .vercel/
 *.tsbuildinfo
