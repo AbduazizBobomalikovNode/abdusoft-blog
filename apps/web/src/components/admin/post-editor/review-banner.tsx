@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
+import { isConflictFailure } from "@/lib/editor/post-sync";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof AdminApiError ? error.message : fallback;
@@ -50,6 +51,7 @@ export function AdminReviewActions({
   channelChoice = null,
   onApproved,
   onChangesRequested,
+  run,
 }: {
   postId: string;
   authorName: string;
@@ -57,7 +59,13 @@ export function AdminReviewActions({
   channelChoice?: ResolvedChannelChoice | null;
   onApproved: (status: AdminPostStatus) => void;
   onChangesRequested: (status: AdminPostStatus) => void;
+  /**
+   * Muharrirning umumiy so'rov navbati (ixtiyoriy): berilsa, amal tokenli ketadi va javobdagi `updatedAt` tahrirlagichga
+   * yetkaziladi (aks holda keyingi avtosaqlash yolg'on konflikt berardi). Berilmasa — avvalgidek.
+   */
+  run?: <T extends { updatedAt?: string }>(op: (token: string | undefined) => Promise<T>) => Promise<T>;
 }) {
+  const exec = run ?? (<T,>(op: (token: string | undefined) => Promise<T>) => op(undefined));
   const [approveOpen, setApproveOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [note, setNote] = useState("");
@@ -67,7 +75,9 @@ export function AdminReviewActions({
   async function handleApprove() {
     setBusy(true);
     try {
-      const result = await adminApi.approvePost(postId, channelChoice && sendToChannel ? { sendToChannel: true } : undefined);
+      const result = await exec((token) =>
+        adminApi.approvePost(postId, { ...(channelChoice && sendToChannel ? { sendToChannel: true } : {}), ...(token ? { expectedUpdatedAt: token } : {}) }),
+      );
       onApproved(result.status);
       const send = result.channelSend;
       if (send?.state === "sent") toast.success("Post chop etildi va kanalga yuborildi");
@@ -76,7 +86,8 @@ export function AdminReviewActions({
       else toast.success("Post chop etildi");
       setApproveOpen(false);
     } catch (error) {
-      toast.error(errorMessage(error, "Chop etishda xatolik"));
+      if (!isConflictFailure(error)) toast.error(errorMessage(error, "Chop etishda xatolik"));
+      else setApproveOpen(false);
     } finally {
       setBusy(false);
     }
@@ -86,13 +97,14 @@ export function AdminReviewActions({
     if (!note.trim()) return;
     setBusy(true);
     try {
-      const result = await adminApi.requestPostChanges(postId, note.trim());
+      const result = await exec((token) => adminApi.requestPostChanges(postId, note.trim(), token ? { expectedUpdatedAt: token } : undefined));
       onChangesRequested(result.status);
       toast.success("Xodimga qaytarildi");
       setChangesOpen(false);
       setNote("");
     } catch (error) {
-      toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
+      if (!isConflictFailure(error)) toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
+      else setChangesOpen(false);
     } finally {
       setBusy(false);
     }
