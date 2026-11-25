@@ -16,7 +16,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import { describeConnectionPermissions, displayClientName, inactiveConnectionScopes } from "@/lib/oauth-flow";
@@ -40,8 +39,9 @@ function PermissionList({ perms, inactive }: { perms: ReturnType<typeof describe
       {perms.groups
         .filter((g) => !(perms.readOnly && g.group === "read"))
         .map((g) => (
-          <div key={g.group} className="flex flex-wrap items-center gap-1.5">
-            <span className="w-24 shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{MCP_SCOPE_GROUP_LABELS[g.group]}</span>
+          <div key={g.group} className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3">
+            <span className="shrink-0 pt-0.5 text-xs sm:w-32 font-semibold uppercase tracking-wide text-muted-foreground">{MCP_SCOPE_GROUP_LABELS[g.group]}</span>
+            <div className="flex min-w-0 flex-wrap gap-1.5">
             {g.labels.map((label) => (
               <span
                 key={label}
@@ -52,6 +52,7 @@ function PermissionList({ perms, inactive }: { perms: ReturnType<typeof describe
                 {label}
               </span>
             ))}
+            </div>
           </div>
         ))}
       {inactive.length > 0 ? (
@@ -84,23 +85,27 @@ function ConnectionRow({ connection, writeToolsEnabled, onRevoked }: { connectio
   }
 
   return (
-    <TableRow>
-      <TableCell className="max-w-[16rem] align-top whitespace-normal">
-        <div className="font-medium break-words">{name}</div>
-        {connection.redirectHost ? <div className="text-xs text-muted-foreground">{connection.redirectHost}</div> : null}
-      </TableCell>
-      <TableCell className="align-top">
-        <PermissionList perms={perms} inactive={inactiveConnectionScopes(connection.scopes, writeToolsEnabled)} />
-      </TableCell>
-      <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(connection.connectedAt)}</TableCell>
-      <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">
-        {connection.lastUsedAt ? formatRelativeTime(connection.lastUsedAt) : "hali ishlatilmagan"}
-      </TableCell>
-      <TableCell className="align-top">
-        <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+    <li className="flex flex-col gap-3 rounded-lg border border-border p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-medium [overflow-wrap:anywhere]">{name}</div>
+          {connection.redirectHost ? <div className="text-xs text-muted-foreground">{connection.redirectHost}</div> : null}
+        </div>
+        <Button variant="outline" size="sm" className="shrink-0 max-md:min-h-11" onClick={() => setOpen(true)}>
           Uzish
         </Button>
-      </TableCell>
+      </div>
+      <PermissionList perms={perms} inactive={inactiveConnectionScopes(connection.scopes, writeToolsEnabled)} />
+      <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+        <div className="flex gap-1.5">
+          <dt>Ulangan:</dt>
+          <dd>{formatDateTime(connection.connectedAt)}</dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>So&apos;nggi faollik:</dt>
+          <dd>{connection.lastUsedAt ? formatRelativeTime(connection.lastUsedAt) : "hali ishlatilmagan"}</dd>
+        </div>
+      </dl>
 
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
@@ -119,7 +124,7 @@ function ConnectionRow({ connection, writeToolsEnabled, onRevoked }: { connectio
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </TableRow>
+    </li>
   );
 }
 
@@ -190,29 +195,16 @@ export function ConnectionsClient({ initial, writeToolsEnabled }: { initial: Mcp
       <div className="flex justify-end">
         <RevokeAllButton count={items.length} onDone={() => setItems([])} />
       </div>
-    <div className="overflow-x-auto rounded-lg border border-border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Ilova</TableHead>
-            <TableHead>Ruxsatlar</TableHead>
-            <TableHead>Ulangan</TableHead>
-            <TableHead>So&apos;nggi faollik</TableHead>
-            <TableHead className="w-24" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((connection) => (
-            <ConnectionRow
-              key={connection.clientId}
-              connection={connection}
-              writeToolsEnabled={writeToolsEnabled}
-              onRevoked={(clientId) => setItems((current) => current.filter((item) => item.clientId !== clientId))}
-            />
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+      <ul className="flex flex-col gap-3">
+        {items.map((connection) => (
+          <ConnectionRow
+            key={connection.clientId}
+            connection={connection}
+            writeToolsEnabled={writeToolsEnabled}
+            onRevoked={(clientId) => setItems((current) => current.filter((item) => item.clientId !== clientId))}
+          />
+        ))}
+      </ul>
     </div>
   );
 }
