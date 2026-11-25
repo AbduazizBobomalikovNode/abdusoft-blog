@@ -29,6 +29,7 @@ import type {
   UpdateChannelVersionBody,
   CreatePostResponse,
   CreateStaffInviteResponse,
+  CreateStaffPasswordLinkResponse,
   CreateTagBody,
   GenerateSecretResponse,
   Media,
@@ -450,6 +451,10 @@ export const adminApi = {
   /** Ulangan ilovani to'liq uzadi (token'lar va rozilik) — qaytarib bo'lmaydi. */
   revokeConnection: (clientId: string) =>
     adminJson<{ revoked: true }>(`/admin/connections/${encodeURIComponent(clientId)}`, { method: "DELETE" }),
+
+  /** Xodim uchun bir martalik "yangi parol o'rnatish" havolasi — faqat shu javobda ko'rsatiladi. */
+  createStaffPasswordLink: (userId: string) =>
+    adminJson<CreateStaffPasswordLinkResponse>(`/admin/staff/${userId}/password-reset-link`, { method: "POST" }),
 
   removeStaffMember: (userId: string) => adminJson<{ ok: true }>(`/admin/staff/${userId}`, { method: "DELETE" }),
 

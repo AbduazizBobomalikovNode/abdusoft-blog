@@ -1453,6 +1453,13 @@ export const CreateStaffInviteResponseSchema = z.object({
 });
 export type CreateStaffInviteResponse = z.infer<typeof CreateStaffInviteResponseSchema>;
 
+/** `url` faqat SHU javobda bir marta qaytadi (token ichida) — jurnalga yoki boshqa joyga yozilmaydi. */
+export const CreateStaffPasswordLinkResponseSchema = z.object({
+  url: z.string(),
+  expiresAt: z.string(),
+});
+export type CreateStaffPasswordLinkResponse = z.infer<typeof CreateStaffPasswordLinkResponseSchema>;
+
 export const StaffInvitePublicStatusSchema = z.union([
   z.literal("valid"),
   z.literal("expired"),

@@ -91,6 +91,9 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "staff.invite_revoke": "Xodim taklifi bekor qilindi",
   "staff.invite_accept": "Xodim taklifi qabul qilindi",
   "staff.remove": "Xodim olib tashlandi",
+  "staff.password_link_create": "Xodim uchun parol havolasi yaratildi",
+  "auth.password_reset_request": "Parolni tiklash so'ralindi",
+  "auth.password_reset_complete": "Parol tiklandi",
   "settings.update": "Sozlamalar o'zgardi",
   "site.update": "Sayt ma'lumotlari o'zgardi",
 };

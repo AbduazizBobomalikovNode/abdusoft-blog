@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, Users } from "lucide-react";
+import { Check, Copy, KeyRound, Users } from "lucide-react";
 import { toast } from "sonner";
 import type { StaffInvite, StaffMember } from "@blog/shared";
 import { EmptyState } from "@/components/admin/empty-state";
@@ -149,9 +149,86 @@ function CreateInviteDialog({ onCreated }: { onCreated: (invite: StaffInvite, ur
   );
 }
 
+function PasswordLinkDialog({
+  open,
+  onOpenChange,
+  memberName,
+  link,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  memberName: string;
+  link: { url: string; expiresAt: string } | null;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopied(true);
+      toast.success("Havola nusxalandi");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Nusxalab bo'lmadi — havolani qo'lda tanlang");
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Yangi parol havolasi tayyor</DialogTitle>
+          <DialogDescription>
+            &quot;{memberName}&quot; uchun bir martalik havola. U FAQAT HOZIR ko&apos;rsatiladi — keyinroq qayta ko&apos;rib
+            bo&apos;lmaydi. Xodimga xavfsiz kanal orqali yuboring.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+          <code className="min-w-0 flex-1 truncate text-xs">{link?.url}</code>
+          <Button type="button" size="icon-sm" variant="outline" onClick={() => void handleCopy()} aria-label="Nusxalash">
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+          </Button>
+        </div>
+        <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          <li>Havola {link ? formatDateTime(link.expiresAt) : ""} gacha amal qiladi va faqat bir marta ishlaydi.</li>
+          <li>Xodim yangi parol o&apos;rnatgach, uning barcha qurilmalardagi sessiyalari tugatiladi.</li>
+          <li>Oldingi parol havolalari bekor qilindi.</li>
+        </ul>
+        <DialogFooter>
+          <Button type="button" onClick={() => onOpenChange(false)}>
+            Tushunarli
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function StaffRow({ member, onRemoved }: { member: StaffMember; onRemoved: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+
+  async function handlePasswordLink() {
+    setLinkBusy(true);
+    try {
+      setLink(await adminApi.createStaffPasswordLink(member.id));
+      setLinkOpen(true);
+    } catch (error) {
+      toast.error(error instanceof AdminApiError ? error.message : "Havola yaratib bo'lmadi");
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  function handleLinkOpenChange(next: boolean) {
+    setLinkOpen(next);
+    // Yopilganda havola xotiradan o'chiriladi — qayta ko'rsatib bo'lmaydi.
+    if (!next) setLink(null);
+  }
 
   async function handleRemove() {
     setBusy(true);
@@ -178,10 +255,18 @@ function StaffRow({ member, onRemoved }: { member: StaffMember; onRemoved: (id: 
       <TableCell className="text-sm text-muted-foreground">{member.postsCount}</TableCell>
       <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(member.addedAt)}</TableCell>
       <TableCell>
-        <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-          Olib tashlash
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => void handlePasswordLink()}>
+            <KeyRound className="size-3.5" aria-hidden="true" />
+            {linkBusy ? "Yaratilmoqda…" : "Parol havolasi"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+            Olib tashlash
+          </Button>
+        </div>
       </TableCell>
+
+      <PasswordLinkDialog open={linkOpen} onOpenChange={handleLinkOpenChange} memberName={member.name ?? member.email} link={link} />
 
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
