@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import type { TrashListQuery } from "@blog/shared";
 import { db } from "../../db/index.js";
@@ -27,10 +27,15 @@ export function trashSlugFor(id: string): string {
 }
 
 /** Asl slug band bo'lsa — bo'sh variant (`slug-2`, `slug-3`, ...), oxirida tasodifiy qo'shimcha. */
-async function findFreeSlug(executor: Executor, wanted: string): Promise<string> {
+async function findFreeSlug(executor: Executor, wanted: string, selfId: string): Promise<string> {
   const isFree = async (candidate: string) => {
     if ((RESERVED_SLUGS as readonly string[]).includes(candidate)) return false;
-    const [row] = await executor.select({ id: posts.id }).from(posts).where(eq(posts.slug, candidate)).limit(1);
+    // Postning o'zi band qilgan slug (0014'dan oldin chiqindiga tushgan qator: `original_slug` NULL, `slug` haqiqiy) "band" emas.
+    const [row] = await executor
+      .select({ id: posts.id })
+      .from(posts)
+      .where(and(eq(posts.slug, candidate), ne(posts.id, selfId)))
+      .limit(1);
     return !row;
   };
   if (await isFree(wanted)) return wanted;
@@ -153,7 +158,7 @@ export async function restoreFromTrash(
     if (conflict) return conflict;
 
     const originalSlug = post.originalSlug ?? post.slug;
-    const slug = await findFreeSlug(tx, originalSlug);
+    const slug = await findFreeSlug(tx, originalSlug, id);
     const slugRestored = slug === originalSlug;
 
     const now = new Date();
