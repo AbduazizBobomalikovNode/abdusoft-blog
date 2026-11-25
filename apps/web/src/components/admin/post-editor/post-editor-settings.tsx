@@ -69,6 +69,8 @@ export interface PostEditorSettingsProps {
   status?: AdminPostStatus;
   publishedAt?: string | null;
   updatedAt?: string;
+  /** "Aziz" yoki "Aziz · Yordamchi ulagich" — oxirgi o'zgartirgan (manba veb panel bo'lmasa ko'rsatiladi); ixtiyoriy. */
+  lastChangeBy?: string | null;
 }
 
 function SettingsCard({
@@ -152,6 +154,7 @@ export function PostEditorSettings({
   status,
   publishedAt,
   updatedAt,
+  lastChangeBy = null,
 }: PostEditorSettingsProps) {
   const interactivitySwitches = SETTING_SWITCHES.filter((item) => INTERACTIVITY_KEYS.includes(item.key));
   const telegramSwitches = SETTING_SWITCHES.filter((item) => TELEGRAM_SETTING_KEYS.includes(item.key));
@@ -166,7 +169,7 @@ export function PostEditorSettings({
               : status === "scheduled"
                 ? "Rejalashtirilgan sana pastda ko'rsatilgan"
                 : updatedAt
-                  ? `Oxirgi o'zgarish: ${formatDateTime(updatedAt)}`
+                  ? `Oxirgi o'zgarish: ${formatDateTime(updatedAt)}${lastChangeBy ? ` · ${lastChangeBy}` : ""}`
                   : null}
           </p>
 

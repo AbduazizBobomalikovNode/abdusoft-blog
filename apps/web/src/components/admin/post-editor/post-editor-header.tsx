@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Archive, ArrowLeft, BarChart3, Eye, Keyboard, LayoutTemplate, Maximize2, MoreHorizontal, RefreshCw, Send, Star, Trash2, Undo2 } from "lucide-react";
+import { Archive, ArrowLeft, BarChart3, Eye, History, Keyboard, LayoutTemplate, Maximize2, MoreHorizontal, RefreshCw, ScrollText, Send, Star, Trash2, Undo2 } from "lucide-react";
 import type { AdminPostStatus, ResolvedChannelChoice } from "@blog/shared";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { formatTime } from "@/lib/format";
@@ -59,11 +59,12 @@ function EditorMenuItems({ actions }: { actions?: EditorMenuActions }) {
   );
 }
 
-export type SaveState = "idle" | "saving" | "saved" | "error" | "offline";
+export type SaveState = "idle" | "saving" | "saved" | "error" | "offline" | "conflict";
 
 function saveStatusText(state: SaveState, lastSavedAt: string | null, saveError: string | null): string {
   if (state === "saving") return "Saqlanmoqda…";
   if (state === "offline") return "Oflayn — mahalliy saqlandi";
+  if (state === "conflict") return "Saqlanmadi — post boshqa joyda o'zgargan";
   if (state === "error") return saveError ? `Xato: ${saveError}` : "Xato — saqlanmadi";
   if (state === "saved" && lastSavedAt) {
     return `Saqlandi ${formatTime(lastSavedAt)}`;
@@ -113,6 +114,7 @@ export function StaffEditorHeader({
   canSubmit,
   onSubmit,
   onOpenChannelVersion,
+  onOpenHistory,
   editorActions,
 }: {
   postId: string;
@@ -122,6 +124,8 @@ export function StaffEditorHeader({
   lastSavedAt: string | null;
   canSubmit: boolean;
   onSubmit: () => void;
+  /** "Tarix" — avvalgi versiyalar (ixtiyoriy; berilmasa tugma ko'rsatilmaydi). */
+  onOpenHistory?: () => void;
   editorActions?: EditorMenuActions;
   /** Xodim ham kanal versiyasini tayyorlay oladi (taklif) — yuborish YO'Q. */
   onOpenChannelVersion?: () => void;
@@ -137,6 +141,12 @@ export function StaffEditorHeader({
             Ko&apos;rish
           </Link>
         </Button>
+        {onOpenHistory ? (
+          <Button variant="ghost" size="sm" className="max-md:hidden" onClick={onOpenHistory} data-testid="open-history">
+            <History className="size-4" />
+            Tarix
+          </Button>
+        ) : null}
         {onOpenChannelVersion ? (
           <Button variant="outline" size="sm" className="max-md:hidden" onClick={onOpenChannelVersion}>
             <Star className="size-4" />
@@ -164,6 +174,12 @@ export function StaffEditorHeader({
                 Ko&apos;rish
               </Link>
             </DropdownMenuItem>
+            {onOpenHistory ? (
+              <DropdownMenuItem className="min-h-11 md:hidden" onSelect={onOpenHistory}>
+                <History />
+                Tarix
+              </DropdownMenuItem>
+            ) : null}
             {onOpenChannelVersion ? (
               <DropdownMenuItem className="min-h-11" onSelect={onOpenChannelVersion}>
                 <Star />
@@ -190,6 +206,8 @@ export function PostEditorHeader({
   onDelete,
   onRefreshTelegraph,
   onOpenChannelSend,
+  onOpenHistory,
+  journalHref,
   channelChoice = null,
   getChecklist,
   onFix,
@@ -206,6 +224,10 @@ export function PostEditorHeader({
   onDelete: () => Promise<void>;
   onRefreshTelegraph: () => void;
   onOpenChannelSend: () => void;
+  /** "Tarix" — avvalgi versiyalar (ixtiyoriy; berilmasa tugma ko'rsatilmaydi). */
+  onOpenHistory?: () => void;
+  /** "Shu postning jurnali" havolasi (faqat admin; ixtiyoriy). */
+  journalHref?: string;
   /** Belgilangan kanal versiyasi — chop etish dialogida ko'rsatiladi ("kanalga ham yuborilsin" katagi). */
   channelChoice?: ResolvedChannelChoice | null;
   /** Chop etish dialogi ochilganda hisoblanadigan tekshiruv ro'yxati (berilmasa — ko'rsatilmaydi). */
@@ -258,6 +280,13 @@ export function PostEditorHeader({
             Statistika
           </Link>
         </Button>
+
+        {onOpenHistory ? (
+          <Button variant="ghost" size="sm" className="max-md:hidden" onClick={onOpenHistory} data-testid="open-history">
+            <History className="size-4" />
+            Tarix
+          </Button>
+        ) : null}
 
         {status === "published" ? (
           <>
@@ -374,6 +403,12 @@ export function PostEditorHeader({
                 Statistika
               </Link>
             </DropdownMenuItem>
+            {onOpenHistory ? (
+              <DropdownMenuItem className="min-h-11 md:hidden" onSelect={onOpenHistory}>
+                <History />
+                Tarix
+              </DropdownMenuItem>
+            ) : null}
             {!published ? (
               <DropdownMenuItem disabled={channelDisabled} className="min-h-11 md:hidden" onSelect={onOpenChannelSend}>
                 <Star />
@@ -387,6 +422,14 @@ export function PostEditorHeader({
               </DropdownMenuItem>
             ) : null}
             <EditorMenuItems actions={editorActions} />
+            {journalHref ? (
+              <DropdownMenuItem asChild className="min-h-11 md:min-h-0">
+                <Link href={journalHref}>
+                  <ScrollText />
+                  Shu postning jurnali
+                </Link>
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuItem className="min-h-11 md:min-h-0" onSelect={onRefreshTelegraph}>
               <RefreshCw />
               Telegraph&apos;ni yangilash
@@ -399,7 +442,7 @@ export function PostEditorHeader({
             ) : null}
             <DropdownMenuItem variant="destructive" className="min-h-11 md:min-h-0" onSelect={() => setDeleteOpen(true)}>
               <Trash2 />
-              O&apos;chirish
+              Savatga ko&apos;chirish
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -408,9 +451,9 @@ export function PostEditorHeader({
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Postni o&apos;chirish</AlertDialogTitle>
+            <AlertDialogTitle>Postni savatga ko&apos;chirish</AlertDialogTitle>
             <AlertDialogDescription>
-              Post butunlay o&apos;chiriladi. Bu amalni ortga qaytarib bo&apos;lmaydi.
+              Post savatga ko&apos;chiriladi va saytdan yo&apos;qoladi. Uni keyinroq Postlar &gt; Savat bo&apos;limidan tiklash mumkin.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -420,7 +463,7 @@ export function PostEditorHeader({
               onClick={() => void handleDelete()}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              O&apos;chirish
+              Savatga ko&apos;chirish
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
