@@ -25,6 +25,8 @@ import { TableToolbar } from "@/components/admin/editor/table-toolbar";
 import { useCaretFollow } from "@/components/admin/editor/use-caret-follow";
 import { useFocusMode } from "@/components/admin/editor/use-focus-mode";
 import { ChannelSendDialog } from "./channel-send-dialog";
+import { ConflictBanner } from "./conflict-banner";
+import { HistoryDialog } from "./history-dialog";
 import { PostEditorHeader, StaffEditorHeader, type EditorMenuActions, type SaveState } from "./post-editor-header";
 import { PostEditorSettings } from "./post-editor-settings";
 import { PostEditorBubbleMenu } from "./post-editor-toolbar";
@@ -44,8 +46,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
+import { lastChangeText } from "@/lib/admin-labels";
+import { isConflictFailure, PostSync } from "@/lib/editor/post-sync";
 import { buildPublishChecklist, hasBlockingIssue, type ChecklistItem, type FixTarget } from "@/lib/editor/checklist";
-import { browserStorage, clearBackup, loadBackup, serverChangedSinceBackup, shouldOfferRestore, type DraftBackup } from "@/lib/editor/draft-backup";
+import { backupDiffKeys, backupFieldKeys, backupFieldLabels, backupValue, browserStorage, clearBackup, loadBackup, serverChangedSinceBackup, type DraftBackup } from "@/lib/editor/draft-backup";
+import { PendingNotSavedError } from "@/lib/editor/autosave-engine";
 import { extractOutline, type OutlineItem } from "@blog/shared";
 import { isHintText } from "@blog/shared";
 import { site } from "@/lib/site";
@@ -71,13 +76,44 @@ function saveTone(state: SaveState): FooterSaveInfo["tone"] {
 function footerText(state: SaveState, lastSavedAt: string | null, saveError: string | null): string {
   if (state === "saving") return "Saqlanmoqda…";
   if (state === "offline") return "Oflayn — mahalliy saqlandi";
+  if (state === "conflict") return "Saqlanmadi — post boshqa joyda o'zgargan";
   if (state === "error") return saveError ? `Xato: ${saveError}` : "Xato — saqlanmadi";
   if (state === "saved" && lastSavedAt) return `Saqlandi ${formatTime(lastSavedAt)}`;
   return "";
 }
 
+type DraftOffer = { backup: DraftBackup; serverNewer: boolean; /** Tiklash nimalarni qaytarishi (o'zbekcha nomlar). */ fields: string[] };
+
+/**
+ * Sahifa shu komponentni ishlatadi. "Oxirgi versiyani yuklash" va "Shu versiyaga qaytarish"dan keyin tahrirlagich
+ * serverdan olingan yangi nusxa bilan BUTUNLAY qayta quriladi (`key`) — eski holat (kutayotgan avtosaqlash, taymerlar,
+ * tiptap hujjati) qolib, yangi matnni ustidan yozib yubora olmaydi.
+ */
 export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTags: TagWithCount[]; me: Me }) {
+  const [instance, setInstance] = useState<{ key: number; post: AdminPostDetail; offer: DraftOffer | null }>({ key: 0, post, offer: null });
+  const reload = useCallback(
+    (fresh: AdminPostDetail, offer: DraftOffer | null) => setInstance((prev) => ({ key: prev.key + 1, post: fresh, offer })),
+    [],
+  );
+  return <PostEditorInner key={instance.key} post={instance.post} allTags={allTags} me={me} initialDraftOffer={instance.offer} onReload={reload} />;
+}
+
+function PostEditorInner({
+  post,
+  allTags,
+  me,
+  initialDraftOffer = null,
+  onReload,
+}: {
+  post: AdminPostDetail;
+  allTags: TagWithCount[];
+  me: Me;
+  initialDraftOffer?: DraftOffer | null;
+  onReload: (fresh: AdminPostDetail, offer: DraftOffer | null) => void;
+}) {
   const router = useRouter();
+  // Postga yozuvchi BARCHA so'rovlar (avtosaqlash, holat o'tishlari, versiyaga qaytarish) shu navbat orqali ketadi.
+  const [sync] = useState(() => new PostSync(post.updatedAt));
   const isStaff = me.role === "staff";
   const [title, setTitle] = useState(post.title);
   const [slug, setSlug] = useState(post.slug);
@@ -105,7 +141,9 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   const [channelChoice, setChannelChoice] = useState<ResolvedChannelChoice | null>(post.channelChoice);
   const [starterDismissed, setStarterDismissed] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
-  const [draftOffer, setDraftOffer] = useState<{ backup: DraftBackup; serverNewer: boolean } | null>(null);
+  const [draftOffer, setDraftOffer] = useState<DraftOffer | null>(initialDraftOffer);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [conflictBusy, setConflictBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<{ stats: DocStats; outline: OutlineItem[] }>({ stats: EMPTY_STATS, outline: [] });
 
   // Xodim (staff) uchun — post ko'rib chiqishda bo'lsa butunlay o'qish uchun
@@ -118,12 +156,25 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   const rootRef = useRef<HTMLDivElement>(null);
   const { focusMode, toggle: toggleFocus } = useFocusMode(true);
 
-  const { saveState, saveError, lastSavedAt, queueSave, flushNow, dirtyRef } = useAutosave({
+  const { engine, saveState, saveError, lastSavedAt, conflict, queueSave, flushNow, cancelTimers } = useAutosave({
     postId: post.id,
     initialUpdatedAt: post.updatedAt,
-    initialTitle: post.title,
-    initialContentJson: post.contentJson,
+    // Muharrir ushlab turgan TO'LIQ holat (rolga mos): "almashtirish" va jimgina tenglashtirish shunga tayanadi.
+    initialLocal: {
+      title: post.title,
+      slug: post.slug,
+      excerpt: post.excerpt ?? "",
+      coverUrl: post.coverUrl,
+      tagSlugs: post.tags.map((t) => t.slug),
+      contentJson: post.contentJson,
+      ...(isStaff ? {} : { settings: post.settings, pinned: post.pinned }),
+      ...(!isStaff && post.status === "scheduled" ? { channelPlan: post.channelPlan } : {}),
+    },
+    initialManaged: { status: post.status, scheduledAt: post.scheduledAt, publishedAt: post.publishedAt },
+    onStale: () => void handleLoadLatest({ quiet: true }),
     enabled: !readOnly,
+    sync,
+    meId: me.id,
     onSlugConflict: (message) => {
       setSlugAuto(false);
       toast.warning(`${message}. Matn saqlandi — slugni o'zgartiring.`);
@@ -143,12 +194,12 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
 
   useEffect(() => {
     function handleBeforeUnload(event: BeforeUnloadEvent) {
-      if (!dirtyRef.current) return;
+      if (!engine.dirty) return;
       event.preventDefault();
     }
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [dirtyRef]);
+  }, [engine]);
 
   useEffect(() => {
     // Yangi post ("Nomsiz post" — /admin-posts.ts POST / dagi fallback nomi)
@@ -259,25 +310,61 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
   // Mahalliy zaxira: serverdagi nusxadan yangiroq saqlanmagan matn bo'lsa — bloklamaydigan xabar.
   useEffect(() => {
     if (readOnly) return;
+    // Konfliktdan keyin yoki versiyaga qaytarishdan keyin qayta qurilganda: taklif tayyor (yoki ataylab yo'q) — zaxiraga tegmaymiz.
+    if (initialDraftOffer) return;
     const storage = browserStorage();
     const backup = loadBackup(storage, post.id);
     if (!backup) return;
     const server = { updatedAt: post.updatedAt, title: post.title, contentJson: post.contentJson };
-    if (!shouldOfferRestore(backup, server)) {
+    const keys = backupDiffKeys(backup, post);
+    if (backup.savedAt <= Date.parse(post.updatedAt) || keys.length === 0) {
       clearBackup(storage, post.id);
       return;
     }
-    const timer = setTimeout(() => setDraftOffer({ backup, serverNewer: serverChangedSinceBackup(backup, server) }), 0);
+    const timer = setTimeout(
+      () => setDraftOffer({ backup, serverNewer: serverChangedSinceBackup(backup, server), fields: backupFieldLabels(keys) }),
+      0,
+    );
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- faqat ochilganda
   }, []);
 
+  /** Mahalliy nusxani tiklash: zaxiradagi HAMMA saqlanmagan maydonlar (yoki eski zaxirada — sarlavha va matn) qaytariladi. */
   function restoreDraft() {
     if (!draftOffer || !editor) return;
     const { backup } = draftOffer;
-    setTitle(backup.title);
-    queueSave({ title: backup.title });
-    editor.commands.setContent(backup.contentJson as JSONContent, { emitUpdate: true });
+    for (const key of backupFieldKeys(backup)) {
+      const value = backupValue(backup, key);
+      if (key === "title") {
+        setTitle(backup.title);
+        queueSave({ title: backup.title });
+      } else if (key === "contentJson") {
+        editor.commands.setContent(backup.contentJson as JSONContent, { emitUpdate: true });
+      } else if (key === "slug" && typeof value === "string") {
+        setSlug(value);
+        setSlugAuto(false);
+        queueSave({ slug: value });
+      } else if (key === "excerpt" && typeof value === "string") {
+        setExcerpt(value);
+        queueSave({ excerpt: value });
+      } else if (key === "coverUrl") {
+        setCoverUrl((value as string | null) ?? null);
+        queueSave({ coverUrl: (value as string | null) ?? null });
+      } else if (key === "tagSlugs" && Array.isArray(value)) {
+        setTagSlugs(value as string[]);
+        queueSave({ tagSlugs: value as string[] });
+      } else if (key === "settings" && value && typeof value === "object") {
+        const next = { ...settings, ...(value as Partial<PostSettings>) };
+        setSettings(next);
+        queueSave({ settings: next });
+      } else if (key === "pinned" && typeof value === "boolean") {
+        setPinned(value);
+        queueSave({ pinned: value });
+      } else if (key === "channelPlan") {
+        setChannelPlan((value as ChannelPlan | null) ?? null);
+        queueSave({ channelPlan: (value as ChannelPlan | null) ?? null });
+      }
+    }
     setDraftOffer(null);
     toast.success("Mahalliy nusxa tiklandi");
   }
@@ -287,15 +374,33 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     setDraftOffer(null);
   }
 
+  /**
+   * Konfliktdan kelib chiqqan xatoni jim o'tkazadi (banner o'zi ko'rsatadi). Matn saqlanmagani uchun to'xtagan o'tishda
+   * sababini aytadi (matn yo'qolmagan). Boshqa xatolar uchun `false` — chaqiruvchi o'z toast'ini ko'rsatadi.
+   */
+  function handledAsConflict(error: unknown): boolean {
+    if (error instanceof PendingNotSavedError) {
+      toast.error(error.message);
+      return true;
+    }
+    return isConflictFailure(error);
+  }
+
   async function handleSubmit() {
     setSubmitting(true);
     try {
-      const result = await adminApi.submitPost(post.id);
+      const result = await engine.runTransition(async (token) => {
+        const res = await adminApi.submitPost(post.id, { expectedUpdatedAt: token });
+        // Eski API `updatedAt` qaytarmasa — tokenni serverdan olamiz (yolg'on konflikt bo'lmasin).
+        if (!res.updatedAt) return { ...res, updatedAt: (await adminApi.getPost(post.id)).updatedAt };
+        return res;
+      });
       setStatus(result.status);
       toast.success("Ko'rib chiqishga yuborildi");
       setSubmitOpen(false);
     } catch (error) {
-      toast.error(errorMessage(error, "Yuborishda xatolik"));
+      if (handledAsConflict(error)) setSubmitOpen(false);
+      else toast.error(errorMessage(error, "Yuborishda xatolik"));
     } finally {
       setSubmitting(false);
     }
@@ -348,7 +453,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
 
   async function handlePublish(opts?: { sendToChannel?: boolean }) {
     try {
-      const result = await adminApi.publishPost(post.id, opts);
+      const result = await engine.runTransition((token) => adminApi.publishPost(post.id, { ...opts, expectedUpdatedAt: token }));
       setStatus(result.status);
       const send = result.channelSend;
       if (send?.state === "sent") toast.success("Post chop etildi va kanalga yuborildi");
@@ -356,38 +461,44 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
       else if (send?.state === "pending") toast.success("Post chop etildi — kanalga yuborilmoqda, natija admin chatiga keladi");
       else toast.success("Post chop etildi");
     } catch (error) {
-      toast.error(errorMessage(error, "Chop etishda xatolik"));
+      if (!handledAsConflict(error)) toast.error(errorMessage(error, "Chop etishda xatolik"));
     }
   }
 
   async function handleUnpublish() {
     try {
-      const result = await adminApi.unpublishPost(post.id);
+      const result = await engine.runTransition((token) => adminApi.unpublishPost(post.id, { expectedUpdatedAt: token }));
       setStatus(result.status);
       setChannelPlan(null); // server ham rejani tozalaydi
       toast.success("Post qoralamaga qaytarildi");
     } catch (error) {
-      toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
+      if (!handledAsConflict(error)) toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
     }
   }
 
   async function handleArchive() {
     try {
-      const result = await adminApi.archivePost(post.id);
+      const result = await engine.runTransition((token) => adminApi.archivePost(post.id, { expectedUpdatedAt: token }));
       setStatus(result.status);
       toast.success("Post arxivlandi");
     } catch (error) {
-      toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
+      if (!handledAsConflict(error)) toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
     }
   }
 
   async function handleDelete() {
     try {
-      await adminApi.deletePost(post.id);
-      toast.success("Post o'chirildi");
+      await engine.runTransition(async (token) => {
+        await adminApi.deletePost(post.id, { expectedUpdatedAt: token });
+        return {};
+      });
+      // Post savatda — saqlanmagan mahalliy nusxa endi keraksiz (savatdan tiklansa, serverdagi matn qaytadi).
+      engine.discardPending();
+      clearBackup(browserStorage(), post.id);
+      toast.success("Post savatga ko'chirildi — uni Postlar > Savat bo'limidan tiklash mumkin");
       router.push("/admin/postlar");
     } catch (error) {
-      toast.error(errorMessage(error, "O'chirib bo'lmadi"));
+      if (!handledAsConflict(error)) toast.error(errorMessage(error, "O'chirib bo'lmadi"));
     }
   }
 
@@ -396,11 +507,11 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
     setScheduling(true);
     try {
       const iso = new Date(scheduledAtLocal).toISOString();
-      const result = await adminApi.schedulePost(post.id, iso, channelPlan);
+      const result = await engine.runTransition((token) => adminApi.schedulePost(post.id, iso, channelPlan, { expectedUpdatedAt: token }));
       setStatus(result.status);
       toast.success("Post rejalashtirildi");
     } catch (error) {
-      toast.error(errorMessage(error, "Rejalashtirib bo'lmadi"));
+      if (!handledAsConflict(error)) toast.error(errorMessage(error, "Rejalashtirib bo'lmadi"));
     } finally {
       setScheduling(false);
     }
@@ -408,19 +519,99 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
 
   async function handleExcerptAuto() {
     try {
-      await adminApi.updatePost(post.id, { excerpt: null });
+      await engine.runTransition((token) => adminApi.updatePost(post.id, token ? { excerpt: null, expectedUpdatedAt: token } : { excerpt: null }));
       const fresh = await adminApi.getPost(post.id);
       setExcerpt(fresh.excerpt ?? "");
       toast.success("Avtomatik tavsif qo'llandi");
     } catch (error) {
-      toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
+      if (!handledAsConflict(error)) toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
     }
   }
+
+  // ---------------------------------------------------------------- konflikt va tarix
+
+  /**
+   * "Oxirgi versiyani yuklash": HAMMA saqlanmagan maydonlar (sarlavha, matn, tavsif, teglar, muqova, havola, sozlamalar, ...)
+   * zaxiraga yoziladi, serverdagi nusxa yuklanadi, zaxira esa "Tiklash" taklifi bilan (qaysi maydonlar qaytishi ko'rsatilib) qoladi.
+   */
+  async function handleLoadLatest(opts: { quiet?: boolean } = {}) {
+    setConflictBusy(true);
+    try {
+      cancelTimers();
+      const { fresh, offer, fields } = await engine.loadLatest();
+      onReload(fresh, offer ? { backup: offer, serverNewer: true, fields: backupFieldLabels(fields) } : null);
+      toast.success(offer ? "Oxirgi versiya yuklandi — sizning o'zgarishlaringiz tiklash uchun saqlab qo'yildi" : opts.quiet ? "Tahrirlagich serverdagi oxirgi versiya bilan yangilandi" : "Oxirgi versiya yuklandi");
+    } catch (error) {
+      toast.error(errorMessage(error, "Oxirgi versiyani yuklab bo'lmadi"));
+    } finally {
+      setConflictBusy(false);
+    }
+  }
+
+  /**
+   * "Meniki bilan almashtirish" (tasdiqdan keyin): muharrirning TO'LIQ holati bir marta tokensiz yoziladi; serverdagi nusxa
+   * Tarixda qoladi. Saqlanmagan o'zgarish yo'q bo'lsa (konflikt holat o'tishidan kelgan) — forma eskirgan, shuning uchun
+   * "oxirgi versiyani yuklash" yo'li bilan serverdan qayta quramiz.
+   */
+  async function handleOverwrite() {
+    if (!conflict) return;
+    if (!engine.dirty) {
+      await handleLoadLatest({ quiet: true });
+      return;
+    }
+    setConflictBusy(true);
+    try {
+      cancelTimers();
+      const ok = await engine.overwrite();
+      if (ok) toast.success("Sizning versiyangiz saqlandi. Oldingisi Tarixda");
+      else toast.error("Saqlab bo'lmadi — o'zgarishlaringiz saqlab qo'yildi, qayta urinib ko'ring");
+    } finally {
+      setConflictBusy(false);
+    }
+  }
+
+  /**
+   * "Shu versiyaga qaytarish": avval yo'ldagi saqlash tugaydi va kutayotgan matn to'liq saqlanadi (saqlanmasa — to'xtaymiz,
+   * matn yo'qolmaydi), so'ng tokenli so'rov. So'rov davomida yana yozilgan bo'lsa, u tashlanmaydi — tiklash taklifi bo'lib qoladi.
+   */
+  async function handleRestoreRevision(revisionId: string, opts: { restoreSlug: boolean }): Promise<boolean> {
+    if (sync.conflict) {
+      toast.warning("Avval post boshqa joyda o'zgargani haqidagi xabarni hal qiling");
+      return false;
+    }
+    try {
+      const mark = engine.editCount;
+      const result = await engine.runTransition((token) =>
+        adminApi.restoreRevision(post.id, revisionId, { expectedUpdatedAt: token, ...(opts.restoreSlug ? { restoreSlug: true } : {}) }),
+      );
+      cancelTimers();
+      const fresh = await adminApi.getPost(post.id);
+      const typedMeanwhile = engine.takeOver(mark);
+      engine.adoptServer(fresh);
+      onReload(
+        fresh,
+        typedMeanwhile ? { backup: typedMeanwhile, serverNewer: true, fields: backupFieldLabels(backupDiffKeys(typedMeanwhile, fresh)) } : null,
+      );
+      if (result.slug !== post.slug) toast.success(`Versiya tiklandi. Havola o'zgardi: /${result.slug}`);
+      else if (!result.slugRestored && (status === "published" || status === "scheduled")) toast.success("Versiya tiklandi. Havola o'zgarmadi (joriy URL saqlandi)");
+      else toast.success("Versiya tiklandi. Oldingi holat Tarixda saqlandi");
+      return true;
+    } catch (error) {
+      if (!handledAsConflict(error)) toast.error(errorMessage(error, "Versiyaga qaytarib bo'lmadi"));
+      return false;
+    }
+  }
+
+  const canRestoreRevision = !readOnly && (!isStaff || status === "draft" || status === "changes_requested");
 
   const settingsProps = {
     status,
     publishedAt: post.publishedAt,
     updatedAt: lastSavedAt ?? post.updatedAt,
+    lastChangeBy: lastChangeText(
+      lastSavedAt && lastSavedAt !== post.updatedAt ? { name: me.name } : post.updatedBy,
+      lastSavedAt && lastSavedAt !== post.updatedAt ? "web" : post.updatedVia,
+    ),
     allTags,
     selectedTagSlugs: tagSlugs,
     onTagsChange: (slugs: string[]) => {
@@ -578,6 +769,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
             setSubmitOpen(true);
           }}
           onOpenChannelVersion={() => setChannelSendOpen(true)}
+          onOpenHistory={() => setHistoryOpen(true)}
           editorActions={editorActions}
         />
       ) : (
@@ -593,6 +785,8 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
           onDelete={handleDelete}
           onRefreshTelegraph={() => void handleRefreshTelegraph()}
           onOpenChannelSend={() => setChannelSendOpen(true)}
+          onOpenHistory={() => setHistoryOpen(true)}
+          journalHref={`/admin/jurnal?entityType=post&entityId=${post.id}`}
           channelChoice={channelChoice}
           getChecklist={getChecklist}
           onFix={handleFix}
@@ -611,12 +805,34 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
         onChoiceChange={setChannelChoice}
       />
 
+      {conflict ? (
+        <ConflictBanner
+          conflict={conflict}
+          meId={me.id}
+          busy={conflictBusy}
+          onLoadLatest={() => void handleLoadLatest()}
+          onOverwrite={() => void handleOverwrite()}
+          onOpenHistory={() => setHistoryOpen(true)}
+        />
+      ) : null}
+
+      <HistoryDialog
+        postId={post.id}
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        postStatus={status}
+        canRestore={canRestoreRevision}
+        showJournalLink={!isStaff}
+        onRestore={handleRestoreRevision}
+      />
+
       {isStaff ? <StaffReviewBanner status={status} reviewNote={reviewNote} /> : null}
       {!isStaff && status === "in_review" ? (
         <AdminReviewActions
           postId={post.id}
           authorName={post.createdBy?.name ?? "Xodim"}
           channelChoice={channelChoice}
+          run={(op) => engine.runTransition(op)}
           onApproved={(next) => setStatus(next)}
           onChangesRequested={(next) => {
             setStatus(next);
@@ -627,7 +843,7 @@ export function PostEditor({ post, allTags, me }: { post: AdminPostDetail; allTa
 
       <div className="editor-grid grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div className="flex min-w-0 flex-col gap-3" data-editor-column>
-          {draftOffer ? <DraftBanner serverNewer={draftOffer.serverNewer} onRestore={restoreDraft} onDiscard={discardDraft} /> : null}
+          {draftOffer ? <DraftBanner serverNewer={draftOffer.serverNewer} fields={draftOffer.fields} onRestore={restoreDraft} onDiscard={discardDraft} /> : null}
 
           <textarea
             ref={titleRef}

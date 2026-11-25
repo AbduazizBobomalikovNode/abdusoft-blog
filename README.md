@@ -62,6 +62,17 @@ abdusoft blog — bitta muallif uchun mo'ljallangan, to'liq boshqariladigan texn
 - Bot buyruqlari: `/stats`, `/posts`, `/pending`, `/comments <slug> on|off`, `/publish` / `/unpublish`, `/digest`
 - Kunlik hisobot (digest) — yoqilsa, belgilangan vaqtda statistikani admin chatga yuboradi
 
+**Admin panelda ishonchli tahrirlash**
+
+- **Savat** (`Postlar` > `Savat`, faqat admin): o'chirilgan postlar shu yerda saqlanadi — kim va qachon o'chirgani ko'rinadi, "Tiklash" (asl havola band bo'lsa yangi havola haqida aniq xabar) yoki "Butunlay o'chirish" (izohlar, kanal versiyalari va tarix ham ketadi)
+- **Tarix** (muharrirda): postning avvalgi versiyalari — vaqt, kim, qaysi manbadan (veb panel / Telegram / rejalashtiruvchi / yordamchi ulagich), o'qish-uchun ko'rinish, joriy versiyadan farq qilgan maydonlar va "Shu versiyaga qaytarish". Qaytarishdan oldin joriy holat avtomatik saqlanadi; chop etilgan postda havola standart bo'yicha o'zgarmaydi
+- **Konflikt himoyasi**: muharrirning barcha so'rovlari bitta navbatdan o'tadi va oxirgi `updatedAt` tokenini yuboradi. Post boshqa joyda (boshqa tab, Telegram, yordamchi) o'zgargan bo'lsa avtosaqlash to'xtaydi, yozilgan matn brauzerda saqlanadi va banner uch amal taklif qiladi: oxirgi versiyani yuklash (mahalliy matn tiklash uchun taklif qilinadi) / meniki bilan almashtirish (tasdiq bilan, ikkinchi versiya Tarixda qoladi) / Tarixni ochish. Bir foydalanuvchining ikki tabi ham haqiqiy konflikt hisoblanadi — banner "boshqa oyna yoki qurilmada o'zgartirgansiz" deydi, hech narsa jimgina ustidan yozilmaydi
+- **Jurnal** (`/admin/jurnal`, faqat admin): barcha o'zgarishlar — manba, obyekt, amal va sana bo'yicha filtr; odam bo'lmagan manbalar (yordamchi, rejalashtiruvchi, tizim) alohida rangda
+
+**Claude konnektori (ixtiyoriy)**
+
+- Blog egasining o'z Claude'i (claude.ai, mobil ilovalar, Claude Code) masofaviy MCP server orqali OAuth bilan ulanib, postlar, statistika, izohlar, tarix va jurnalni *o'qiy* oladi; server tomonda AI modeli yo'q, hammasi `MCP_ENABLED` orqasida. Batafsil: [docs/claude-connector.md](docs/claude-connector.md)
+
 **Xavfsizlik**
 
 - Sirlar (bot token, R2 kaliti, Turnstile secret va h.k.) bazada `BETTER_AUTH_SECRET`dan olingan kalit bilan AES-256-GCM shifrlangan holda saqlanadi
@@ -238,10 +249,17 @@ Quyidagilarning barchasi `.env`da ham, `/admin/sozlamalar`da ham sozlanishi mumk
 | Umami | `UMAMI_API_URL`, `UMAMI_API_KEY` yoki `UMAMI_USERNAME`/`UMAMI_PASSWORD`, `NEXT_PUBLIC_UMAMI_*` |
 | Infratuzilma | `TRUST_PROXY` (faqat ishonchli proksi orqasida `true`), `COOKIE_DOMAIN` |
 | Rate limit (faqat env, admin paneldan sozlanmaydi) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/parol endpoint'lari, IP bo'yicha; `AUTH_RATE_LIMIT_ENABLED` (bo'sh = faqat production'da; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = o'chiq), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` yozuv so'rovlari. Oshsa `429` + `Retry-After` |
+| Post tarixi (faqat env) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = har tahrirdan oldin) — oddiy tahrirlar (avtosaqlash) shu oraliqdan tez-tez suratga olinmaydi (chop etish/arxiv/rejalashtirish/tiklashdan oldin surat doim olinadi); `POST_REVISION_MAX_PER_POST` (`100`) — bitta postda saqlanadigan revision'lar soni, eng eskilari o'chiriladi |
+| Migratsiya (faqat env) | `MIGRATE_LOCK_TIMEOUT_MS` (default `15000`, `0` = o'chiq) — `pnpm api:migrate` Postgres sessiyasida `lock_timeout`: band jadvalda `ALTER TABLE` lock kutib qolsa migratsiya xato bilan to'xtaydi (deploy restart'gacha to'xtaydi, sayt eski kodda ishlayveradi) |
+| Claude konnektori (MCP) | `MCP_ENABLED` (default `false` — o'chiq bo'lsa API avvalgidek ishlaydi), `MCP_ACCESS_TOKEN_TTL_SECONDS`, `MCP_REFRESH_TOKEN_TTL_DAYS`, `MCP_ALLOWED_REDIRECT_URIS`, `MCP_REGISTRATION_RATE_LIMIT_*`, `MCP_RATE_LIMIT_*` va boshqalar — to'liq ro'yxat, yoqish va ulash: **[docs/claude-connector.md](docs/claude-connector.md)** |
 
 ### 8. Deploy
 
-Hech narsa avtomatik deploy qilinmaydi. Asosiy yo'l: **API — VDS'da Docker Compose, mavjud nginx orqasida** (bitta serverda boshqa saytlar bilan bir qatorda); **web — Vercel'da**.
+> **Avtomatik deploy (CD):** `main`'ga push + CI muvaffaqiyatli bo'lgach, GitHub Actions production VDS'ga o'zi deploy qiladi (sozlangan bo'lsa). Qanday ishlashi va bir martalik sozlash: [`docs/deploy.md`](docs/deploy.md). Quyida — eski (Docker/Vercel) yo'l tavsifi; hozirgi production Docker'siz (systemd) ishlaydi, qo'lda zaxira yo'l — `./scripts/deploy-vds.sh`.
+
+Avtomatik deploy sozlanmagan bo'lsa, hech narsa avtomatik deploy qilinmaydi. Asosiy yo'l: **API — VDS'da Docker Compose, mavjud nginx orqasida** (bitta serverda boshqa saytlar bilan bir qatorda); **web — Vercel'da**.
+
+> **Orqaga qaytarish (rollback).** API'ni shu o'zgarishdan OLDINGI versiyaga qaytarishdan avval chiqindi qutisi bo'sh bo'lishi shart (har bir postni qaytaring yoki doimiy o'chiring): eski kod `deleted_at`ni bilmaydi, chiqindidagi postlarni `_trash_<id>` slug'li oddiy post sifatida ko'rsatadi va hatto chop etib yuborishi mumkin. Tekshiruv: `select count(*) from posts where deleted_at is not null;` — `0` bo'lishi kerak. Migratsiyalar (0010–0015) orqaga qaytarilmaydi, joyida qoladi (faqat qo'shimcha ustun/jadval — eski kodga zarar qilmaydi). Claude konnektori (0015) uchun orqaga qaytarish — `MCP_ENABLED=false`: yangi jadvallar bo'sh qoladi, eski kod ularni ko'rmaydi.
 
 > `apps/api/docker-compose.yml` barcha portlarni **faqat lokal interfeysga** bog'laydi (`127.0.0.1:4000` — API, `127.0.0.1:5432` — Postgres, `127.0.0.1:3001` — Umami). Ular internetdan to'g'ridan-to'g'ri ochilmaydi va ufw'ni chetlab o'tmaydi; tashqi kirish faqat nginx + TLS orqali.
 
@@ -416,6 +434,17 @@ abdusoft blog is a self-hosted, single-author tech blog platform. The public sid
 - Comment notifications land in an admin chat with inline buttons to approve/reject/ban directly
 - Bot commands: `/stats`, `/posts`, `/pending`, `/comments <slug> on|off`, `/publish` / `/unpublish`, `/digest`
 - Daily digest — when enabled, sends a stats summary to the admin chat at a fixed time
+
+**Reliable editing in the admin panel**
+
+- **Trash** (`Posts` > `Trash`, admin only): deleted posts are kept here — who deleted and when is shown; "Restore" (with a clear notice when the original slug was taken and a new one was assigned) or "Delete permanently" (comments, channel versions and history go too)
+- **History** (in the editor): a post's earlier versions — time, who, via what (web panel / Telegram / scheduler / assistant connector), a read-only preview, which fields differ from the current version, and "Restore this version". The current state is saved automatically before restoring; a published post keeps its URL by default
+- **Conflict protection**: every request the editor makes goes through one queue and carries the latest `updatedAt` token. If the post was changed elsewhere (another tab, Telegram, the assistant) autosave stops, the typed text stays safe in the browser, and a banner offers three actions: load the latest version (your local text is offered for recovery) / overwrite with mine (with confirmation, the other version stays in History) / open History. Two tabs of the same user count as a genuine conflict — the banner says "you changed this in another window or device" and nothing is silently overwritten
+- **Journal** (`/admin/jurnal`, admin only): every change — filter by source, entity, action and date; non-human sources (assistant, scheduler, system) are visually distinct
+
+**Claude connector (optional)**
+
+- The owner's own Claude (claude.ai, mobile apps, Claude Code) can connect over OAuth to a remote MCP server and *read* posts, stats, comments, history and the audit log; no AI model runs on the server and everything is behind `MCP_ENABLED`. Details: [docs/claude-connector.md](docs/claude-connector.md)
 
 **Security**
 
@@ -593,10 +622,17 @@ Every one of these can be set via `.env` or `/admin/sozlamalar` — **a non-empt
 | Umami | `UMAMI_API_URL`, `UMAMI_API_KEY` or `UMAMI_USERNAME`/`UMAMI_PASSWORD`, `NEXT_PUBLIC_UMAMI_*` |
 | Infrastructure | `TRUST_PROXY` (only `true` behind a trusted proxy), `COOKIE_DOMAIN` |
 | Rate limit (env only, not editable in the admin panel) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/password endpoints, per IP; `AUTH_RATE_LIMIT_ENABLED` (empty = production only; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = off), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` write requests. Exceeding returns `429` + `Retry-After` |
+| Post history (env only) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = before every edit) — plain edits (autosave) are not snapshotted more often than this (a snapshot is always taken before publish/archive/schedule/restore); `POST_REVISION_MAX_PER_POST` (`100`) — revisions kept per post, oldest pruned first |
+| Migration (env only) | `MIGRATE_LOCK_TIMEOUT_MS` (default `15000`, `0` = off) — `lock_timeout` for the `pnpm api:migrate` Postgres session: if an `ALTER TABLE` cannot get its lock in time the migration fails fast (the deploy stops before the restart and the site keeps running on the old code) |
+| Claude connector (MCP) | `MCP_ENABLED` (default `false` — with it off the API behaves exactly as before), `MCP_ACCESS_TOKEN_TTL_SECONDS`, `MCP_REFRESH_TOKEN_TTL_DAYS`, `MCP_ALLOWED_REDIRECT_URIS`, `MCP_REGISTRATION_RATE_LIMIT_*`, `MCP_RATE_LIMIT_*` and more — full list, enabling and connecting: **[docs/claude-connector.md](docs/claude-connector.md)** |
 
 ### 8. Deploy
 
-Nothing deploys automatically. Primary path: **API on a VDS via Docker Compose, behind an existing nginx** (one shared server running other sites too); **web on Vercel**.
+> **Continuous deployment:** after a push to `main` and a green CI, GitHub Actions deploys to the production VDS (once configured). How it works and the one-time setup: [`docs/deploy.md`](docs/deploy.md) (Uzbek). The text below describes the older Docker/Vercel path; production now runs without Docker (systemd), and the manual fallback is `./scripts/deploy-vds.sh`.
+
+Unless automatic deployment is configured, nothing deploys automatically. Primary path: **API on a VDS via Docker Compose, behind an existing nginx** (one shared server running other sites too); **web on Vercel**.
+
+> **Rollback.** Before rolling the API back to a version from before the trash feature, the trash must be empty (restore or permanently delete every trashed post): old code does not know `deleted_at`, would list trashed posts as normal posts with `_trash_<id>` slugs and could even publish one. Check: `select count(*) from posts where deleted_at is not null;` must return `0`. Migrations (0010–0015) stay in place on rollback (they are additive and harmless to old code). To roll back the Claude connector (0015) just set `MCP_ENABLED=false`: the new tables stay empty and old code ignores them.
 
 > `apps/api/docker-compose.yml` binds every port to **localhost only** (`127.0.0.1:4000` — API, `127.0.0.1:5432` — Postgres, `127.0.0.1:3001` — Umami). Nothing is reachable from the internet directly and ufw is not bypassed; public access goes only through nginx + TLS.
 

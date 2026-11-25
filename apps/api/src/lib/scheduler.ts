@@ -1,12 +1,12 @@
 import { Cron } from "croner";
-import { ChannelPlanSchema } from "@blog/shared";
-import { and, eq, lt, lte } from "drizzle-orm";
+import { lt } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { posts, postViewDedupe } from "../db/schema.js";
+import { postViewDedupe } from "../db/schema.js";
+import { publishDuePosts } from "./posts/index.js";
 import { recoverInterruptedChannelSends, runDueChannelSends } from "../telegram/channel-plan.js";
 import { sendDigestNow } from "../telegram/digest.js";
-import { events } from "./events.js";
-import { pathsForPost, revalidateWeb } from "./revalidate.js";
+import { config } from "../config.js";
+import { cleanupMcpData } from "./mcp/connections.js";
 import { getSettings } from "./settings.js";
 import { loadSiteSettings } from "./site-settings.js";
 
@@ -63,41 +63,30 @@ export function startScheduler(): Cron[] {
     }
   });
 
-  return [publishJob, cleanupJob, digestJob];
-}
+  const jobs = [publishJob, cleanupJob, digestJob];
 
-export async function publishDuePosts(): Promise<void> {
-  const now = new Date();
-
-  const due = await db
-    .select({ id: posts.id, slug: posts.slug, channelPlan: posts.channelPlan })
-    .from(posts)
-    .where(and(eq(posts.status, "scheduled"), lte(posts.scheduledAt, now)));
-
-  for (const post of due) {
-    const plan = ChannelPlanSchema.safeParse(post.channelPlan);
-    await db
-      .update(posts)
-      .set({
-        status: "published",
-        publishedAt: now,
-        scheduledAt: null,
-        updatedAt: now,
-        // Kanal rejasi bor bo'lsa — chop etilgan vaqt + kechikish.
-        ...(plan.success
-          ? {
-              channelPlan: { ...plan.data, attempts: 0 },
-              channelSendAt: new Date(now.getTime() + plan.data.delayMinutes * 60_000),
-            }
-          : { channelPlan: null, channelSendAt: null }),
-      })
-      .where(eq(posts.id, post.id));
-
-    events.emit("post.published", { id: post.id, slug: post.slug });
-    revalidateWeb(pathsForPost(post.slug));
-    console.log(`Rejalashtirilgan post chop etildi: ${post.slug}`);
+  // Claude konnektori (MCP): rozilik olmagan ro'yxatdan o'tgan klientlar va eski refresh token'larni tozalash.
+  // Faqat MCP_ENABLED=true bo'lganda ro'yxatga olinadi — o'chiq bo'lsa jadval umuman o'zgarmaydi.
+  if (config.MCP_ENABLED) {
+    jobs.push(
+      new Cron("17 * * * *", async () => {
+        try {
+          const removed = await cleanupMcpData(config.MCP_UNUSED_CLIENT_TTL_HOURS);
+          if (removed.clients > 0 || removed.refreshTokens > 0) {
+            console.log(`MCP tozalash: ${removed.clients} ta ishlatilmagan klient, ${removed.refreshTokens} ta eski refresh token.`);
+          }
+        } catch (error: unknown) {
+          console.error("MCP tozalash xatosi:", error);
+        }
+      }),
+    );
   }
+
+  return jobs;
 }
+
+/** Rejalashtirilgan postlarni chop etish — `lib/posts` xizmatidagi YAGONA chop etish yo'li orqali (scheduler tizim aktyori). */
+export { publishDuePosts };
 
 /** `post_view_dedupe` — faqat kunlik dedupe uchun kerak, shu sabab 7 kundan eski yozuvlar tozalanadi. */
 async function cleanupOldViewDedupe(): Promise<void> {

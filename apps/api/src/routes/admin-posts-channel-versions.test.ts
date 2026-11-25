@@ -403,12 +403,15 @@ describe("custom versions", () => {
     expect((await api("DELETE", `/admin/posts/${post.id}/channel/versions/${v2.id}`, admin.cookie)).status).toBe(404);
   });
 
-  it("is admin-only and cascades on post delete", async () => {
+  it("is admin-only; versions survive trashing and cascade only on permanent delete", async () => {
     const post = await makePost({ status: "draft" });
     const v = await createVersion(post.id, { mode: "text", fromVariant: "m" });
     expect((await api("GET", `/admin/posts/${post.id}/channel/versions`, staff.cookie)).status).toBe(403);
     expect((await api("POST", `/admin/posts/${post.id}/channel/preflight`, staff.cookie, { versionId: v.id })).status).toBe(403);
     expect((await api("DELETE", `/admin/posts/${post.id}`, admin.cookie)).status).toBe(200);
+    // `DELETE /admin/posts/:id` endi chiqindi qutisiga ko'chiradi — hech narsa cascade bo'lmaydi.
+    expect(await db.select().from(channelPostVersions).where(eq(channelPostVersions.id, v.id))).toHaveLength(1);
+    expect((await api("DELETE", `/admin/posts/trash/${post.id}`, admin.cookie)).status).toBe(200);
     expect(await db.select().from(channelPostVersions).where(eq(channelPostVersions.id, v.id))).toHaveLength(0);
   });
 

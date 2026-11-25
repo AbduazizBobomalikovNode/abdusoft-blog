@@ -71,6 +71,48 @@
       "when": 1790861804168,
       "tag": "0009_foamy_winter_soldier",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795607732249,
+      "tag": "0010_careful_leech",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795607816526,
+      "tag": "0011_futuristic_silver_sable",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795608078111,
+      "tag": "0012_perfect_tana_nile",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795608340363,
+      "tag": "0013_minor_juggernaut",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1795610545735,
+      "tag": "0014_dazzling_raza",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1795614093522,
+      "tag": "0015_mcp_oauth_tables",
+      "breakpoints": true
     }
   ]
 }

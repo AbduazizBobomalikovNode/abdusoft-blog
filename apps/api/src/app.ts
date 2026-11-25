@@ -37,8 +37,16 @@ app.use(
   cors({
     origin: config.WEB_ORIGIN,
     credentials: true,
+    // Brauzer cross-origin javobda faqat shu header'larni JS'ga ko'rsatadi: admin panel
+    // 429 javobidagi `Retry-After`ni o'qib, "qancha kutish kerak"ligini aytadi.
+    exposeHeaders: ["Retry-After"],
   }),
 );
+
+// Claude konnektori (MCP) qo'riqchilari — faqat MCP_ENABLED=true; o'chiq bo'lsa hech narsa ro'yxatga olinmaydi.
+// (dinamik import: bayroq o'chiq bo'lsa MCP modullari umuman yuklanmaydi)
+const mcpHttp = config.MCP_ENABLED ? await import("./lib/mcp/http.js") : null;
+mcpHttp?.mountMcpPreAuth(app);
 
 app.on(["GET", "POST"], "/api/auth/*", (c) => handleAuthRequest(c));
 
@@ -78,5 +86,6 @@ app.route("/site", siteRoute);
 app.route("/staff/invites", staffInvitesRoute);
 app.route("/admin", adminRoute);
 mountTelegramWebhook(app);
+mcpHttp?.mountMcp(app);
 
 export type AppType = typeof app;

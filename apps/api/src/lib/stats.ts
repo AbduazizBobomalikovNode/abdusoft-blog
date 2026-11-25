@@ -1,7 +1,8 @@
-import { and, desc, eq, gte, inArray, lt, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import type { StatsRange, StatsRecentComment, StatsSeriesPoint, StatsTopPost, StatsTotals } from "@blog/shared";
 import { db } from "../db/index.js";
 import { comments, posts, postViewsDaily, reactions } from "../db/schema.js";
+import { postNotTrashed, publishedLive } from "./posts/live.js";
 
 /**
  * Statistika oynasi — kunlar UTC bo'yicha hisoblanadi (`post_views_daily.day`
@@ -65,7 +66,7 @@ export function enumerateDays(window: RangeWindow): string[] {
 
 /** `range=all` uchun seriya boshini `post_views_daily`dagi eng qadimgi kundan aniqlaydi. */
 export async function resolveAllRangeWindow(postId: string | null, endDay: string): Promise<RangeWindow> {
-  const conditions = [];
+  const conditions = [postNotTrashed(postViewsDaily.postId)];
   if (postId) conditions.push(eq(postViewsDaily.postId, postId));
 
   const [row] = await db
@@ -88,19 +89,27 @@ function dateRangeConditions(
 }
 
 function reactionConditions(postId: string | null, window: RangeWindow) {
-  const conditions = [eq(reactions.targetType, "post" as const), ...dateRangeConditions(reactions.createdAt, window)];
+  const conditions = [
+    eq(reactions.targetType, "post" as const),
+    postNotTrashed(reactions.targetId),
+    ...dateRangeConditions(reactions.createdAt, window),
+  ];
   if (postId) conditions.push(eq(reactions.targetId, postId));
   return conditions;
 }
 
 function commentConditions(postId: string | null, window: RangeWindow) {
-  const conditions = [ne(comments.status, "deleted" as const), ...dateRangeConditions(comments.createdAt, window)];
+  const conditions = [
+    ne(comments.status, "deleted" as const),
+    postNotTrashed(comments.postId),
+    ...dateRangeConditions(comments.createdAt, window),
+  ];
   if (postId) conditions.push(eq(comments.postId, postId));
   return conditions;
 }
 
 function viewConditions(postId: string | null, window: RangeWindow) {
-  const conditions = [];
+  const conditions = [postNotTrashed(postViewsDaily.postId)];
   if (window.startDay) conditions.push(gte(postViewsDaily.day, window.startDay));
   conditions.push(lte(postViewsDaily.day, window.endDay));
   if (postId) conditions.push(eq(postViewsDaily.postId, postId));
@@ -202,7 +211,10 @@ export async function topPostsForRange(window: RangeWindow, limit: number): Prom
   const postIds = viewRows.map((r) => r.postId);
 
   const [postRows, reactionRows, commentRows] = await Promise.all([
-    db.select({ id: posts.id, slug: posts.slug, title: posts.title }).from(posts).where(inArray(posts.id, postIds)),
+    db
+      .select({ id: posts.id, slug: posts.slug, title: posts.title })
+      .from(posts)
+      .where(and(inArray(posts.id, postIds), isNull(posts.deletedAt))),
     db
       .select({ postId: reactions.targetId, type: reactions.type, count: sql<number>`count(*)::int` })
       .from(reactions)
@@ -255,7 +267,7 @@ export async function topPostsForRange(window: RangeWindow, limit: number): Prom
 
 /** So'nggi izohlar — post nomi bilan birga (dashboard uchun). */
 export async function recentCommentsFor(postId: string | null, limit: number): Promise<StatsRecentComment[]> {
-  const conditions = [ne(comments.status, "deleted" as const)];
+  const conditions = [ne(comments.status, "deleted" as const), isNull(posts.deletedAt)];
   if (postId) conditions.push(eq(comments.postId, postId));
 
   const rows = await db
@@ -283,7 +295,7 @@ export async function recentCommentsFor(postId: string | null, limit: number): P
 }
 
 export async function pendingCommentsCount(postId: string | null): Promise<number> {
-  const conditions = [eq(comments.status, "pending" as const)];
+  const conditions = [eq(comments.status, "pending" as const), postNotTrashed(comments.postId)];
   if (postId) conditions.push(eq(comments.postId, postId));
 
   const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(comments).where(and(...conditions));
@@ -291,6 +303,6 @@ export async function pendingCommentsCount(postId: string | null): Promise<numbe
 }
 
 export async function publishedPostsCount(): Promise<number> {
-  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(posts).where(eq(posts.status, "published"));
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(posts).where(publishedLive());
   return row?.count ?? 0;
 }

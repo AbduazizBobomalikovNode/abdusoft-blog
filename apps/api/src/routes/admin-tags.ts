@@ -1,33 +1,18 @@
 import { Hono, type Context } from "hono";
-import { asc, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { CreateTagBodySchema, UpdateTagBodySchema, slugify } from "@blog/shared";
 import { db } from "../db/index.js";
-import { postTags, posts, tags } from "../db/schema.js";
+import { postTags, tags } from "../db/schema.js";
+import { tagsQuery } from "../lib/admin-reads/tags.js";
 import { requireRole } from "../lib/require-admin.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import { actorFromAdminUser } from "../lib/posts/types.js";
 
 /** Bio `admin-posts.ts`dagi izohga qarang — Hono zanjiri turini saqlab qolish uchun middleware o'rniga handler ichidagi tekshiruv. */
 function forbidUnlessAdmin(c: Context): Response | null {
   const adminUser = c.get("adminUser");
   if (adminUser.role !== "admin") return c.json({ error: "Forbidden" }, 403);
   return null;
-}
-
-function tagsQuery(idFilter?: string) {
-  const base = db
-    .select({
-      id: tags.id,
-      slug: tags.slug,
-      name: tags.name,
-      description: tags.description,
-      color: tags.color,
-      postsCount: sql<number>`count(${posts.id}) filter (where ${posts.status} = 'published')::int`,
-    })
-    .from(tags)
-    .leftJoin(postTags, eq(postTags.tagId, tags.id))
-    .leftJoin(posts, eq(posts.id, postTags.postId));
-
-  const filtered = idFilter ? base.where(eq(tags.id, idFilter)) : base;
-  return filtered.groupBy(tags.id).orderBy(asc(tags.name));
 }
 
 export const adminTagsRoute = new Hono()
@@ -60,6 +45,13 @@ export const adminTagsRoute = new Hono()
       .returning();
 
     if (!created) return c.json({ error: "Yaratib bo'lmadi" }, 500);
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "tag.create",
+      entityType: "tag",
+      entityId: created.id,
+      summary: `Teg yaratildi: ${created.name}`,
+      meta: { slug: created.slug },
+    });
     return c.json({ ...created, postsCount: 0 }, 201);
   })
   .patch("/:id", async (c) => {
@@ -91,6 +83,16 @@ export const adminTagsRoute = new Hono()
       await db.update(tags).set(update).where(eq(tags.id, id));
     }
 
+    if (Object.keys(update).length > 0) {
+      await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+        action: "tag.update",
+        entityType: "tag",
+        entityId: id,
+        summary: `Teg tahrirlandi: ${(update.name as string | undefined) ?? existingTag.name}`,
+        meta: { fields: Object.keys(update) },
+      });
+    }
+
     const [row] = await tagsQuery(id);
     return c.json(row);
   })
@@ -118,6 +120,13 @@ export const adminTagsRoute = new Hono()
 
     await db.delete(postTags).where(eq(postTags.tagId, id));
     await db.delete(tags).where(eq(tags.id, id));
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "tag.delete",
+      entityType: "tag",
+      entityId: id,
+      summary: `Teg o'chirildi: ${existingTag.name}`,
+      meta: { slug: existingTag.slug, postsCount, force },
+    });
 
     return c.json({ ok: true });
   });

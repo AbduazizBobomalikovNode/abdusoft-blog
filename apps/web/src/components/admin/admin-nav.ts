@@ -3,6 +3,8 @@ import {
   Image as ImageIcon,
   LayoutDashboard,
   MessageSquare,
+  Plug,
+  ScrollText,
   Settings,
   ShieldBan,
   Tags,
@@ -27,6 +29,8 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { href: "/admin/media", label: "Media", icon: ImageIcon },
   { href: "/admin/teglar", label: "Teglar", icon: Tags, roles: ["admin"] },
   { href: "/admin/xodimlar", label: "Xodimlar", icon: Users, roles: ["admin"] },
+  { href: "/admin/jurnal", label: "Jurnal", icon: ScrollText, roles: ["admin"] },
+  { href: "/admin/ulangan-ilovalar", label: "Ulangan ilovalar", icon: Plug, roles: ["admin"] },
   { href: "/admin/sozlamalar", label: "Sozlamalar", icon: Settings, roles: ["admin"] },
 ];
 

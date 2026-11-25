@@ -1,11 +1,12 @@
 import { isChannelComboValid, type ChannelMode, type ChannelVariant } from "@blog/shared";
 import { InlineKeyboard, type Context } from "grammy";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { channelPostVersions, posts } from "../db/schema.js";
 import { events, type PostSubmittedEventPayload } from "../lib/events.js";
-import { approvePost, requestPostChanges } from "../lib/post-review.js";
+import { approvePost, requestPostChanges, type Actor } from "../lib/posts/index.js";
+import { recordAuditSafe } from "../lib/audit.js";
 import { getSettings } from "../lib/settings.js";
 import { setPendingReply } from "../lib/site-settings.js";
 import { bot } from "./client.js";
@@ -22,6 +23,20 @@ import { findAdminUser } from "./comments.js";
 import { parseStoredChoice, resolveChannelChoice } from "./channel-choice.js";
 import { escapeHtml, escapeHtmlAttr, stripHtml, truncate } from "./format.js";
 import type { ChannelPreflightResponse } from "@blog/shared";
+
+/** Telegram admin chat orqali bajariladigan amallar (tasdiqlash/qaytarish) — `via: "telegram"`. */
+function telegramActor(userId: string): Actor {
+  return { userId, role: "admin", via: "telegram" };
+}
+
+/** Telegram orqali kanalga yuborish ham jurnalga yoziladi (`via: telegram`). */
+async function auditChannelSend(postId: string, meta: Record<string, unknown>): Promise<void> {
+  const admin = await findAdminUser();
+  await recordAuditSafe(
+    { userId: admin?.id ?? null, role: "admin", via: "telegram" },
+    { action: "post.channel_send", entityType: "post", entityId: postId, summary: "Post kanalga yuborildi", meta },
+  );
+}
 
 const EXCERPT_LIMIT = 500;
 /** Tasdiqlash oqimida ko'rsatiladigan maxsus versiyalar soni (eng yangilari). */
@@ -181,7 +196,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 async function buildVariantKeyboard(postId: string): Promise<InlineKeyboard> {
   const mediaCheck = await computeChannelPost(postId, "media", "m");
   const versions = await listVersionChoices(postId);
-  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  const [post] = await db.select().from(posts).where(and(eq(posts.id, postId), isNull(posts.deletedAt))).limit(1);
   const marked = post && parseStoredChoice(post.channelChoice) ? await resolveChannelChoice(post) : null;
   return channelVariantKeyboard(postId, mediaCheck.ok, versions, marked?.label ?? null);
 }
@@ -207,7 +222,7 @@ function channelConfirmKeyboard(postId: string, mode: ChannelMode, variant: Chan
 }
 
 async function notificationText(payload: PostSubmittedEventPayload): Promise<string> {
-  const [row] = await db.select().from(posts).where(eq(posts.id, payload.id)).limit(1);
+  const [row] = await db.select().from(posts).where(and(eq(posts.id, payload.id), isNull(posts.deletedAt))).limit(1);
   const excerpt = truncate(stripHtml(row?.contentText ?? ""), EXCERPT_LIMIT);
   // Xodim kanal versiyasini tayyorlagan bo'lsa — qaysi biri ekani xabarda ko'rinadi.
   const marked = row && parseStoredChoice(row.channelChoice) ? await resolveChannelChoice(row) : null;
@@ -278,10 +293,10 @@ export async function handleReviewNoteReply(
   }
 
   const note = ctx.message.text.trim();
-  const result = await requestPostChanges(postId, adminUser.id, note);
+  const result = await requestPostChanges(telegramActor(adminUser.id), postId, note);
 
   if (!result.ok) {
-    const message = result.reason === "not_in_review" ? "Post allaqachon ko'rib chiqilgan." : "Post topilmadi.";
+    const message = result.error.kind === "conflict" ? "Post allaqachon ko'rib chiqilgan." : "Post topilmadi.";
     await ctx.reply(message);
     return;
   }
@@ -399,18 +414,18 @@ export function registerReviewHandlers(): void {
         return;
       }
 
-      const result = await approvePost(postId, adminUser.id);
+      const result = await approvePost(telegramActor(adminUser.id), postId);
       if (!result.ok) {
         await ctx.answerCallbackQuery({
-          text: result.reason === "not_in_review" ? "Post allaqachon ko'rib chiqilgan" : "Topilmadi",
+          text: result.error.kind === "conflict" ? "Post allaqachon ko'rib chiqilgan" : "Topilmadi",
         });
         return;
       }
 
       await ctx.answerCallbackQuery({ text: "✅ Chop etildi" });
       if (message) {
-        const url = `${config.WEB_ORIGIN}/${result.post.slug}`;
-        const statusLine = `✅ Chop etildi: <a href="${escapeHtmlAttr(url)}">${escapeHtml(result.post.title)}</a>`;
+        const url = `${config.WEB_ORIGIN}/${result.data.slug}`;
+        const statusLine = `✅ Chop etildi: <a href="${escapeHtmlAttr(url)}">${escapeHtml(result.data.title)}</a>`;
         await editOriginalMessage(message.chat.id, message.message_id, originalText, statusLine);
 
         // Kanalga yuborish ENDI avtomatik EMAS — shu yerda rejim+uzunlik so'raymiz.
@@ -418,7 +433,7 @@ export function registerReviewHandlers(): void {
         try {
           await bot!.api.sendMessage(
             message.chat.id,
-            `Kanalga yuborish uchun rejim va uzunlikni tanlang: <b>${escapeHtml(result.post.title)}</b>`,
+            `Kanalga yuborish uchun rejim va uzunlikni tanlang: <b>${escapeHtml(result.data.title)}</b>`,
             {
               parse_mode: "HTML",
               link_preview_options: { is_disabled: true },
@@ -507,6 +522,7 @@ export function registerReviewHandlers(): void {
         return;
       }
 
+      await auditChannelSend(postId, { mode, variant });
       await ctx.answerCallbackQuery({ text: "✅ Kanalga yuborildi" });
       const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
       if (chatId) {
@@ -538,7 +554,7 @@ export function registerReviewHandlers(): void {
       await ctx.answerCallbackQuery({ text: "Post topilmadi" });
       return;
     }
-    const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+    const [post] = await db.select().from(posts).where(and(eq(posts.id, postId), isNull(posts.deletedAt))).limit(1);
     const choice = post ? parseStoredChoice(post.channelChoice) : null;
     if (!choice) {
       await ctx.answerCallbackQuery({ text: "Belgilangan versiya yo'q" });
@@ -586,6 +602,7 @@ export function registerReviewHandlers(): void {
         return;
       }
 
+      await auditChannelSend(postId, { versionId });
       await ctx.answerCallbackQuery({ text: "✅ Kanalga yuborildi" });
       if (chatId) {
         const [version] = await db

@@ -9,4 +9,5 @@ export const RESERVED_SLUGS = [
   "p",
   "api",
   "uploads",
+  "trash",
 ] as const;

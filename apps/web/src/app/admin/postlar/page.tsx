@@ -7,6 +7,7 @@ import { NewPostButton } from "@/components/admin/new-post-button";
 import { PostRowActions } from "@/components/admin/post-row-actions";
 import { PostChannelChoiceHint, PostChannelPlanHint, PostStatusBadge } from "@/components/admin/post-status-badge";
 import { PostStatusTabs } from "@/components/admin/post-status-tabs";
+import { TrashList } from "@/components/admin/trash-list";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -16,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getAdminPosts, getMe } from "@/lib/api";
+import { getAdminPosts, getAdminTrash, getMe } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Postlar" };
@@ -43,6 +44,7 @@ export default async function AdminPostsPage({
 }) {
   const { status: statusParam, q, page: pageParam } = await searchParams;
   const status = isStatusFilter(statusParam) ? statusParam : "all";
+  const wantsTrash = statusParam === "trash";
   const page = Number(pageParam) > 0 ? Number(pageParam) : 1;
 
   const headersList = await headers();
@@ -51,6 +53,10 @@ export default async function AdminPostsPage({
     getAdminPosts({ status, q, page, limit: 20 }, cookie),
     getMe(cookie),
   ]);
+  const isAdmin = me?.role === "admin";
+  // Savat faqat admin uchun (API ham xodimga 403 beradi); xodim `?status=trash` yozsa — oddiy ro'yxat.
+  const showTrash = isAdmin && wantsTrash;
+  const trash = isAdmin ? await getAdminTrash({ page: showTrash ? page : 1, limit: showTrash ? 20 : 1 }, cookie) : null;
   const posts = data?.items ?? [];
   const totals = data?.totals ?? {
     all: 0,
@@ -61,7 +67,6 @@ export default async function AdminPostsPage({
     published: 0,
     archived: 0,
   };
-  const isAdmin = me?.role === "admin";
 
   return (
     <div className="flex flex-col gap-4">
@@ -71,6 +76,7 @@ export default async function AdminPostsPage({
           <p className="mt-1 text-sm text-muted-foreground">Barcha postlaringizni boshqaring.</p>
         </div>
         <div className="flex items-center gap-2">
+          {showTrash ? null : (
           <form action="/admin/postlar" method="get" className="flex items-center gap-2">
             {status !== "all" ? <input type="hidden" name="status" value={status} /> : null}
             <Input
@@ -82,13 +88,36 @@ export default async function AdminPostsPage({
               className="w-48"
             />
           </form>
+          )}
           <NewPostButton />
         </div>
       </div>
 
-      <PostStatusTabs active={status} totals={totals} q={q} />
+      <PostStatusTabs
+        active={showTrash ? "trash" : status}
+        totals={totals}
+        q={showTrash ? undefined : q}
+        trashCount={isAdmin ? (trash?.total ?? 0) : undefined}
+      />
 
-      {posts.length === 0 ? (
+      {showTrash ? (
+        <>
+          <p className="text-sm text-muted-foreground">
+            O&apos;chirilgan postlar shu yerda saqlanadi — tiklash mumkin. &quot;Butunlay o&apos;chirish&quot; dan keyin qaytarib bo&apos;lmaydi.
+          </p>
+          <TrashList items={trash?.items ?? []} isAdmin={isAdmin} />
+          {trash?.hasMore ? (
+            <div className="flex justify-center">
+              <Link
+                href={`/admin/postlar?status=trash&page=${page + 1}`}
+                className="rounded-full border border-border px-4 py-1.5 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+              >
+                Yana yuklash
+              </Link>
+            </div>
+          ) : null}
+        </>
+      ) : posts.length === 0 ? (
         <EmptyState
           icon={FileText}
           message="Bu bo'limda hali postlar yo'q."
@@ -234,7 +263,7 @@ export default async function AdminPostsPage({
         </>
       )}
 
-      {data && data.hasMore ? (
+      {!showTrash && data && data.hasMore ? (
         <div className="flex justify-center">
           <Link
             href={(() => {

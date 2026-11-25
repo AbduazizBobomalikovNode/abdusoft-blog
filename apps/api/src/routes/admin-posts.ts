@@ -1,46 +1,53 @@
 import { Hono, type Context } from "hono";
-import { and, asc, desc, eq, gt, ilike, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
-  ChannelPlanSchema,
   ChannelPreviewRequestSchema,
   ChannelSelectionSchema,
   ChannelSendRequestSchema,
   CreateChannelVersionBodySchema,
   CreatePostBodySchema,
-  DEFAULT_POST_SETTINGS,
-  PostSettingsSchema,
+  ExpectedUpdatedAtSchema,
   PublishPostBodySchema,
   RequestChangesBodySchema,
-  RESERVED_SLUGS,
   SchedulePostBodySchema,
   SetChannelChoiceBodySchema,
-  STAFF_EDITABLE_POST_FIELDS,
+  TrashListQuerySchema,
   UpdateChannelVersionBodySchema,
   UpdatePostBodySchema,
-  slugify,
-  type AdminPostStatus,
-  type ChannelPlan,
-  type ChannelSelection,
-  type PostAuthorRef,
-  type PostListItem,
   type PublishChannelSendResult,
-  type Tag,
 } from "@blog/shared";
-import { nanoid } from "nanoid";
-import { db } from "../db/index.js";
-import { user } from "../db/auth-schema.js";
-import { postTags, posts, tags } from "../db/schema.js";
-import { postSelectColumns, tagsForPostIds } from "./posts.js";
 import { requireRole } from "../lib/require-admin.js";
-import { escapeLike } from "../lib/like.js";
-import { renderPost } from "../lib/content/render.js";
-import { events } from "../lib/events.js";
-import { approvePost, requestPostChanges, submitPostForReview } from "../lib/post-review.js";
-import { pathsForPost, revalidateWeb } from "../lib/revalidate.js";
 import {
-  computeChannelPost,
+  actorFromAdminUser,
+  approvePost,
+  archivePost,
+  authorizeEdit,
+  createPost,
+  findPost,
+  getPostDetail,
+  getRevision,
+  listRevisions,
+  restoreRevision,
+  listPosts,
+  listTrash,
+  purgePost,
+  restoreFromTrash,
+  trashPost,
+  mineSummary,
+  previewPost,
+  publishPost,
+  requestPostChanges,
+  requireAdminActor,
+  schedulePost,
+  submitPostForReview,
+  unpublishPost,
+  updatePost,
+  type Actor,
+  type PostRow,
+} from "../lib/posts/index.js";
+import {
   computeChannelVersionPost,
+  computeChannelPost,
   editChannelCaptionForPost,
   getChannelAlreadySent,
   sendPostToChannel,
@@ -49,12 +56,10 @@ import {
 } from "../telegram/channel-send.js";
 import { computeChannelPreflight, summarizePreflightErrors } from "../telegram/channel-preflight.js";
 import { getChannelInfo } from "../telegram/channel-info.js";
-import { loadVersion } from "../telegram/channel-versions.js";
 import {
   clearChannelChoice,
   parseStoredChoice,
   resolveChannelChoice,
-  resolveChoiceForSend,
   setChannelChoice,
 } from "../telegram/channel-choice.js";
 import { sendMarkedChoiceNow } from "../telegram/channel-plan.js";
@@ -65,13 +70,38 @@ import {
   updateChannelVersion,
 } from "../telegram/channel-version-service.js";
 import { getTelegramRefForPost, refreshTelegraphMirror } from "../telegram/publish.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import { errorResponse } from "./service-response.js";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-const SHORT_QUERY_LENGTH = 3;
-const RELATED_LIMIT = 3;
-const SLUG_ID_LENGTH = 6;
-const RECENT_MINE_LIMIT = 8;
+
+function actorOf(c: Context): Actor {
+  return actorFromAdminUser(c.get("adminUser"), "web");
+}
+
+/**
+ * Holat o'tishlarining ixtiyoriy `expectedUpdatedAt`i (tana yoki — DELETE uchun — query). Tana yo'q/boshqa shaklda
+ * bo'lsa e'tiborsiz qoldiriladi (eski mijozlar o'zgarmaydi); faqat BERILGAN lekin noto'g'ri qiymat `400`.
+ */
+async function readExpectedUpdatedAt(c: Context): Promise<{ expectedUpdatedAt?: string } | { response: Response }> {
+  const raw = await c.req.json().catch(() => null);
+  const fromBody =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).expectedUpdatedAt
+      : undefined;
+  const candidate = fromBody ?? c.req.query("expectedUpdatedAt");
+  if (candidate === undefined || candidate === null) return {};
+  const parsed = ExpectedUpdatedAtSchema.safeParse(candidate);
+  if (!parsed.success) return { response: c.json({ error: "Noto'g'ri so'rov tanasi" }, 400) };
+  return { expectedUpdatedAt: parsed.data };
+}
+
+/** Kanal endpoint'lari uchun post qidiruvi (404 tekshiruvi chaqiruvchida). */
+function loadPostOr404(id: string) {
+  return findPost(id);
+}
+
 
 /**
  * Hono'ning fluent (zanjirlangan) marshrut tur chiqarishini buzmaslik uchun
@@ -93,7 +123,7 @@ function forbidUnlessAdmin(c: Context): Response | null {
  * ruxsati: admin — doim; xodim — FAQAT o'z posti uchun, yozish amallari esa faqat `draft`/`changes_requested`
  * holatida (`in_review`da versiyalar xodim uchun faqat o'qish). Kanalga YUBORISH bu yerda hech qachon xodimga ochilmaydi.
  */
-function guardChannelPrep(c: Context, post: typeof posts.$inferSelect, access: "read" | "write"): Response | null {
+function guardChannelPrep(c: Context, post: PostRow, access: "read" | "write"): Response | null {
   const me = c.get("adminUser");
   if (me.role === "admin") return null;
   if (post.createdBy !== me.id) {
@@ -122,206 +152,21 @@ const ListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
 
-const adminPostSelectColumns = {
-  ...postSelectColumns,
-  status: posts.status,
-  scheduledAt: posts.scheduledAt,
-  channelPlan: posts.channelPlan,
-  updatedAt: posts.updatedAt,
-  createdBy: posts.createdBy,
-  reviewNote: posts.reviewNote,
-  channelChoice: posts.channelChoice,
-};
 
-type AdminPostRow = {
-  id: string;
-  slug: string;
-  title: string;
-  excerpt: string | null;
-  publishedAt: Date | null;
-  readingTime: number | null;
-  pinned: boolean;
-  viewsCount: number;
-  likesCount: number;
-  dislikesCount: number;
-  commentsCount: number;
-  status: AdminPostStatus;
-  scheduledAt: Date | null;
-  channelPlan: unknown;
-  updatedAt: Date;
-  createdBy: string | null;
-  reviewNote: string | null;
-  channelChoice: unknown;
-};
 
-/** Ro'yxat sahifasidagi "Yozgan" ustuni uchun — bitta so'rovda barcha (sahifadagi) muallif nomlarini oldindan yuklaydi. */
-async function authorNamesForIds(ids: (string | null)[]): Promise<Map<string, string | null>> {
-  const uniqueIds = [...new Set(ids.filter((id): id is string => Boolean(id)))];
-  if (uniqueIds.length === 0) return new Map();
-  const rows = await db.select({ id: user.id, name: user.name, email: user.email }).from(user).where(inArray(user.id, uniqueIds));
-  return new Map(rows.map((row) => [row.id, row.name || row.email]));
-}
-
-function toAuthorRef(id: string | null, authorMap: Map<string, string | null>): PostAuthorRef | null {
-  if (!id) return null;
-  return { id, name: authorMap.get(id) ?? null };
-}
-
-function toAdminListItem(row: AdminPostRow, tagMap: Map<string, Tag[]>, authorMap: Map<string, string | null>) {
+function toLifecycleSummary(post: PostRow) {
   return {
-    id: row.id,
-    slug: row.slug,
-    title: row.title,
-    status: row.status,
-    publishedAt: row.publishedAt?.toISOString() ?? null,
-    scheduledAt: row.scheduledAt?.toISOString() ?? null,
-    hasChannelPlan: row.status === "scheduled" && row.channelPlan != null,
-    hasChannelChoice: row.channelChoice != null,
-    updatedAt: row.updatedAt.toISOString(),
-    pinned: row.pinned,
-    tags: tagMap.get(row.id) ?? [],
-    counts: {
-      views: row.viewsCount,
-      likes: row.likesCount,
-      dislikes: row.dislikesCount,
-      comments: row.commentsCount,
-    },
-    createdBy: toAuthorRef(row.createdBy, authorMap),
-    reviewNote: row.reviewNote,
+    id: post.id,
+    slug: post.slug,
+    status: post.status,
+    publishedAt: post.publishedAt?.toISOString() ?? null,
+    scheduledAt: post.scheduledAt?.toISOString() ?? null,
+    pinned: post.pinned,
+    updatedAt: post.updatedAt.toISOString(),
   };
-}
-
-async function computeTotals(ownerId?: string): Promise<Record<"all" | AdminPostStatus, number>> {
-  const rows = await db
-    .select({ status: posts.status, count: sql<number>`count(*)::int` })
-    .from(posts)
-    .where(ownerId ? eq(posts.createdBy, ownerId) : undefined)
-    .groupBy(posts.status);
-
-  const totals = {
-    all: 0,
-    draft: 0,
-    in_review: 0,
-    changes_requested: 0,
-    scheduled: 0,
-    published: 0,
-    archived: 0,
-  };
-  for (const row of rows) {
-    totals[row.status] = row.count;
-    totals.all += row.count;
-  }
-  return totals;
-}
-
-async function generateDraftSlug(): Promise<string> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const candidate = `nomsiz-post-${nanoid(SLUG_ID_LENGTH).toLowerCase()}`;
-    const [existing] = await db.select({ id: posts.id }).from(posts).where(eq(posts.slug, candidate)).limit(1);
-    if (!existing) return candidate;
-  }
-  throw new Error("Unikal slug generatsiya qilib bo'lmadi");
-}
-
-interface SlugValidationError {
-  error: string;
-}
-
-async function validateSlug(rawSlug: string, postId: string): Promise<string | SlugValidationError> {
-  const clean = slugify(rawSlug);
-  if (!clean) return { error: "Slug bo'sh bo'lishi mumkin emas" };
-  if ((RESERVED_SLUGS as readonly string[]).includes(clean)) {
-    return { error: `"${clean}" — band qilingan slug, boshqasini tanlang` };
-  }
-
-  const [existing] = await db
-    .select({ id: posts.id })
-    .from(posts)
-    .where(eq(posts.slug, clean))
-    .limit(1);
-
-  if (existing && existing.id !== postId) {
-    return { error: `"${clean}" slug allaqachon band` };
-  }
-
-  return clean;
-}
-
-async function resolveTagIds(tagSlugs: string[]): Promise<{ id: string; slug: string }[]> {
-  if (tagSlugs.length === 0) return [];
-  return db
-    .select({ id: tags.id, slug: tags.slug })
-    .from(tags)
-    .where(inArray(tags.slug, tagSlugs));
-}
-
-async function loadPostOr404(id: string) {
-  const [post] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
-  return post ?? null;
-}
-
-/** DB'dagi `channel_plan` jsonb'ni tekshiradi (buzilgan qiymat -> `null`). */
-function parseStoredPlan(value: unknown): ChannelPlan | null {
-  if (value == null) return null;
-  const parsed = ChannelPlanSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
-/** Klientdan kelgan rejadan `attempts` (server hisoblagichi)ni olib tashlaydi. */
-function cleanPlan(plan: ChannelPlan): ChannelPlan {
-  if (plan.useChoice) return { useChoice: true, delayMinutes: plan.delayMinutes };
-  return plan.versionId
-    ? { mode: plan.mode, versionId: plan.versionId, delayMinutes: plan.delayMinutes }
-    : { mode: plan.mode, variant: plan.variant, delayMinutes: plan.delayMinutes };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Kanal rejasini saqlashdan oldin preflight (post chop etilganligi talab qilinmaydi).
- * Muvaffaqiyatli bo'lsa — tozalangan reja (versiya bo'lsa `mode` versiyadan olinadi);
- * aks holda tayyor javob (404/400/422 + tekshiruvlar).
- */
-async function preparePlanOrReject(
-  c: Context,
-  postId: string,
-  plan: ChannelPlan,
-): Promise<{ plan: ChannelPlan } | { response: Response }> {
-  let cleaned = cleanPlan(plan);
-  let selection: ChannelSelection;
-  if (plan.useChoice) {
-    // Tekshiruv hozirgi belgiga nisbatan (yo'q bo'lsa — standart tanlov); yuborish paytida belgi qayta hal qilinadi.
-    const resolved = await resolveChoiceForSend(postId);
-    if (!resolved) return { response: c.json({ error: "Topilmadi" }, 404) };
-    selection = resolved.selection;
-  } else {
-    if (plan.versionId) {
-      const version = await loadVersion(postId, plan.versionId);
-      if (!version) return { response: c.json({ error: "Versiya topilmadi" }, 404) };
-      cleaned = { ...cleaned, mode: version.mode };
-    }
-    selection = cleaned.versionId ? { versionId: cleaned.versionId } : { mode: cleaned.mode!, variant: cleaned.variant! };
-  }
-  const result = await computeChannelPreflight(postId, selection, {
-    requirePublished: false,
-    planFallback: !("versionId" in selection),
-  });
-  if (!result.ok) {
-    return { response: c.json({ error: result.reason === "not_found" ? "Topilmadi" : "Noto'g'ri kanal rejasi" }, result.reason === "not_found" ? 404 : 400) };
-  }
-  if (!result.preflight.canSend) {
-    return {
-      response: c.json(
-        {
-          error: `Telegram cheklovlari bajarilmagan: ${summarizePreflightErrors(result.preflight)}`,
-          preflight: result.preflight,
-        },
-        422,
-      ),
-    };
-  }
-  return { plan: cleaned };
-}
 
 /** `sendPostToChannel`/`sendVersionToChannel` xatosini HTTP javobiga aylantiradi. */
 function sendFailureResponse(c: Context, result: Extract<SendChannelPostResult, { ok: false }>): Response {
@@ -351,17 +196,6 @@ function sendFailureResponse(c: Context, result: Extract<SendChannelPostResult, 
   }
 }
 
-function toLifecycleSummary(post: typeof posts.$inferSelect) {
-  return {
-    id: post.id,
-    slug: post.slug,
-    status: post.status,
-    publishedAt: post.publishedAt?.toISOString() ?? null,
-    scheduledAt: post.scheduledAt?.toISOString() ?? null,
-    pinned: post.pinned,
-    updatedAt: post.updatedAt.toISOString(),
-  };
-}
 
 const CHANNEL_SEND_WAIT_MS = 20_000;
 
@@ -369,16 +203,17 @@ const CHANNEL_SEND_WAIT_MS = 20_000;
 async function parsePublishBody(
   c: Context,
   postId: string,
-): Promise<{ sendToChannel: boolean } | { response: Response }> {
+): Promise<{ sendToChannel: boolean; expectedUpdatedAt?: string } | { response: Response }> {
   const raw = await c.req.json().catch(() => ({}));
   const parsed = PublishPostBodySchema.safeParse(raw ?? {});
   if (!parsed.success) return { response: c.json({ error: "Noto'g'ri so'rov tanasi" }, 400) };
-  if (!parsed.data.sendToChannel) return { sendToChannel: false };
+  const expectedUpdatedAt = parsed.data.expectedUpdatedAt;
+  if (!parsed.data.sendToChannel) return { sendToChannel: false, expectedUpdatedAt };
   const post = await loadPostOr404(postId);
   if (post && !parseStoredChoice(post.channelChoice)) {
     return { response: c.json({ error: "Postda belgilangan kanal versiyasi yo'q" }, 400) };
   }
-  return { sendToChannel: true };
+  return { sendToChannel: true, expectedUpdatedAt };
 }
 
 /** Rejani (kechikishsiz) qo'yib, Telegraph'dan keyin yuboradi; natija HTTP javobiga (toast) qo'shiladi. Uzoq cho'zilsa — fonda davom etadi (admin chatga xabar boradi). */
@@ -407,36 +242,43 @@ async function queueChannelSend(postId: string): Promise<PublishChannelSendResul
   return Promise.race([work, timeout]);
 }
 
+
 export const adminPostsRoute = new Hono()
   .use("*", requireRole("admin", "staff"))
-  .get("/mine/summary", async (c) => {
-    const adminUser = c.get("adminUser");
-    const [totals, recentRows] = await Promise.all([
-      computeTotals(adminUser.id),
-      db
-        .select(adminPostSelectColumns)
-        .from(posts)
-        .where(eq(posts.createdBy, adminUser.id))
-        .orderBy(desc(posts.updatedAt))
-        .limit(RECENT_MINE_LIMIT),
-    ]);
-
-    const tagMap = await tagsForPostIds(recentRows.map((row) => row.id));
-    const authorMap = await authorNamesForIds(recentRows.map((row) => row.createdBy));
-
-    return c.json({
-      counts: {
-        draft: totals.draft,
-        in_review: totals.in_review,
-        changes_requested: totals.changes_requested,
-        published: totals.published,
-        archived: totals.archived,
-      },
-      recent: recentRows.map((row) => toAdminListItem(row, tagMap, authorMap)),
-    });
+  .get("/mine/summary", async (c) => c.json(await mineSummary(actorOf(c))))
+  // Chiqindi qutisi (faqat admin): `/trash` marshrutlari `/:id`dan OLDIN ro'yxatga olinadi.
+  .get("/trash", async (c) => {
+    const parsed = TrashListQuerySchema.safeParse({ page: c.req.query("page"), limit: c.req.query("limit") });
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov parametrlari" }, 400);
+    const result = await listTrash(actorOf(c), parsed.data);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .post("/trash/:id/restore", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await restoreFromTrash(actor, id, expected);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .delete("/trash/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await purgePost(actor, id, expected);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json({ ok: true });
   })
   .get("/", async (c) => {
-    const adminUser = c.get("adminUser");
     const parsed = ListQuerySchema.safeParse({
       status: c.req.query("status") ?? undefined,
       q: c.req.query("q"),
@@ -448,156 +290,23 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "Noto'g'ri so'rov parametrlari" }, 400);
     }
 
-    const { status, q, page, limit } = parsed.data;
-    const offset = (page - 1) * limit;
-
-    const conditions = [];
-    if (status !== "all") {
-      conditions.push(eq(posts.status, status));
-    }
-    // Xodim (staff) FAQAT o'z postlarini ko'radi — bu shart har doim, so'rov
-    // parametrlaridan qat'i nazar, qo'shiladi (API — haqiqiy himoya qatlami).
-    if (adminUser.role === "staff") {
-      conditions.push(eq(posts.createdBy, adminUser.id));
-    }
-
-    if (q) {
-      if (q.length < SHORT_QUERY_LENGTH) {
-        const like = `%${escapeLike(q)}%`;
-        conditions.push(or(ilike(posts.title, like), ilike(posts.contentText, like))!);
-      } else {
-        conditions.push(
-          sql`to_tsvector('simple', coalesce(${posts.title}, '') || ' ' || coalesce(${posts.contentText}, '')) @@ websearch_to_tsquery('simple', ${q})`,
-        );
-      }
-    }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const [rows, countRows, totals] = await Promise.all([
-      db
-        .select(adminPostSelectColumns)
-        .from(posts)
-        .where(whereClause)
-        .orderBy(desc(posts.pinned), desc(posts.updatedAt))
-        .limit(limit)
-        .offset(offset),
-      db.select({ count: sql<number>`count(*)::int` }).from(posts).where(whereClause),
-      computeTotals(adminUser.role === "staff" ? adminUser.id : undefined),
-    ]);
-
-    const total = countRows[0]?.count ?? 0;
-    const tagMap = await tagsForPostIds(rows.map((row) => row.id));
-    const authorMap = await authorNamesForIds(rows.map((row) => row.createdBy));
-
-    return c.json({
-      items: rows.map((row) => toAdminListItem(row, tagMap, authorMap)),
-      page,
-      limit,
-      total,
-      hasMore: page * limit < total,
-      totals,
-    });
+    return c.json(await listPosts(actorOf(c), parsed.data));
   })
   .post("/", async (c) => {
-    const adminUser = c.get("adminUser");
     const body = await c.req.json().catch(() => ({}));
     const parsed = CreatePostBodySchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
     }
 
-    const title = parsed.data.title?.trim() || "Nomsiz post";
-    const slug = await generateDraftSlug();
-    // Bo'sh `content: []` — sxemaga (`block+`) mos kelmaydigan haqiqatan ham
-    // bo'sh hujjat: Tiptap/ProseMirror uni bitta ham textblock tugunisiz
-    // render qiladi, shu sabab Placeholder kengaytmasi hech narsaga
-    // ilova qiladigan tugun topa olmaydi va bo'sh muharrir joy egallovchisiz
-    // ko'rinadi. Bitta bo'sh paragraf — minimal to'g'ri hujjat.
-    const emptyDoc = { type: "doc", content: [{ type: "paragraph" }] };
-    const rendered = await renderPost(emptyDoc);
-
-    const [created] = await db
-      .insert(posts)
-      .values({
-        slug,
-        title,
-        contentJson: emptyDoc,
-        contentHtml: rendered.html,
-        contentText: rendered.text,
-        toc: rendered.toc,
-        readingTime: rendered.readingTime,
-        status: "draft",
-        settings: DEFAULT_POST_SETTINGS,
-        createdBy: adminUser.id,
-        updatedBy: adminUser.id,
-      })
-      .returning();
-
-    if (!created) {
-      return c.json({ error: "Post yaratib bo'lmadi" }, 500);
-    }
-
-    return c.json({ id: created.id, slug: created.slug }, 201);
+    const result = await createPost(actorOf(c), { title: parsed.data.title });
+    if (!result.ok) return c.json({ error: result.error.message }, 500);
+    return c.json(result.data, 201);
   })
   .get("/:id", async (c) => {
-    const adminUser = c.get("adminUser");
-    const id = c.req.param("id");
-    const post = await loadPostOr404(id);
-    if (!post) return c.json({ error: "Topilmadi" }, 404);
-    if (adminUser.role === "staff" && post.createdBy !== adminUser.id) {
-      return c.json({ error: "Faqat o'z postlaringizni ko'rishingiz mumkin" }, 403);
-    }
-
-    const [tagMap, telegramRef, authorMap] = await Promise.all([
-      tagsForPostIds([post.id]),
-      getTelegramRefForPost(post.id),
-      authorNamesForIds([post.createdBy, post.updatedBy, post.reviewedBy]),
-    ]);
-    const settings = PostSettingsSchema.parse({
-      ...DEFAULT_POST_SETTINGS,
-      ...((post.settings as Record<string, unknown>) ?? {}),
-    });
-
-    return c.json({
-      id: post.id,
-      slug: post.slug,
-      title: post.title,
-      excerpt: post.excerpt,
-      contentJson: post.contentJson,
-      coverUrl: post.coverUrl,
-      status: post.status,
-      publishedAt: post.publishedAt?.toISOString() ?? null,
-      scheduledAt: post.scheduledAt?.toISOString() ?? null,
-      channelPlan: parseStoredPlan(post.channelPlan),
-      channelSendAt: post.channelSendAt?.toISOString() ?? null,
-      channelChoice: await resolveChannelChoice(post),
-      pinned: post.pinned,
-      settings,
-      tags: tagMap.get(post.id) ?? [],
-      readingTime: post.readingTime,
-      createdAt: post.createdAt.toISOString(),
-      updatedAt: post.updatedAt.toISOString(),
-      counts: {
-        views: post.viewsCount,
-        likes: post.likesCount,
-        dislikes: post.dislikesCount,
-        comments: post.commentsCount,
-      },
-      telegram: telegramRef
-        ? {
-            telegraphUrl: telegramRef.telegraphUrl,
-            telegraphPath: telegramRef.telegraphPath,
-            channelMessageId: telegramRef.channelMessageId,
-          }
-        : null,
-      createdBy: toAuthorRef(post.createdBy, authorMap),
-      updatedBy: toAuthorRef(post.updatedBy, authorMap),
-      reviewNote: post.reviewNote,
-      submittedAt: post.submittedAt?.toISOString() ?? null,
-      reviewedBy: toAuthorRef(post.reviewedBy, authorMap),
-      reviewedAt: post.reviewedAt?.toISOString() ?? null,
-    });
+    const result = await getPostDetail(actorOf(c), c.req.param("id"));
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .post("/:id/telegram/telegraph", async (c) => {
     const forbidden = forbidUnlessAdmin(c);
@@ -697,6 +406,12 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
     const result = await createChannelVersion(post, parsed.data, c.get("adminUser").id);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_version_create",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi yaratildi",
+    });
     return c.json(result.data, 201);
   })
   .patch("/:id/channel/versions/:vid", async (c) => {
@@ -711,6 +426,13 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
     const result = await updateChannelVersion(post, vid, parsed.data);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_version_update",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi tahrirlandi",
+      meta: { versionId: vid },
+    });
     return c.json(result.data);
   })
   .delete("/:id/channel/versions/:vid", async (c) => {
@@ -722,6 +444,13 @@ export const adminPostsRoute = new Hono()
     if (forbidden) return forbidden;
     const result = await deleteChannelVersion(post, vid);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_version_delete",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi o'chirildi",
+      meta: { versionId: vid, clearedChoice: result.data.clearedChoice },
+    });
     return c.json({ ok: true, clearedChoice: result.data.clearedChoice });
   })
   .put("/:id/channel/choice", async (c) => {
@@ -734,6 +463,12 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri tanlov", issues: parsed.error.issues }, 400);
     const result = await setChannelChoice(post.id, parsed.data, c.get("adminUser").id);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_choice_set",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi belgilandi",
+    });
     const fresh = await loadPostOr404(post.id);
     return c.json({ choice: fresh ? await resolveChannelChoice(fresh) : null });
   })
@@ -743,6 +478,12 @@ export const adminPostsRoute = new Hono()
     const forbidden = guardChannelPrep(c, post, "write");
     if (forbidden) return forbidden;
     await clearChannelChoice(post.id);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_choice_clear",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi belgisi olib tashlandi",
+    });
     return c.json({ ok: true });
   })
   .post("/:id/channel/send", async (c) => {
@@ -768,6 +509,16 @@ export const adminPostsRoute = new Hono()
           });
 
     if (!result.ok) return sendFailureResponse(c, result);
+    await recordAuditSafe(actorOf(c), {
+      action: parsed.data.replaceExisting ? "post.channel_replace" : "post.channel_send",
+      entityType: "post",
+      entityId: id,
+      summary: parsed.data.replaceExisting ? "Post kanalga qayta yuborildi (almashtirildi)" : "Post kanalga yuborildi",
+      meta:
+        "versionId" in parsed.data
+          ? { versionId: parsed.data.versionId, replaceExisting: Boolean(parsed.data.replaceExisting) }
+          : { mode: parsed.data.mode, variant: parsed.data.variant, replaceExisting: Boolean(parsed.data.replaceExisting) },
+    });
     return c.json(result);
   })
   .post("/:id/channel/resync-caption", async (c) => {
@@ -781,396 +532,155 @@ export const adminPostsRoute = new Hono()
     // (`editChannelCaptionForPost` ichida tekshiriladi), shu sabab bu yerda
     // 409 tashlamaymiz: tugma faqat "allaqachon yuborilgan" holatda ko'rinadi.
     await editChannelCaptionForPost(id);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_resync",
+      entityType: "post",
+      entityId: id,
+      summary: "Kanal xabari matni yangilandi",
+    });
     return c.json({ ok: true });
   })
   .get("/:id/preview", async (c) => {
-    const adminUser = c.get("adminUser");
+    const result = await previewPost(actorOf(c), c.req.param("id"));
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .get("/:id/revisions", async (c) => {
     const id = c.req.param("id");
-    const post = await loadPostOr404(id);
-    if (!post) return c.json({ error: "Topilmadi" }, 404);
-    if (adminUser.role === "staff" && post.createdBy !== adminUser.id) {
-      return c.json({ error: "Faqat o'z postlaringizni ko'rishingiz mumkin" }, 403);
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    const result = await listRevisions(actorOf(c), id);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .get("/:id/revisions/:rid", async (c) => {
+    const id = c.req.param("id");
+    const rid = c.req.param("rid");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    if (!UUID_RE.test(rid)) return c.json({ error: "Revision topilmadi" }, 404);
+    const result = await getRevision(actorOf(c), id, rid);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .post("/:id/revisions/:rid/restore", async (c) => {
+    const id = c.req.param("id");
+    const rid = c.req.param("rid");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    if (!UUID_RE.test(rid)) return c.json({ error: "Revision topilmadi" }, 404);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const rawBody = await c.req.json().catch(() => null);
+    const restoreSlug =
+      rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
+        ? (rawBody as Record<string, unknown>).restoreSlug
+        : undefined;
+    if (restoreSlug !== undefined && typeof restoreSlug !== "boolean") {
+      return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
     }
-
-    const tagMap = await tagsForPostIds([post.id]);
-    const currentTags = tagMap.get(post.id) ?? [];
-    const settings = PostSettingsSchema.parse({
-      ...DEFAULT_POST_SETTINGS,
-      ...((post.settings as Record<string, unknown>) ?? {}),
-    });
-
-    let prev: { slug: string; title: string } | null = null;
-    let next: { slug: string; title: string } | null = null;
-
-    if (post.status === "published" && post.publishedAt) {
-      const [prevRow] = await db
-        .select({ slug: posts.slug, title: posts.title })
-        .from(posts)
-        .where(and(eq(posts.status, "published"), lt(posts.publishedAt, post.publishedAt)))
-        .orderBy(desc(posts.publishedAt))
-        .limit(1);
-      prev = prevRow ?? null;
-
-      const [nextRow] = await db
-        .select({ slug: posts.slug, title: posts.title })
-        .from(posts)
-        .where(and(eq(posts.status, "published"), gt(posts.publishedAt, post.publishedAt)))
-        .orderBy(asc(posts.publishedAt))
-        .limit(1);
-      next = nextRow ?? null;
-    }
-
-    let related: PostListItem[] = [];
-    const currentTagIds = currentTags.map((t) => t.id);
-
-    if (currentTagIds.length > 0) {
-      const relatedRows = await db
-        .select(postSelectColumns)
-        .from(posts)
-        .where(
-          and(
-            eq(posts.status, "published"),
-            ne(posts.id, post.id),
-            inArray(
-              posts.id,
-              db.select({ id: postTags.postId }).from(postTags).where(inArray(postTags.tagId, currentTagIds)),
-            ),
-          ),
-        )
-        .orderBy(desc(posts.publishedAt))
-        .limit(RELATED_LIMIT);
-
-      const relatedTagMap = await tagsForPostIds(relatedRows.map((row) => row.id));
-      related = relatedRows.map((row) => ({
-        slug: row.slug,
-        title: row.title,
-        excerpt: row.excerpt,
-        publishedAt: row.publishedAt?.toISOString() ?? null,
-        readingTime: row.readingTime,
-        pinned: row.pinned,
-        tags: relatedTagMap.get(row.id) ?? [],
-        counts: {
-          views: row.viewsCount,
-          likes: row.likesCount,
-          dislikes: row.dislikesCount,
-          comments: row.commentsCount,
-        },
-      }));
-    }
-
-    return c.json({
-      slug: post.slug,
-      title: post.title,
-      excerpt: post.excerpt,
-      html: post.contentHtml,
-      toc: post.toc,
-      coverUrl: post.coverUrl,
-      status: post.status,
-      publishedAt: post.publishedAt?.toISOString() ?? null,
-      readingTime: post.readingTime,
-      pinned: post.pinned,
-      tags: currentTags,
-      settings,
-      counts: {
-        views: post.viewsCount,
-        likes: post.likesCount,
-        dislikes: post.dislikesCount,
-        comments: post.commentsCount,
-      },
-      adjacent: { prev, next },
-      related,
-    });
+    const result = await restoreRevision(actorOf(c), id, rid, { ...expected, restoreSlug });
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .patch("/:id", async (c) => {
-    const adminUser = c.get("adminUser");
+    const actor = actorOf(c);
     const id = c.req.param("id");
-    const post = await loadPostOr404(id);
-    if (!post) return c.json({ error: "Topilmadi" }, 404);
-
-    if (adminUser.role === "staff") {
-      if (post.createdBy !== adminUser.id) {
-        return c.json({ error: "Faqat o'z postlaringizni tahrirlashingiz mumkin" }, 403);
-      }
-      if (post.status !== "draft" && post.status !== "changes_requested") {
-        return c.json(
-          { error: "Post ko'rib chiqishda yoki chop etilgan — hozir tahrirlab bo'lmaydi" },
-          409,
-        );
-      }
-    }
-
     const body = await c.req.json().catch(() => null);
     const parsed = UpdatePostBodySchema.safeParse(body);
     if (!parsed.success) {
+      // Eski tartib: avval 404/403/409, keyin 400.
+      const access = await authorizeEdit(actor, id);
+      if (!access.ok) return errorResponse(c, access.error);
       // `issues` — debug uchun: qaysi maydon nega rad etilganini ko'rsatadi
       // (masalan avtosaqlash bo'sh `slug` yuborsa, `zod` xatosi shu yerda ko'rinadi).
       return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
     }
 
-    const data = parsed.data;
-
-    if (adminUser.role === "staff") {
-      const disallowedKeys = Object.keys(data).filter(
-        (key) => !(STAFF_EDITABLE_POST_FIELDS as readonly string[]).includes(key),
-      );
-      if (disallowedKeys.length > 0) {
-        return c.json(
-          { error: `Xodim quyidagi maydonlarni o'zgartira olmaydi: ${disallowedKeys.join(", ")}` },
-          403,
-        );
-      }
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- drizzle partial update payload, mixed column types
-    const update: Record<string, any> = {};
-
-    if (data.title !== undefined) update.title = data.title;
-
-    if (data.slug !== undefined) {
-      const result = await validateSlug(data.slug, id);
-      if (typeof result !== "string") {
-        return c.json(result, 400);
-      }
-      update.slug = result;
-    }
-
-    if (data.coverUrl !== undefined) update.coverUrl = data.coverUrl;
-    if (data.pinned !== undefined) update.pinned = data.pinned;
-    if (data.scheduledAt !== undefined) {
-      update.scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;
-      // Rejalashtirish olib tashlansa — kanal rejasi ham o'chadi.
-      if (!data.scheduledAt && data.channelPlan === undefined) {
-        update.channelPlan = null;
-        update.channelSendAt = null;
-      }
-    }
-    if (data.channelPlan !== undefined) {
-      if (data.channelPlan === null) {
-        update.channelPlan = null;
-        update.channelSendAt = null;
-      } else {
-        if (post.status !== "scheduled") {
-          return c.json({ error: "Kanal rejasi faqat rejalashtirilgan postga o'rnatiladi" }, 409);
-        }
-        const prepared = await preparePlanOrReject(c, id, data.channelPlan);
-        if ("response" in prepared) return prepared.response;
-        update.channelPlan = prepared.plan;
-      }
-    }
-
-    if (data.settings !== undefined) {
-      const mergedSettings = PostSettingsSchema.parse({
-        ...DEFAULT_POST_SETTINGS,
-        ...((post.settings as Record<string, unknown>) ?? {}),
-        ...data.settings,
-      });
-      update.settings = mergedSettings;
-    }
-
-    let renderedExcerpt: string | null = null;
-
-    if (data.contentJson !== undefined) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tiptap JSONContent, avoids extra dep in API layer
-      const rendered = await renderPost(data.contentJson as any);
-      update.contentJson = data.contentJson;
-      update.contentHtml = rendered.html;
-      update.contentText = rendered.text;
-      update.toc = rendered.toc;
-      update.readingTime = rendered.readingTime;
-      renderedExcerpt = rendered.excerpt;
-    }
-
-    if (data.excerpt !== undefined) {
-      if (data.excerpt === null) {
-        if (renderedExcerpt === null) {
-          const rendered = await renderPost(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (update.contentJson ?? post.contentJson) as any,
-          );
-          renderedExcerpt = rendered.excerpt;
-        }
-        update.excerpt = renderedExcerpt;
-      } else {
-        update.excerpt = data.excerpt;
-      }
-    }
-
-    let tagSlugsForRevalidate: string[] | null = null;
-
-    if (Object.keys(update).length > 0) {
-      update.updatedAt = new Date();
-      update.updatedBy = adminUser.id;
-      await db.update(posts).set(update).where(eq(posts.id, id));
-    }
-
-    if (data.tagSlugs !== undefined) {
-      const resolved = await resolveTagIds(data.tagSlugs);
-      await db.delete(postTags).where(eq(postTags.postId, id));
-      if (resolved.length > 0) {
-        await db
-          .insert(postTags)
-          .values(resolved.map((tag) => ({ postId: id, tagId: tag.id })))
-          .onConflictDoNothing();
-      }
-      tagSlugsForRevalidate = resolved.map((tag) => tag.slug);
-      if (Object.keys(update).length === 0) {
-        await db.update(posts).set({ updatedAt: new Date(), updatedBy: adminUser.id }).where(eq(posts.id, id));
-      }
-    }
-
-    const [fresh] = await db
-      .select({ updatedAt: posts.updatedAt, slug: posts.slug, status: posts.status })
-      .from(posts)
-      .where(eq(posts.id, id))
-      .limit(1);
-
-    if (fresh?.status === "published") {
-      events.emit("post.updated", { id, slug: fresh.slug });
-      const tagSlugs = tagSlugsForRevalidate ?? (await tagsForPostIds([id])).get(id)?.map((t) => t.slug) ?? [];
-      const paths = pathsForPost(fresh.slug, tagSlugs);
-      if (update.slug && update.slug !== post.slug) {
-        paths.push(`/${post.slug}`);
-      }
-      revalidateWeb(paths);
-    }
-
-    return c.json({ updatedAt: fresh?.updatedAt.toISOString() ?? new Date().toISOString() });
+    // `overwrite` — maydon emas, parametr: xodim cheklovi va jurnal "maydonlar" ro'yxatiga kirmaydi. Faqat `expectedUpdatedAt`siz
+    // (haqiqiy "almashtirish") va tezlik cheklovi bilan hisobga olinadi (qarang `OVERWRITE_SNAPSHOT_WINDOW_MS`).
+    const { overwrite, ...fields } = parsed.data;
+    const result = await updatePost(actor, id, fields, overwrite && !fields.expectedUpdatedAt ? { overwriteSnapshot: true } : {});
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .post("/:id/submit", async (c) => {
-    const adminUser = c.get("adminUser");
-    const id = c.req.param("id");
-    const result = await submitPostForReview(id, adminUser.id);
-
-    if (!result.ok) {
-      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
-      if (result.reason === "not_owner") {
-        return c.json({ error: "Faqat o'z postlaringizni ko'rib chiqishga yubora olasiz" }, 403);
-      }
-      return c.json({ error: "Post allaqachon ko'rib chiqilmoqda yoki chop etilgan" }, 409);
-    }
-
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await submitPostForReview(actorOf(c), c.req.param("id"), expected);
+    if (!result.ok) return errorResponse(c, result.error);
     return c.json({
-      id: result.post.id,
-      status: result.post.status,
-      submittedAt: result.post.submittedAt?.toISOString() ?? null,
+      id: result.data.id,
+      status: result.data.status,
+      submittedAt: result.data.submittedAt?.toISOString() ?? null,
+      updatedAt: result.data.updatedAt.toISOString(),
     });
   })
   .post("/:id/approve", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
-    const adminUser = c.get("adminUser");
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
     const id = c.req.param("id");
     const wants = await parsePublishBody(c, id);
     if ("response" in wants) return wants.response;
-    const result = await approvePost(id, adminUser.id);
-
-    if (!result.ok) {
-      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
-      return c.json({ error: "Post ko'rib chiqishda emas" }, 409);
-    }
+    const result = await approvePost(actor, id, { expectedUpdatedAt: wants.expectedUpdatedAt });
+    if (!result.ok) return errorResponse(c, result.error);
 
     const channelSend = wants.sendToChannel ? await queueChannelSend(id) : undefined;
-    return c.json({ ...toLifecycleSummary(result.post), ...(channelSend ? { channelSend } : {}) });
+    return c.json({ ...toLifecycleSummary(result.data), ...(channelSend ? { channelSend } : {}) });
   })
   .post("/:id/request-changes", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
-    const adminUser = c.get("adminUser");
-    const id = c.req.param("id");
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
     const body = await c.req.json().catch(() => null);
     const parsed = RequestChangesBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Izoh (note) majburiy" }, 400);
 
-    const result = await requestPostChanges(id, adminUser.id, parsed.data.note);
-    if (!result.ok) {
-      if (result.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
-      return c.json({ error: "Post ko'rib chiqishda emas" }, 409);
-    }
-
-    return c.json(toLifecycleSummary(result.post));
+    const result = await requestPostChanges(actor, c.req.param("id"), parsed.data.note, {
+      expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+    });
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .post("/:id/publish", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
     const wants = await parsePublishBody(c, id);
     if ("response" in wants) return wants.response;
 
-    const now = new Date();
-    await db
-      .update(posts)
-      .set({
-        status: "published",
-        publishedAt: post.publishedAt ?? now,
-        // Qo'lda chop etilsa — rejalashtirilgan kanal rejasi bekor (kanalga yuborish qo'lda).
-        ...(post.status === "scheduled" ? { channelPlan: null, channelSendAt: null } : {}),
-        updatedAt: now,
-      })
-      .where(eq(posts.id, id));
-
-    const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
-    if (!fresh) return c.json({ error: "Topilmadi" }, 404);
-
-    events.emit("post.published", { id: fresh.id, slug: fresh.slug });
-    const tagSlugs = (await tagsForPostIds([id])).get(id)?.map((t) => t.slug) ?? [];
-    revalidateWeb(pathsForPost(fresh.slug, tagSlugs));
+    const result = await publishPost(actor, id, { expectedUpdatedAt: wants.expectedUpdatedAt });
+    if (!result.ok) return errorResponse(c, result.error);
 
     // Belgilangan versiyani Telegraph ko'zgusidan KEYIN yuborish (ixtiyoriy; standart — qo'lda yuborish).
     const channelSend = wants.sendToChannel ? await queueChannelSend(id) : undefined;
-    return c.json({ ...toLifecycleSummary(fresh), ...(channelSend ? { channelSend } : {}) });
+    return c.json({ ...result.data, ...(channelSend ? { channelSend } : {}) });
   })
   .post("/:id/unpublish", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
-    const id = c.req.param("id");
-    const post = await loadPostOr404(id);
-    if (!post) return c.json({ error: "Topilmadi" }, 404);
-
-    const wasPublished = post.status === "published";
-    await db
-      .update(posts)
-      .set({ status: "draft", channelPlan: null, channelSendAt: null, updatedAt: new Date() })
-      .where(eq(posts.id, id));
-
-    const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
-    if (!fresh) return c.json({ error: "Topilmadi" }, 404);
-
-    if (wasPublished) {
-      events.emit("post.unpublished", { id: fresh.id, slug: fresh.slug });
-      const tagSlugs = (await tagsForPostIds([id])).get(id)?.map((t) => t.slug) ?? [];
-      revalidateWeb(pathsForPost(fresh.slug, tagSlugs));
-    }
-
-    return c.json(toLifecycleSummary(fresh));
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await unpublishPost(actor, c.req.param("id"), expected);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .post("/:id/archive", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
-    const id = c.req.param("id");
-    const post = await loadPostOr404(id);
-    if (!post) return c.json({ error: "Topilmadi" }, 404);
-
-    const wasPublished = post.status === "published";
-    await db
-      .update(posts)
-      .set({ status: "archived", channelPlan: null, channelSendAt: null, updatedAt: new Date() })
-      .where(eq(posts.id, id));
-
-    const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
-    if (!fresh) return c.json({ error: "Topilmadi" }, 404);
-
-    if (wasPublished) {
-      events.emit("post.unpublished", { id: fresh.id, slug: fresh.slug });
-      const tagSlugs = (await tagsForPostIds([id])).get(id)?.map((t) => t.slug) ?? [];
-      revalidateWeb(pathsForPost(fresh.slug, tagSlugs));
-    }
-
-    return c.json(toLifecycleSummary(fresh));
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await archivePost(actor, c.req.param("id"), expected);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .post("/:id/schedule", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
     const id = c.req.param("id");
     const post = await loadPostOr404(id);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -1185,55 +695,18 @@ export const adminPostsRoute = new Hono()
       );
     }
 
-    const scheduledAt = new Date(parsed.data.scheduledAt);
-    if (Number.isNaN(scheduledAt.getTime())) {
-      return c.json({ error: "Noto'g'ri sana" }, 400);
-    }
-
-    let storedPlan: ChannelPlan | null = null;
-    if (parsed.data.channelPlan) {
-      const prepared = await preparePlanOrReject(c, id, parsed.data.channelPlan);
-      if ("response" in prepared) return prepared.response;
-      storedPlan = prepared.plan;
-    }
-
-    const wasPublished = post.status === "published";
-    await db
-      .update(posts)
-      .set({
-        status: "scheduled",
-        scheduledAt,
-        channelPlan: storedPlan,
-        channelSendAt: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(posts.id, id));
-
-    const [fresh] = await db.select().from(posts).where(eq(posts.id, id)).limit(1);
-    if (!fresh) return c.json({ error: "Topilmadi" }, 404);
-
-    if (wasPublished) {
-      events.emit("post.unpublished", { id: fresh.id, slug: fresh.slug });
-      const tagSlugs = (await tagsForPostIds([id])).get(id)?.map((t) => t.slug) ?? [];
-      revalidateWeb(pathsForPost(fresh.slug, tagSlugs));
-    }
-
-    return c.json(toLifecycleSummary(fresh));
+    const result = await schedulePost(actor, id, parsed.data);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .delete("/:id", async (c) => {
-    const forbidden = forbidUnlessAdmin(c);
-    if (forbidden) return forbidden;
-    const id = c.req.param("id");
-    const post = await loadPostOr404(id);
-    if (!post) return c.json({ error: "Topilmadi" }, 404);
-
-    if (post.status !== "draft" && post.status !== "archived") {
-      return c.json(
-        { error: "Chop etilgan postni o'chirish uchun avval uni qoralamaga qaytaring yoki arxivlang" },
-        409,
-      );
-    }
-
-    await db.delete(posts).where(eq(posts.id, id));
+    // Eski nom saqlangan, lekin endi post chiqindi qutisiga ko'chadi (qaytarish mumkin).
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await trashPost(actor, c.req.param("id"), expected);
+    if (!result.ok) return errorResponse(c, result.error);
     return c.json({ ok: true });
   });

@@ -8,6 +8,7 @@ import { posts, postTags, postViewDedupe, postViewsDaily, tags, telegramRefs } f
 import { getDevice } from "../lib/device.js";
 import { escapeLike } from "../lib/like.js";
 import { checkRateLimit } from "../lib/rate-limit.js";
+import { publishedLive } from "../lib/posts/live.js";
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
@@ -127,7 +128,7 @@ export const postsRoute = new Hono()
     const { tag, q, page, limit } = parsed.data;
     const offset = (page - 1) * limit;
 
-    const conditions = [eq(posts.status, "published")];
+    const conditions = [publishedLive()];
 
     if (tag) {
       conditions.push(
@@ -188,7 +189,7 @@ export const postsRoute = new Hono()
         publishedAt: posts.publishedAt,
       })
       .from(posts)
-      .where(eq(posts.status, "published"))
+      .where(publishedLive())
       .orderBy(desc(posts.publishedAt))
       .limit(FEED_LIMIT);
 
@@ -211,7 +212,7 @@ export const postsRoute = new Hono()
     const [post] = await db
       .select({ id: posts.id, viewsCount: posts.viewsCount })
       .from(posts)
-      .where(and(eq(posts.slug, slug), eq(posts.status, "published")))
+      .where(and(eq(posts.slug, slug), publishedLive()))
       .limit(1);
 
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -274,7 +275,7 @@ export const postsRoute = new Hono()
         tgCommentsCount: posts.tgCommentsCount,
       })
       .from(posts)
-      .where(and(eq(posts.slug, slug), eq(posts.status, "published")))
+      .where(and(eq(posts.slug, slug), publishedLive()))
       .limit(1);
 
     if (!post) return c.json({ error: "Topilmadi" }, 404);
@@ -293,7 +294,7 @@ export const postsRoute = new Hono()
     const [post] = await db
       .select()
       .from(posts)
-      .where(and(eq(posts.slug, slug), eq(posts.status, "published")))
+      .where(and(eq(posts.slug, slug), publishedLive()))
       .limit(1);
 
     if (!post) {
@@ -314,7 +315,7 @@ export const postsRoute = new Hono()
       const [prevRow] = await db
         .select({ slug: posts.slug, title: posts.title })
         .from(posts)
-        .where(and(eq(posts.status, "published"), lt(posts.publishedAt, post.publishedAt)))
+        .where(and(publishedLive(), lt(posts.publishedAt, post.publishedAt)))
         .orderBy(desc(posts.publishedAt))
         .limit(1);
       prev = prevRow ?? null;
@@ -322,7 +323,7 @@ export const postsRoute = new Hono()
       const [nextRow] = await db
         .select({ slug: posts.slug, title: posts.title })
         .from(posts)
-        .where(and(eq(posts.status, "published"), gt(posts.publishedAt, post.publishedAt)))
+        .where(and(publishedLive(), gt(posts.publishedAt, post.publishedAt)))
         .orderBy(asc(posts.publishedAt))
         .limit(1);
       next = nextRow ?? null;
@@ -337,7 +338,7 @@ export const postsRoute = new Hono()
         .from(posts)
         .where(
           and(
-            eq(posts.status, "published"),
+            publishedLive(),
             ne(posts.id, post.id),
             inArray(
               posts.id,

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   bigint,
+  bigserial,
   boolean,
   date,
   index,
@@ -83,6 +84,16 @@ export const posts = pgTable(
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     /** Postni oxirgi marta o'zgartirgan foydalanuvchi. */
     updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+    /** Oxirgi o'zgartirish qaysi kanaldan kelgan: `web` | `mcp` | `telegram` | `scheduler` | `system` (eski qatorlarda `null`). */
+    updatedVia: text("updated_via"),
+    /**
+     * Chiqindi qutisi: `null` — post jonli; qiymat bor — post chiqindi qutisida (status O'ZGARMAYDI, shu sabab "qaytarish"
+     * avvalgi holatga qaytaradi). Chiqindiga tushganda slug bo'shatiladi (`original_slug`da saqlanadi). Hamma o'qish so'rovlari `deleted_at is null`ni tekshiradi.
+     */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: text("deleted_by").references(() => user.id, { onDelete: "set null" }),
+    /** Chiqindiga tushganda asl slug shu yerga ko'chadi (`slug` esa `_trash_<id>`ga o'zgaradi va boshqa postga bo'shaydi). */
+    originalSlug: text("original_slug"),
     /** Admin "Qaytarish" (`changes_requested`) bosganda qoldirgan izohi — xodimga ko'rinadi. */
     reviewNote: text("review_note"),
     /** Xodim "Ko'rib chiqishga yuborish" bosgan payt (`in_review`ga o'tganda). */
@@ -315,3 +326,68 @@ export const siteSettings = pgTable("site_settings", {
   key: text("key").primaryKey(),
   value: jsonb("value").notNull(),
 });
+
+/**
+ * Admin amallari jurnali — kim, qaysi kanaldan (`via`), nima qildi. `meta` — kichik jsonb
+ * (o'zgargan maydon nomlari, holat from -> to); HECH QACHON to'liq kontent yoki sirlar emas.
+ * `entity_id` ataylab FK emas: post butunlay o'chirilsa ham jurnal saqlanadi.
+ */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Foydalanuvchi o'chirilsa `null` (jurnal qoladi); scheduler/tizim amallarida ham `null`. */
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** `admin` | `staff` | `system`. */
+    actorRole: text("actor_role").notNull(),
+    /** `web` | `mcp` | `telegram` | `scheduler` | `system`. */
+    via: text("via").notNull(),
+    /** Masalan `post.publish`, `comment.delete`, `tag.create`. */
+    action: text("action").notNull(),
+    /** `post` | `comment` | `tag` | `media` | `settings` | `ban` | `site`. */
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id"),
+    summary: text("summary").notNull(),
+    meta: jsonb("meta").notNull().default({}),
+  },
+  (table) => [
+    index("audit_log_created_at_idx").on(table.createdAt),
+    index("audit_log_entity_idx").on(table.entityType, table.entityId),
+    index("audit_log_actor_idx").on(table.actorUserId),
+    index("audit_log_action_idx").on(table.action),
+  ],
+);
+
+/**
+ * Post tarixi (revision) — o'zgartirishdan OLDINGI holat suratlari. Avtosaqlash har ~1.5 soniyada yozadi,
+ * shu sabab oddiy tahrirlar faqat oraliq (`POST_REVISION_INTERVAL_MINUTES`) o'tganda yoki aktyor/kanal
+ * almashganda suratga olinadi (`lib/posts/revisions.ts`). `seq` — tartib uchun (created_at bir tranzaksiyada teng bo'lishi mumkin).
+ */
+export const postRevisions = pgTable(
+  "post_revisions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    seq: bigserial("seq", { mode: "number" }).notNull(),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    slug: text("slug").notNull(),
+    excerpt: text("excerpt"),
+    contentJson: jsonb("content_json").notNull(),
+    coverUrl: text("cover_url"),
+    /** Surat paytidagi teg slug'lari (tartiblangan). */
+    tagSlugs: jsonb("tag_slugs").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    settings: jsonb("settings").notNull().default({}),
+    /** Surat paytidagi post holati. */
+    status: postStatusEnum("status").notNull(),
+    /** Suratga sabab bo'lgan yozuvni bajargan foydalanuvchi (scheduler/tizim uchun `null`). */
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    via: text("via").notNull(),
+    /** `update` | `publish` | `unpublish` | `archive` | `schedule` | `trash` | `restore-revision`. */
+    reason: text("reason").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("post_revisions_post_seq_idx").on(table.postId, table.seq)],
+);
