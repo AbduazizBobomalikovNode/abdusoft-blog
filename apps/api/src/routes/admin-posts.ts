@@ -594,7 +594,9 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
     }
 
-    const result = await updatePost(actor, id, parsed.data);
+    // `snapshot` — maydon emas, parametr: xodim cheklovi va jurnal "maydonlar" ro'yxatiga kirmaydi.
+    const { snapshot, ...fields } = parsed.data;
+    const result = await updatePost(actor, id, fields, snapshot ? { forceSnapshot: true } : {});
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })
@@ -607,6 +609,7 @@ export const adminPostsRoute = new Hono()
       id: result.data.id,
       status: result.data.status,
       submittedAt: result.data.submittedAt?.toISOString() ?? null,
+      updatedAt: result.data.updatedAt.toISOString(),
     });
   })
   .post("/:id/approve", async (c) => {

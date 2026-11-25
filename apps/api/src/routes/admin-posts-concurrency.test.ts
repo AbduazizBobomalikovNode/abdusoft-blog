@@ -257,3 +257,42 @@ describe("state transitions accept expectedUpdatedAt", () => {
     expect((await del(`/admin/posts/${id}?expectedUpdatedAt=kecha`, admin.cookie)).status).toBe(400);
   });
 });
+
+describe("fields the admin UI relies on for the conflict token and the 'changed by' line", () => {
+  it("submit returns the new updatedAt, usable as the next expectedUpdatedAt", async () => {
+    const { id } = await createDraft(staff.cookie);
+    const submitted = await json<{ status: string; updatedAt?: string }>(await post(`/admin/posts/${id}/submit`, staff.cookie));
+    expect(submitted.status).toBe("in_review");
+    expect(submitted.updatedAt).toBe(await currentUpdatedAt(id, staff.cookie));
+    const approved = await post(`/admin/posts/${id}/approve`, admin.cookie, { expectedUpdatedAt: submitted.updatedAt });
+    expect(approved.status).toBe(200);
+  });
+
+  it("the post detail exposes updatedVia (null for rows that never recorded it)", async () => {
+    const { id } = await createDraft();
+    await patch(`/admin/posts/${id}`, admin.cookie, { title: "Veb orqali" });
+    expect((await json<{ updatedVia: string | null }>(await get(`/admin/posts/${id}`, admin.cookie))).updatedVia).toBe("web");
+    await db.update(schema.posts).set({ updatedVia: null }).where(eq(schema.posts.id, id));
+    expect((await json<{ updatedVia: string | null }>(await get(`/admin/posts/${id}`, admin.cookie))).updatedVia).toBeNull();
+  });
+});
+
+describe("PATCH snapshot flag (used by the editor's 'overwrite with mine')", () => {
+  it("forces a revision of the current state even for the same actor inside the snapshot window; it is not an editable field", async () => {
+    const { id } = await createDraft();
+    const count = async () => (await db.select().from(schema.postRevisions).where(eq(schema.postRevisions.postId, id))).length;
+    expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "Bir" })).status).toBe(200);
+    const afterFirst = await count();
+    expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "Ikki" })).status).toBe(200);
+    expect(await count()).toBe(afterFirst); // oddiy tahrir — bir oynada birlashadi
+
+    expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "Uch", snapshot: true })).status).toBe(200);
+    expect(await count()).toBe(afterFirst + 1);
+    const latest = (await db.select().from(schema.postRevisions).where(eq(schema.postRevisions.postId, id)).orderBy(schema.postRevisions.seq)).at(-1)!;
+    expect(latest.title).toBe("Ikki");
+
+    // Xodim ham yubora oladi: bu "maydon" emas (403 bermaydi).
+    const mine = await createDraft(staff.cookie);
+    expect((await patch(`/admin/posts/${mine.id}`, staff.cookie, { title: "Xodim", snapshot: true })).status).toBe(200);
+  });
+});
