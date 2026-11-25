@@ -1,6 +1,5 @@
-import type { AdminPostDetail, PostConflictResponse, UpdatePostBody } from "@blog/shared";
+import type { PostConflictResponse } from "@blog/shared";
 import { asPostConflict } from "@/lib/admin-client";
-import { stableStringify } from "./revision-diff";
 
 /**
  * Tahrirlagichning o'zi yuboradigan BARCHA postga yozuvchi so'rovlari (avtosaqlash, holat o'tishlari, versiyaga qaytarish)
@@ -123,48 +122,4 @@ export class PostSync {
       throw error;
     }
   }
-}
-
-/**
- * Avtosaqlash `409` olganda: server allaqachon AYNAN shu qiymatlarni saqlab qo'ygan bo'lishi mumkin (javob yo'qolgan
- * tarmoq xatosidan keyingi qayta urinish, yoki ikkinchi tab xuddi shu matnni yozgan). Shunda to'qnashuv yo'q — token
- * yangilanadi, banner chiqmaydi.
- */
-export function payloadAlreadyApplied(payload: UpdatePostBody, server: AdminPostDetail): boolean {
-  const keys = Object.keys(payload).filter((key) => key !== "expectedUpdatedAt");
-  if (keys.length === 0) return false;
-  for (const key of keys) {
-    switch (key) {
-      case "title":
-        if (payload.title !== server.title) return false;
-        break;
-      case "slug":
-        if (payload.slug !== server.slug) return false;
-        break;
-      case "excerpt":
-        // `null` = "avtomatik tavsif" — serverda hisoblanadi, solishtirib bo'lmaydi.
-        if (payload.excerpt === null || payload.excerpt !== (server.excerpt ?? "")) return false;
-        break;
-      case "coverUrl":
-        if ((payload.coverUrl ?? null) !== (server.coverUrl ?? null)) return false;
-        break;
-      case "tagSlugs":
-        if ([...(payload.tagSlugs ?? [])].sort().join("|") !== server.tags.map((t) => t.slug).sort().join("|")) return false;
-        break;
-      case "pinned":
-        if (payload.pinned !== server.pinned) return false;
-        break;
-      case "contentJson":
-        if (stableStringify(payload.contentJson) !== stableStringify(server.contentJson)) return false;
-        break;
-      case "settings":
-        for (const [k, v] of Object.entries(payload.settings ?? {})) {
-          if (stableStringify(v) !== stableStringify((server.settings as Record<string, unknown>)[k])) return false;
-        }
-        break;
-      default:
-        return false;
-    }
-  }
-  return true;
 }

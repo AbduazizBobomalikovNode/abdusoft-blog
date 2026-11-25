@@ -170,6 +170,8 @@ function PostEditorInner({
       ...(isStaff ? {} : { settings: post.settings, pinned: post.pinned }),
       ...(!isStaff && post.status === "scheduled" ? { channelPlan: post.channelPlan } : {}),
     },
+    initialManaged: { status: post.status, scheduledAt: post.scheduledAt, publishedAt: post.publishedAt },
+    onStale: () => void handleLoadLatest({ quiet: true }),
     enabled: !readOnly,
     sync,
     meId: me.id,

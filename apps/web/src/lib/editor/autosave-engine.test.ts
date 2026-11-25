@@ -77,6 +77,9 @@ function fakeServer() {
         settings: f.settings,
         pinned: f.pinned,
         channelPlan: null,
+        status: f.status ?? "draft",
+        scheduledAt: f.scheduledAt ?? null,
+        publishedAt: f.publishedAt ?? null,
       } as unknown as AdminPostDetail;
     },
   };
@@ -90,7 +93,7 @@ function fakeServer() {
   return { state, api, externalEdit };
 }
 
-function setup(over: { meId?: string; online?: () => boolean } = {}) {
+function setup(over: { meId?: string; online?: () => boolean; managed?: boolean } = {}) {
   const server = fakeServer();
   const storage = memory();
   const sync = new PostSync(server.state.updatedAt);
@@ -102,6 +105,7 @@ function setup(over: { meId?: string; online?: () => boolean } = {}) {
     storage,
     initialUpdatedAt: server.state.updatedAt,
     initialLocal: INITIAL,
+    initialManaged: over.managed === false ? undefined : { status: "draft", scheduledAt: null, publishedAt: null },
     meId: over.meId ?? "u1",
     now: () => 1_000_000,
     isOnline: over.online,
@@ -446,5 +450,128 @@ describe("React Strict Mode (effects mount, unmount, mount again)", () => {
     await engine.runTransition((token) => server.api.updatePost("p1", { title: "x", expectedUpdatedAt: token })).catch(() => undefined);
     expect(engine.conflict).not.toBeNull();
     expect(engine.state).toBe("conflict");
+  });
+});
+
+
+describe("round 4, item 1: a lost response followed by more typing is still the user's own save", () => {
+  it("adopts the fresh token silently and sends only what was typed afterwards", async () => {
+    const t = setup({ meId: "u1" });
+    t.engine.queueSave({ title: "Yo'qolgan javobli saqlash" });
+    // Server so'rovni oldi (o'zimiz, veb), lekin javob yo'qoldi:
+    t.externalEdit({ title: "Yo'qolgan javobli saqlash" }, { id: "u1", name: "Men" }, "web");
+    const freshToken = t.state.updatedAt;
+    // Qayta urinishdan oldin foydalanuvchi yozishda davom etdi:
+    let gate!: () => void;
+    t.state.gate = new Promise<void>((r) => (gate = r));
+    const flushing = t.engine.flush();
+    await Promise.resolve();
+    t.engine.queueSave({ contentJson: doc("Keyin yozilgan matn") });
+    t.state.gate = null;
+    gate();
+    const outcome = await flushing;
+    expect(outcome.kind).toBe("saved");
+    expect(t.engine.conflict).toBeNull();
+    // Yangi harflar yangi token bilan yuborildi va serverda:
+    expect(JSON.stringify(t.state.fields.contentJson)).toContain("Keyin yozilgan matn");
+    expect(t.engine.dirty).toBe(false);
+    const updates = t.calls.filter((c) => c.kind === "update");
+    expect(updates.at(-1)!.body).toMatchObject({ contentJson: doc("Keyin yozilgan matn"), expectedUpdatedAt: freshToken });
+    expect(updates.at(-1)!.body).not.toHaveProperty("title");
+  });
+
+  it("still shows the banner in the two-tab case (server differs from BOTH the editor state and the in-flight payload)", async () => {
+    const t = setup({ meId: "u1" });
+    t.externalEdit({ contentJson: doc("TAB B") }, { id: "u1", name: "Men" }, "web");
+    t.engine.queueSave({ title: "A sarlavhasi" });
+    let gate!: () => void;
+    t.state.gate = new Promise<void>((r) => (gate = r));
+    const flushing = t.engine.flush();
+    await Promise.resolve();
+    t.engine.queueSave({ excerpt: "A yozishda davom etdi" });
+    t.state.gate = null;
+    gate();
+    expect((await flushing).kind).toBe("conflict");
+    expect(t.engine.conflict).not.toBeNull();
+    expect(JSON.stringify(t.state.fields.contentJson)).toContain("TAB B");
+  });
+});
+
+describe("round 4, item 2: no stale transition buttons after a silent refresh", () => {
+  it("same user published the post elsewhere: the engine asks for a rebuild (stale) and keeps the pending text", async () => {
+    const t = setup({ meId: "u1" });
+    t.engine.queueSave({ title: "Yangi sarlavha" });
+    t.externalEdit({ title: "Yangi sarlavha", status: "published", publishedAt: "2026-10-02T10:00:00.000Z" }, { id: "u1", name: "Men" }, "web");
+    let gate!: () => void;
+    t.state.gate = new Promise<void>((r) => (gate = r));
+    const flushing = t.engine.flush();
+    await Promise.resolve();
+    t.engine.queueSave({ excerpt: "Keyingi tavsif" });
+    t.state.gate = null;
+    gate();
+    const outcome = await flushing;
+    expect(outcome.kind).toBe("stale");
+    expect(t.engine.conflict).toBeNull();
+    // Kutayotgan yangi yozuv yo'qolmaydi: loadLatest uni taklif sifatida qaytaradi.
+    const { offer, fresh } = await t.engine.loadLatest();
+    expect(fresh.status).toBe("published");
+    expect(offer?.extra).toMatchObject({ excerpt: "Keyingi tavsif" });
+  });
+
+  it("the engine's own transitions update the known status, so they never look stale", async () => {
+    const t = setup({ meId: "u1" });
+    await t.engine.runTransition(async () => {
+      t.externalEdit({ status: "published", publishedAt: "2026-10-02T10:00:00.000Z" }, { id: "u1", name: "Men" }, "web");
+      return { updatedAt: t.state.updatedAt, status: "published", scheduledAt: null, publishedAt: "2026-10-02T10:00:00.000Z" } as { updatedAt: string };
+    });
+    t.engine.queueSave({ title: "Chop etilgandan keyin" });
+    expect((await t.engine.flush()).kind).toBe("saved");
+  });
+});
+
+describe("round 4, item 3: the reason a pending save blocks a transition", () => {
+  it("passes the server's own message for a validation error, and the connection text for offline", async () => {
+    const a = setup();
+    a.engine.queueSave({ title: "x" });
+    a.failNext.push(new AdminApiError(400, "Noto'g'ri so'rov (excerpt: juda uzun)"));
+    const e1 = (await a.engine.runTransition(async () => ({})).catch((e: unknown) => e)) as PendingNotSavedError;
+    expect(e1).toBeInstanceOf(PendingNotSavedError);
+    expect(e1.message).toContain("excerpt: juda uzun");
+    expect(e1.message).not.toContain("aloqa");
+
+    const b = setup();
+    b.engine.queueSave({ title: "x" });
+    b.failNext.push(new AdminApiError(0, "Serverga ulanib bo'lmadi"));
+    const e2 = (await b.engine.runTransition(async () => ({})).catch((e: unknown) => e)) as PendingNotSavedError;
+    expect(e2.message).toContain("aloqa");
+  });
+});
+
+describe("round 4, item 4: no backup gap after an overwrite", () => {
+  it("text typed during the overwrite request is written to the backup instead of clearing it", async () => {
+    const t = setup();
+    t.externalEdit({ title: "Boshqa" });
+    t.engine.queueSave({ title: "Mening" });
+    await t.engine.flush();
+    let gate!: () => void;
+    t.state.gate = new Promise<void>((r) => (gate = r));
+    const overwriting = t.engine.overwrite();
+    await Promise.resolve();
+    t.engine.queueSave({ contentJson: doc("Overwrite paytida yozildi") });
+    t.state.gate = null;
+    gate();
+    expect(await overwriting).toBe(true);
+    const backup = loadBackup(t.storage, "p1");
+    expect(JSON.stringify(backup?.contentJson)).toContain("Overwrite paytida yozildi");
+    expect(backup?.dirty).toEqual(["contentJson"]);
+  });
+
+  it("with nothing typed meanwhile the backup is cleared", async () => {
+    const t = setup();
+    t.externalEdit({ title: "Boshqa" });
+    t.engine.queueSave({ title: "Mening" });
+    await t.engine.flush();
+    expect(await t.engine.overwrite()).toBe(true);
+    expect(t.storage.data.size).toBe(0);
   });
 });

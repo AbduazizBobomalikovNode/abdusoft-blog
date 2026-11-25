@@ -4,7 +4,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { UpdatePostBody } from "@blog/shared";
 import { adminApi } from "@/lib/admin-client";
-import { AutosaveEngine, type FlushOutcome, type LocalFields } from "@/lib/editor/autosave-engine";
+import { AutosaveEngine, type FlushOutcome, type LocalFields, type ManagedState } from "@/lib/editor/autosave-engine";
 import { browserStorage } from "@/lib/editor/draft-backup";
 import type { PostSync } from "@/lib/editor/post-sync";
 
@@ -22,23 +22,30 @@ export function useAutosave({
   postId,
   initialUpdatedAt,
   initialLocal,
+  initialManaged,
   enabled,
   sync,
   meId,
   onSlugConflict,
+  onStale,
 }: {
   postId: string;
   initialUpdatedAt: string;
   /** Muharrir ushlab turgan to'liq boshlang'ich holat (rolga mos maydonlar). */
   initialLocal: LocalFields;
+  initialManaged?: ManagedState;
   enabled: boolean;
   sync: PostSync;
   meId?: string;
   onSlugConflict?: (message: string) => void;
+  /** Jimgina tenglashtirishda server holati boshqa joyda o'zgargani aniqlansa: muharrirni serverdan qayta qurish. */
+  onStale?: () => void;
 }) {
   const onSlugConflictRef = useRef(onSlugConflict);
+  const onStaleRef = useRef(onStale);
   useEffect(() => {
     onSlugConflictRef.current = onSlugConflict;
+    onStaleRef.current = onStale;
   });
   const [engine] = useState(
     () =>
@@ -49,6 +56,7 @@ export function useAutosave({
         storage: browserStorage(),
         initialUpdatedAt,
         initialLocal,
+        initialManaged,
         meId,
         enabled,
         onSlugConflict: (message) => onSlugConflictRef.current?.(message),
@@ -93,6 +101,7 @@ export function useAutosave({
       toast.error(outcome.message);
       if (outcome.retry) scheduleRetry();
     }
+    else if (outcome.kind === "stale") onStaleRef.current?.();
     // `conflict`: banner ko'rsatiladi, qayta urinish YO'Q.
   }, [engine, scheduleRetry]);
   useEffect(() => {
