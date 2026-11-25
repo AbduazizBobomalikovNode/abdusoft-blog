@@ -2,7 +2,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { ScrollText } from "lucide-react";
-import { AuditFilters, AuditViaTabs, auditHref, type AuditQueryState } from "@/components/admin/audit-filters";
+import { AuditFilters, AuditViaTabs } from "@/components/admin/audit-filters";
 import { EmptyState } from "@/components/admin/empty-state";
 import { ViaBadge } from "@/components/admin/via-badge";
 import { PaginationNav } from "@/components/pagination-nav";
@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { requireAdminPage } from "@/lib/admin-guard";
 import { actorName, auditActionLabel, isAutomatedVia, VIA_VALUES } from "@/lib/admin-labels";
 import { getAdminAudit, getAdminPost, getAdminPosts } from "@/lib/api";
-import { auditFieldsText, auditTarget } from "@/lib/audit-view";
+import { auditFieldsText, auditHref, auditTarget, type AuditQueryState } from "@/lib/audit-view";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -169,7 +169,7 @@ export default async function AdminAuditPage({
                   const fields = auditFieldsText(item.meta);
                   return (
                     <TableRow key={item.id} data-testid="audit-row" data-via={item.via} className={cn(automated && "bg-violet-500/[0.04]")}>
-                      <TableCell className={cn("text-xs whitespace-nowrap text-muted-foreground", automated && "border-l-4 border-l-violet-500/60")}>
+                      <TableCell className={cn("text-xs whitespace-nowrap text-muted-foreground", automated && "shadow-[inset_4px_0_0_0] shadow-violet-500/60")}>
                         <time dateTime={item.createdAt}>{formatDateTime(item.createdAt)}</time>
                       </TableCell>
                       <TableCell className="text-sm whitespace-nowrap">{actorName(item.actor, item.via)}</TableCell>
@@ -190,11 +190,13 @@ export default async function AdminAuditPage({
                           </span>
                         )}
                       </TableCell>
-                      <TableCell className="max-w-80 text-xs text-muted-foreground">
-                        <span className="line-clamp-2 break-words" title={item.summary}>
-                          {item.summary}
-                        </span>
-                        {fields ? <span className="mt-0.5 block font-mono text-[0.65rem]">{fields}</span> : null}
+                      <TableCell className="text-xs whitespace-normal text-muted-foreground">
+                        <div className="w-72 max-w-72">
+                          <span className="line-clamp-2 break-words" title={item.summary}>
+                            {item.summary}
+                          </span>
+                          {fields ? <span className="mt-0.5 block truncate font-mono text-[0.65rem]">{fields}</span> : null}
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
