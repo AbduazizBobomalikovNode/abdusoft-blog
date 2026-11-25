@@ -127,6 +127,28 @@ const EnvSchema = z.object({
   MCP_UNUSED_CLIENT_TTL_HOURS: intEnv(24, 1),
   // Bitta vosita javobining maksimal uzunligi (belgi). Claude ~150 000 belgigacha qabul qiladi.
   MCP_RESULT_MAX_CHARS: intEnv(100_000, 2_000),
+  // --- Claude konnektori: YOZUV vositalari (default o'chiq). `MCP_ENABLED`dan tashqari, yozuv ruxsatlari va vositalari faqat shu yoqilganda mavjud. ---
+  MCP_WRITE_TOOLS_ENABLED: z
+    .string()
+    .optional()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  // Chiqindi qutisidagi postni BUTUNLAY o'chirish vositasi uchun alohida kalit (qaytarib bo'lmaydi). `MCP_WRITE_TOOLS_ENABLED` ham yoqilgan bo'lishi shart.
+  MCP_PURGE_ENABLED: z
+    .string()
+    .optional()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  // Rasm yuklash vositasi: dekodlangan rasmning eng katta hajmi (bayt). Base64 tufayli so'rov ~4/3 marta kattaroq bo'ladi.
+  MCP_MEDIA_MAX_BYTES: intEnv(3 * 1024 * 1024, 1024),
+  // Har bir ulanish (klient) uchun yozuv chegaralari. 0 — chegarasiz. Hisob jurnaldan olinadi (qayta ishga tushganda yo'qolmaydi).
+  MCP_WRITE_LIMIT_CREATES_PER_HOUR: intEnv(20, 0),
+  MCP_WRITE_LIMIT_EDITS_PER_HOUR: intEnv(200, 0),
+  MCP_WRITE_LIMIT_UPLOADS_PER_HOUR: intEnv(30, 0),
+  MCP_WRITE_LIMIT_PUBLISHES_PER_DAY: intEnv(10, 0),
+  MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY: intEnv(10, 0),
+  MCP_WRITE_LIMIT_MODERATION_PER_HOUR: intEnv(100, 0),
+  MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY: intEnv(30, 0),
   NODE_ENV: z
     .union([z.literal("development"), z.literal("production"), z.literal("test")])
     .default("development"),
