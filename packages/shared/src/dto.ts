@@ -450,9 +450,35 @@ export const ResolvedChannelChoiceSchema = z.object({
 export type ResolvedChannelChoice = z.infer<typeof ResolvedChannelChoiceSchema>;
 
 /** `POST /admin/posts/:id/publish` va `/approve` ixtiyoriy tanasi. */
+/**
+ * Ixtiyoriy "optimistic concurrency" token: mijoz oxirgi olgan `updatedAt` qiymatini (ISO satr, aynan serverdan
+ * kelgan) qaytarib yuboradi. Server bazadagi qiymat bilan MILLISEKUND aniqligida solishtiradi; farq qilsa `409`.
+ */
+export const ExpectedUpdatedAtSchema = z
+  .string()
+  .refine((value) => !Number.isNaN(Date.parse(value)), { message: "Noto'g'ri sana" });
+
+/** Faqat `expectedUpdatedAt` qabul qiladigan holat o'tishlari (unpublish, archive, submit, trash, restore, ...) tanasi. */
+export const ExpectedUpdatedAtBodySchema = z.object({
+  expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
+});
+export type ExpectedUpdatedAtBody = z.infer<typeof ExpectedUpdatedAtBodySchema>;
+
+/** `409` javobi: post boshqa joyda o'zgargan — joriy `updatedAt`, kim va qaysi kanaldan oxirgi marta o'zgartirgani. */
+export const PostConflictResponseSchema = z.object({
+  error: z.string(),
+  /** Bazadagi joriy `updatedAt` (ISO). */
+  updatedAt: z.string(),
+  updatedBy: PostAuthorRefSchema.nullable(),
+  /** `web` | `mcp` | `telegram` | `scheduler` | `system`; eski qatorlarda `null`. */
+  via: z.string().nullable(),
+});
+export type PostConflictResponse = z.infer<typeof PostConflictResponseSchema>;
+
 export const PublishPostBodySchema = z.object({
   /** `true` — chop etilgach belgilangan versiyani kanalga ham yuborish (Telegraph'dan keyin). */
   sendToChannel: z.boolean().optional(),
+  expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
 });
 export type PublishPostBody = z.infer<typeof PublishPostBodySchema>;
 
@@ -569,6 +595,8 @@ export const UpdatePostBodySchema = z.object({
   scheduledAt: z.string().nullable().optional(),
   /** Faqat admin; rejalashtirilgan postda kanal rejasini o'rnatadi/`null` bilan o'chiradi. */
   channelPlan: ChannelPlanSchema.nullable().optional(),
+  /** Ixtiyoriy: oxirgi olingan `updatedAt`; bazadagidan farq qilsa `409` va hech narsa o'zgarmaydi. */
+  expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
 });
 export type UpdatePostBody = z.infer<typeof UpdatePostBodySchema>;
 
@@ -584,6 +612,7 @@ export type SubmitPostResponse = z.infer<typeof SubmitPostResponseSchema>;
 
 export const RequestChangesBodySchema = z.object({
   note: z.string().trim().min(1).max(2000),
+  expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
 });
 export type RequestChangesBody = z.infer<typeof RequestChangesBodySchema>;
 
@@ -608,6 +637,7 @@ export const SchedulePostBodySchema = z.object({
   scheduledAt: z.string(),
   /** `null`/yo'q — kanalga yuborilmaydi. */
   channelPlan: ChannelPlanSchema.nullable().optional(),
+  expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
 });
 export type SchedulePostBody = z.infer<typeof SchedulePostBodySchema>;
 

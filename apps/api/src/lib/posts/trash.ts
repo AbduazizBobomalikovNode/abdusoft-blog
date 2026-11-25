@@ -9,8 +9,10 @@ import { snapshotPost } from "./revisions.js";
 import {
   authorNamesForIds,
   postLabel,
+  checkExpectedUpdatedAt,
   requireAdminActor,
   toAuthorRef,
+  type ConcurrencyOptions,
   toLifecycleSummary,
   type LifecycleSummary,
 } from "./shared.js";
@@ -20,7 +22,7 @@ import { fail, ok, type Actor, type ServiceResult } from "./types.js";
  * `DELETE /admin/posts/:id` — endi chiqindi qutisiga ko'chiradi (hech narsa cascade bo'lmaydi). Shartlar eskicha:
  * faqat admin, faqat `draft`/`archived`. Slug chiqindi qutisida ham band qoladi.
  */
-export async function trashPost(actor: Actor, id: string): Promise<ServiceResult<null>> {
+export async function trashPost(actor: Actor, id: string, opts: ConcurrencyOptions = {}): Promise<ServiceResult<null>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
 
@@ -35,6 +37,8 @@ export async function trashPost(actor: Actor, id: string): Promise<ServiceResult
     if (post.status !== "draft" && post.status !== "archived") {
       return fail("conflict", "Chop etilgan postni o'chirish uchun avval uni qoralamaga qaytaring yoki arxivlang");
     }
+    const conflict = await checkExpectedUpdatedAt(tx, post, opts.expectedUpdatedAt);
+    if (conflict) return conflict;
 
     await snapshotPost(tx, post, actor, "trash");
     const now = new Date();
@@ -89,7 +93,11 @@ export async function listTrash(actor: Actor, input: TrashListQuery) {
 }
 
 /** `POST /admin/posts/trash/:id/restore` — postni chiqindi qutisidan avvalgi holatida (status o'zgarmagan) qaytaradi. */
-export async function restoreFromTrash(actor: Actor, id: string): Promise<ServiceResult<LifecycleSummary>> {
+export async function restoreFromTrash(
+  actor: Actor,
+  id: string,
+  opts: ConcurrencyOptions = {},
+): Promise<ServiceResult<LifecycleSummary>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
 
@@ -101,6 +109,8 @@ export async function restoreFromTrash(actor: Actor, id: string): Promise<Servic
       .for("update")
       .limit(1);
     if (!post) return fail("not_found", "Topilmadi");
+    const conflict = await checkExpectedUpdatedAt(tx, post, opts.expectedUpdatedAt);
+    if (conflict) return conflict;
 
     const now = new Date();
     const [after] = await tx
@@ -125,7 +135,7 @@ export async function restoreFromTrash(actor: Actor, id: string): Promise<Servic
  * `DELETE /admin/posts/trash/:id` — FAQAT chiqindi qutisidagi postni butunlay o'chiradi (eski qattiq o'chirish:
  * teglar, izohlar, Telegram havolalari, kanal versiyalari va revision'lar cascade bo'ladi). Jurnal yozuvi qoladi.
  */
-export async function purgePost(actor: Actor, id: string): Promise<ServiceResult<null>> {
+export async function purgePost(actor: Actor, id: string, opts: ConcurrencyOptions = {}): Promise<ServiceResult<null>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
 
@@ -137,6 +147,8 @@ export async function purgePost(actor: Actor, id: string): Promise<ServiceResult
       .for("update")
       .limit(1);
     if (!post) return fail("not_found", "Topilmadi");
+    const conflict = await checkExpectedUpdatedAt(tx, post, opts.expectedUpdatedAt);
+    if (conflict) return conflict;
 
     await tx.delete(posts).where(eq(posts.id, id));
     await recordAudit(tx, actor, {

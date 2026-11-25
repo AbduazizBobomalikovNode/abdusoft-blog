@@ -2,7 +2,7 @@ import { desc, eq, and } from "drizzle-orm";
 import { PostSettingsSchema, type PostRevision, type PostRevisionListItem } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { postRevisions } from "../../db/schema.js";
-import { authorNamesForIds, checkCanEdit, checkCanView, loadPost, toAuthorRef } from "./shared.js";
+import { authorNamesForIds, checkCanEdit, checkCanView, loadPost, toAuthorRef, type ConcurrencyOptions } from "./shared.js";
 import { updatePost } from "./write.js";
 import { fail, ok, type Actor, type ServiceResult } from "./types.js";
 
@@ -76,6 +76,7 @@ export async function restoreRevision(
   actor: Actor,
   postId: string,
   revisionId: string,
+  opts: ConcurrencyOptions = {},
 ): Promise<ServiceResult<{ updatedAt: string }>> {
   const post = await loadPost(db, postId);
   if (!post) return fail("not_found", "Topilmadi");
@@ -89,6 +90,7 @@ export async function restoreRevision(
     actor,
     postId,
     {
+      expectedUpdatedAt: opts.expectedUpdatedAt,
       title: row.title,
       slug: row.slug,
       excerpt: row.excerpt,
