@@ -100,7 +100,6 @@ export class AutosaveEngine {
   private flushing = false;
   private reconciling = false;
   private listeners = new Set<() => void>();
-  private unsubscribeSync: () => void;
   private readonly enabled: boolean;
   private readonly now: () => number;
   private readonly isOnline: () => boolean;
@@ -112,10 +111,17 @@ export class AutosaveEngine {
     this.enabled = opts.enabled ?? true;
     this.now = opts.now ?? (() => Date.now());
     this.isOnline = opts.isOnline ?? (() => typeof navigator === "undefined" || navigator.onLine !== false);
-    // Boshqa so'rov (chop etish, arxiv, ...) `409` olsa ham yozuv to'xtaydi va matn zaxiraga yoziladi.
-    this.unsubscribeSync = opts.sync.subscribe(() => {
+  }
+
+  /**
+   * `PostSync`ga ulanadi: boshqa so'rov (chop etish, arxiv, ...) `409` olsa ham yozuv to'xtaydi va matn zaxiraga yoziladi.
+   * Qaytgan funksiya uzadi. (React Strict Mode'da effekt ikki marta ishlaydi — shuning uchun ulash/uzish juft va qayta ishlatiladigan.)
+   */
+  attach(): () => void {
+    const { sync } = this.opts;
+    return sync.subscribe(() => {
       if (this.reconciling || this.flushing) return;
-      const current = opts.sync.conflict;
+      const current = sync.conflict;
       this.conflict = current;
       if (current) {
         this.writeBackup();
@@ -125,11 +131,6 @@ export class AutosaveEngine {
       }
       this.notify();
     });
-  }
-
-  dispose() {
-    this.unsubscribeSync();
-    this.listeners.clear();
   }
 
   subscribe(listener: () => void): () => void {

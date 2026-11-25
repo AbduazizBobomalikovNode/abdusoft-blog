@@ -107,6 +107,7 @@ function setup(over: { meId?: string; online?: () => boolean } = {}) {
     isOnline: over.online,
     onSlugConflict: (m) => slugNotices.push(m),
   });
+  engine.attach();
   return { ...server, calls: server.state.calls, failNext: server.state.failNext, storage, sync, engine, slugNotices };
 }
 
@@ -430,5 +431,20 @@ describe("unsaved text survives every conflict path", () => {
     expect(t.engine.conflict).not.toBeNull();
     expect(t.engine.state).toBe("conflict");
     expect(loadBackup(t.storage, "p1")?.extra).toMatchObject({ excerpt: "Hali saqlanmagan" });
+  });
+});
+
+describe("React Strict Mode (effects mount, unmount, mount again)", () => {
+  it("a conflict from a transition still reaches the engine after detach + re-attach", async () => {
+    const server = fakeServer();
+    const sync = new PostSync(server.state.updatedAt);
+    const engine = new AutosaveEngine({ postId: "p1", sync, api: server.api, storage: memory(), initialUpdatedAt: server.state.updatedAt, initialLocal: INITIAL, meId: "u1" });
+    const detach = engine.attach();
+    detach(); // Strict Mode: tozalash...
+    engine.attach(); // ...va qayta ulanish
+    server.externalEdit({ title: "Tashqi" });
+    await engine.runTransition((token) => server.api.updatePost("p1", { title: "x", expectedUpdatedAt: token })).catch(() => undefined);
+    expect(engine.conflict).not.toBeNull();
+    expect(engine.state).toBe("conflict");
   });
 });

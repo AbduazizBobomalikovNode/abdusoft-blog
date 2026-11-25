@@ -56,7 +56,7 @@ export function useAutosave({
   );
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   useEffect(() => engine.subscribe(rerender), [engine]);
-  useEffect(() => () => engine.dispose(), [engine]);
+  useEffect(() => engine.attach(), [engine]);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
