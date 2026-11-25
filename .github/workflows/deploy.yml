@@ -3,11 +3,14 @@ name: Deploy
 # Production'ga deploy. Batafsil: docs/deploy.md
 #
 # Oqim: `CI` main'da muvaffaqiyatli tugagach (yoki qo'lda, ixtiyoriy `sha` bilan)
-#   1) build job — GitHub runner'da hamma narsa build qilinadi, bundle yig'iladi
-#      (yozish huquqi va SSH kalit YO'Q);
-#   2) deploy job — bundle `deploy-builds` pre-release'ga yuklanadi va cheklangan
-#      SSH kalit orqali serverga FAQAT commit SHA yuboriladi; server bundle'ni
-#      o'zi yuklab oladi, tekshiradi va almashtiradi.
+#   1) build job (environment `production-build`) — GitHub runner'da hamma narsa
+#      build qilinadi, bundle yig'iladi va SHIFRLANADI (yozish huquqi YO'Q, SSH
+#      kalit YO'Q; faqat ochiq NEXT_PUBLIC_* qiymatlar va shifrlash kaliti bor);
+#   2) deploy job (environment `production`) — shifrlangan bundle `deploy-builds`
+#      pre-release'ga yuklanadi va cheklangan SSH kalit orqali serverga FAQAT
+#      "<commit SHA> <bundle sha256>" yuboriladi; server bundle'ni o'zi yuklab
+#      oladi, hashni tekshiradi, shifrdan chiqaradi va almashtiradi (shifrlash
+#      kaliti bu jobda YO'Q).
 #
 # Pull request'lar (fork va Dependabot ham) bu workflow'ni ISHGA TUSHIRA OLMAYDI:
 #   - `pull_request` triggeri yo'q; `workflow_run` faqat CI'ning `push` hodisasi
@@ -15,7 +18,10 @@ name: Deploy
 #     gate job uni rad etadi;
 #   - `workflow_run` va `workflow_dispatch` workflow faylini DEFAULT branch'dan
 #     (main) oladi, PR'dagi o'zgargan nusxani emas;
-#   - sirlar `production` environment'da, u faqat `main` branch'iga ochiq.
+#   - sirlar `production-build` va `production` environment'larida, ikkalasi
+#     faqat `main` branch'iga ochiq;
+#   - `workflow_run.branches: [main]` PR'lar CI tugashida bu workflow'ni umuman
+#     yaratmaydi (faqat nomi `main` bo'lgan fork branch'i o'tadi — uni gate rad etadi).
 on:
   workflow_run:
     workflows: [CI]
@@ -93,9 +99,11 @@ jobs:
     if: needs.gate.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    environment: production
+    environment: production-build
     permissions:
       contents: read
+    outputs:
+      bundle_sha256: ${{ steps.bundle.outputs.sha256 }}
     env:
       DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
       # NEXT_PUBLIC_* build vaqtida bundle ichiga yoziladi — shuning uchun ular
@@ -199,8 +207,21 @@ jobs:
           fi
           echo "Build natijasi mantiqiy: sitemap <loc>=$locs, feed=${FEED_COUNT:-0}"
 
-      - name: Bundle yig'ish (+ sir tekshiruvi)
-        run: ./scripts/make-deploy-bundle.sh "$DEPLOY_SHA" "$RUNNER_TEMP/bundle"
+      # Sir tekshiruvi OCHIQ matnda bajariladi, so'ng bundle shifrlanadi — hech qanday
+      # yuklashdan (artifact ham, release ham) OLDIN. Kalit faqat fayl orqali beriladi.
+      - name: Bundle yig'ish, sir tekshiruvi va shifrlash
+        id: bundle
+        env:
+          DEPLOY_BUNDLE_KEY: ${{ secrets.DEPLOY_BUNDLE_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$DEPLOY_BUNDLE_KEY" ] || { echo "::error title=Sozlanmagan::DEPLOY_BUNDLE_KEY 'production-build' environment secret'ida yo'q (docs/deploy.md)."; exit 1; }
+          umask 077
+          printf '%s\n' "$DEPLOY_BUNDLE_KEY" > "$RUNNER_TEMP/bundle.key"
+          BUNDLE_KEY_FILE="$RUNNER_TEMP/bundle.key" ./scripts/make-deploy-bundle.sh "$DEPLOY_SHA" "$RUNNER_TEMP/bundle"
+          rm -f "$RUNNER_TEMP/bundle.key"
+          name="abdusoft-blog-$DEPLOY_SHA.tar.gz.enc"
+          echo "sha256=$(cut -d' ' -f1 < "$RUNNER_TEMP/bundle/$name.sha256")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -250,25 +271,30 @@ jobs:
             echo "::notice title=O'tkazib yuborildi::main'da yangiroq commit bor ($tip) — $DEPLOY_SHA deploy qilinmadi. Kerak bo'lsa, workflow_dispatch bilan qo'lda ishga tushiring."
           fi
 
+      # Bu jobda shifrlash kaliti yo'q — manifestni o'qib bo'lmaydi; shuning uchun
+      # artifact build jobi hisoblagan hash bilan solishtiriladi (job'lar orasidagi yaxlitlik).
       - name: Bundle yaxlitligini tekshirish
         id: bundle
         if: steps.fresh.outputs.stale != 'true'
+        env:
+          EXPECT: ${{ needs.build.outputs.bundle_sha256 }}
         run: |
           set -euo pipefail
           cd bundle
-          name="abdusoft-blog-$DEPLOY_SHA.tar.gz"
+          name="abdusoft-blog-$DEPLOY_SHA.tar.gz.enc"
           [ -f "$name" ] && [ -f "$name.sha256" ] || { echo "::error::bundle fayllari yo'q"; exit 1; }
+          [[ "$EXPECT" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build job hashi yo'q"; exit 1; }
           sum="$(sha256sum "$name" | cut -d' ' -f1)"
-          [ "$sum" = "$(cut -d' ' -f1 < "$name.sha256")" ] || { echo "::error::bundle checksum mos emas"; exit 1; }
-          [ "$(tar -xzOf "$name" MANIFEST.json | jq -r .commit)" = "$DEPLOY_SHA" ] || { echo "::error::manifest commit mos emas"; exit 1; }
+          [ "$sum" = "$EXPECT" ] || { echo "::error::artifact hashi build job hisoblagan hashga mos emas"; exit 1; }
+          [ "$sum" = "$(cut -d' ' -f1 < "$name.sha256")" ] || { echo "::error::.sha256 fayli mos emas"; exit 1; }
           echo "sha256=$sum" >> "$GITHUB_OUTPUT"
-          echo "Bundle: $(du -h "$name" | cut -f1), sha256 $sum"
+          echo "Bundle (shifrlangan): $(du -h "$name" | cut -f1), sha256 $sum"
 
       - name: Bundle'ni deploy-builds release'ga yuklash
         if: steps.fresh.outputs.stale != 'true'
         run: |
           set -euo pipefail
-          name="abdusoft-blog-$DEPLOY_SHA.tar.gz"
+          name="abdusoft-blog-$DEPLOY_SHA.tar.gz.enc"
           if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" --target "$DEPLOY_SHA" \
               --prerelease --latest=false \
@@ -300,10 +326,10 @@ jobs:
           EXPECT: ${{ steps.bundle.outputs.sha256 }}
         run: |
           set -euo pipefail
-          name="abdusoft-blog-$DEPLOY_SHA.tar.gz"
+          name="abdusoft-blog-$DEPLOY_SHA.tar.gz.enc"
           curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
-            -o "$RUNNER_TEMP/check.tar.gz" "https://github.com/$REPO/releases/download/$TAG/$name"
-          [ "$(sha256sum "$RUNNER_TEMP/check.tar.gz" | cut -d' ' -f1)" = "$EXPECT" ] \
+            -o "$RUNNER_TEMP/check.enc" "https://github.com/$REPO/releases/download/$TAG/$name"
+          [ "$(sha256sum "$RUNNER_TEMP/check.enc" | cut -d' ' -f1)" = "$EXPECT" ] \
             || { echo "::error::ommaviy URL'dagi fayl yuklangan bundle'ga mos emas"; exit 1; }
           echo "Ommaviy URL'dan yuklab olish OK"
 
@@ -349,11 +375,12 @@ jobs:
         run: rm -f "$HOME/.ssh/deploy_key" "$HOME/.ssh/deploy_known_hosts"
 
       # Faqat ogohlantirish: tashqi tarmoq/CDN muammosi deploy'ni "muvaffaqiyatsiz" qilmasin.
-      - name: Saytni tashqaridan tekshirish
+      - name: Saytni tashqaridan tekshirish (ixtiyoriy)
         if: steps.fresh.outputs.stale != 'true'
         env:
-          SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+          SITE_URL: ${{ vars.DEPLOY_SITE_URL }}
         run: |
+          [ -n "$SITE_URL" ] || { echo "DEPLOY_SITE_URL sozlanmagan — tashqi tekshiruv o'tkazib yuborildi."; exit 0; }
           curl -fsS -o /dev/null --max-time 20 --retry 3 --retry-delay 5 "$SITE_URL/" \
             && echo "Sayt tashqaridan ochiladi: $SITE_URL" \
             || echo "::warning::Sayt tashqaridan tekshiruvdan o'tmadi ($SITE_URL) — server health check o'tgan bo'lsa ham qo'lda ko'ring."
