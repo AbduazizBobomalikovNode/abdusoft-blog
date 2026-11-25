@@ -20,7 +20,7 @@ type PostPatch = Partial<typeof posts.$inferInsert>;
 interface TransitionSpec {
   /** Qulflangan (joriy) qator ustida tekshiruv — xato qaytarsa, hech narsa o'zgarmaydi. */
   guard?: (post: PostRow) => ServiceResult<never> | null;
-  /** O'zgartiriladigan ustunlar (`updatedAt` har doim `now`). */
+  /** O'zgartiriladigan ustunlar (`updatedAt`, `updatedBy`, `updatedVia` har doim o'rnatiladi). */
   buildPatch: (post: PostRow, now: Date) => PostPatch;
 }
 
@@ -35,7 +35,7 @@ interface TransitionData {
  * chaqiruvchi tomonidan tranzaksiya COMMIT bo'lgandan keyin ishga tushiriladi.
  */
 async function transition(
-  _actor: Actor,
+  actor: Actor,
   id: string,
   spec: TransitionSpec,
 ): Promise<ServiceResult<TransitionData>> {
@@ -49,7 +49,13 @@ async function transition(
     const now = new Date();
     const [after] = await tx
       .update(posts)
-      .set({ ...spec.buildPatch(before, now), updatedAt: now })
+      .set({
+        ...spec.buildPatch(before, now),
+        updatedAt: now,
+        // Har bir o'tish ijrochini yozadi; scheduler/tizim uchun `updatedBy = null` (foydalanuvchi id'si o'ylab topilmaydi).
+        updatedBy: actor.userId,
+        updatedVia: actor.via,
+      })
       .where(eq(posts.id, id))
       .returning();
     if (!after) return fail("not_found", "Topilmadi");

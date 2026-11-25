@@ -1,15 +1,12 @@
 import { desc, eq } from "drizzle-orm";
-import { DEFAULT_POST_SETTINGS, PostSettingsSchema } from "@blog/shared";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { comments, posts } from "../db/schema.js";
-import { events } from "../lib/events.js";
-import { pathsForPost, revalidateWeb } from "../lib/revalidate.js";
+import { publishPost, unpublishPost, updatePost, type Actor } from "../lib/posts/index.js";
 import { pendingCommentsCount, resolveRange, totalsForRange } from "../lib/stats.js";
 import { TELEGRAM_KEY, loadSiteSettings, upsertSiteSetting } from "../lib/site-settings.js";
-import { tagsForPostIds } from "../routes/posts.js";
 import { bot } from "./client.js";
-import { moderationKeyboard } from "./comments.js";
+import { findAdminUser, moderationKeyboard } from "./comments.js";
 import { sendDigestNow } from "./digest.js";
 import { escapeHtml, stripHtml, truncate } from "./format.js";
 
@@ -33,20 +30,19 @@ async function findPostBySlug(slug: string) {
   return post ?? null;
 }
 
-/** `/publish` va `/unpublish` — `routes/admin-posts.ts`dagi bir xil hodisa/revalidate mantig'ini takrorlaydi. */
+/** Bot buyruqlari admin chatdan keladi — `via: "telegram"`; foydalanuvchi id'si (bo'lsa) birinchi admin hisobidan. */
+async function telegramAdminActor(): Promise<Actor> {
+  const admin = await findAdminUser();
+  return { userId: admin?.id ?? null, role: "admin", via: "telegram" };
+}
+
+/** `/publish`, `/unpublish`, `/comments` — admin paneldagi bilan BIR XIL `lib/posts` xizmati orqali (hodisa, ISR, updated_by). */
 async function publishPostBySlug(slug: string): Promise<string> {
   const post = await findPostBySlug(slug);
   if (!post) return `"${slug}" topilmadi`;
 
-  const now = new Date();
-  await db
-    .update(posts)
-    .set({ status: "published", publishedAt: post.publishedAt ?? now, updatedAt: now })
-    .where(eq(posts.id, post.id));
-
-  events.emit("post.published", { id: post.id, slug: post.slug });
-  const tagSlugs = (await tagsForPostIds([post.id])).get(post.id)?.map((t) => t.slug) ?? [];
-  revalidateWeb(pathsForPost(post.slug, tagSlugs));
+  const result = await publishPost(await telegramAdminActor(), post.id);
+  if (!result.ok) return `"${slug}" topilmadi`;
 
   return `✅ "${post.title}" chop etildi.`;
 }
@@ -55,14 +51,8 @@ async function unpublishPostBySlug(slug: string): Promise<string> {
   const post = await findPostBySlug(slug);
   if (!post) return `"${slug}" topilmadi`;
 
-  const wasPublished = post.status === "published";
-  await db.update(posts).set({ status: "draft", updatedAt: new Date() }).where(eq(posts.id, post.id));
-
-  if (wasPublished) {
-    events.emit("post.unpublished", { id: post.id, slug: post.slug });
-    const tagSlugs = (await tagsForPostIds([post.id])).get(post.id)?.map((t) => t.slug) ?? [];
-    revalidateWeb(pathsForPost(post.slug, tagSlugs));
-  }
+  const result = await unpublishPost(await telegramAdminActor(), post.id);
+  if (!result.ok) return `"${slug}" topilmadi`;
 
   return `↩️ "${post.title}" qoralamaga qaytarildi.`;
 }
@@ -71,17 +61,8 @@ async function toggleComments(slug: string, on: boolean): Promise<string> {
   const post = await findPostBySlug(slug);
   if (!post) return `"${slug}" topilmadi`;
 
-  const settings = PostSettingsSchema.parse({
-    ...DEFAULT_POST_SETTINGS,
-    ...((post.settings as Record<string, unknown>) ?? {}),
-    commentsEnabled: on,
-  });
-
-  await db.update(posts).set({ settings, updatedAt: new Date() }).where(eq(posts.id, post.id));
-
-  if (post.status === "published") {
-    revalidateWeb(pathsForPost(post.slug));
-  }
+  const result = await updatePost(await telegramAdminActor(), post.id, { settings: { commentsEnabled: on } });
+  if (!result.ok) return `"${slug}" topilmadi`;
 
   return on ? `💬 "${post.title}" uchun izohlar yoqildi.` : `🔕 "${post.title}" uchun izohlar o'chirildi.`;
 }

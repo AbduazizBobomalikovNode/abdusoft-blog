@@ -77,6 +77,7 @@ export async function createPost(
       settings: DEFAULT_POST_SETTINGS,
       createdBy: actor.userId,
       updatedBy: actor.userId,
+      updatedVia: actor.via,
     })
     .returning();
 
@@ -192,6 +193,7 @@ export async function updatePost(
     if (hasColumnChanges) {
       update.updatedAt = new Date();
       update.updatedBy = actor.userId;
+      update.updatedVia = actor.via;
       await tx.update(posts).set(update).where(eq(posts.id, id));
     }
 
@@ -204,7 +206,7 @@ export async function updatePost(
           .onConflictDoNothing();
       }
       if (!hasColumnChanges) {
-        await tx.update(posts).set({ updatedAt: new Date(), updatedBy: actor.userId }).where(eq(posts.id, id));
+        await tx.update(posts).set({ updatedAt: new Date(), updatedBy: actor.userId, updatedVia: actor.via }).where(eq(posts.id, id));
       }
     }
 
