@@ -62,6 +62,13 @@ abdusoft blog — bitta muallif uchun mo'ljallangan, to'liq boshqariladigan texn
 - Bot buyruqlari: `/stats`, `/posts`, `/pending`, `/comments <slug> on|off`, `/publish` / `/unpublish`, `/digest`
 - Kunlik hisobot (digest) — yoqilsa, belgilangan vaqtda statistikani admin chatga yuboradi
 
+**Admin panelda ishonchli tahrirlash**
+
+- **Savat** (`Postlar` > `Savat`, faqat admin): o'chirilgan postlar shu yerda saqlanadi — kim va qachon o'chirgani ko'rinadi, "Tiklash" (asl havola band bo'lsa yangi havola haqida aniq xabar) yoki "Butunlay o'chirish" (izohlar, kanal versiyalari va tarix ham ketadi)
+- **Tarix** (muharrirda): postning avvalgi versiyalari — vaqt, kim, qaysi manbadan (veb panel / Telegram / rejalashtiruvchi / yordamchi ulagich), o'qish-uchun ko'rinish, joriy versiyadan farq qilgan maydonlar va "Shu versiyaga qaytarish". Qaytarishdan oldin joriy holat avtomatik saqlanadi; chop etilgan postda havola standart bo'yicha o'zgarmaydi
+- **Konflikt himoyasi**: muharrirning barcha so'rovlari bitta navbatdan o'tadi va oxirgi `updatedAt` tokenini yuboradi. Post boshqa joyda (boshqa tab, Telegram, yordamchi) o'zgargan bo'lsa avtosaqlash to'xtaydi, yozilgan matn brauzerda saqlanadi va banner uch amal taklif qiladi: oxirgi versiyani yuklash (mahalliy matn tiklash uchun taklif qilinadi) / meniki bilan almashtirish (tasdiq bilan, ikkinchi versiya Tarixda qoladi) / Tarixni ochish. Bir foydalanuvchining ikki tabi ham haqiqiy konflikt hisoblanadi — banner "boshqa oyna yoki qurilmada o'zgartirgansiz" deydi, hech narsa jimgina ustidan yozilmaydi
+- **Jurnal** (`/admin/jurnal`, faqat admin): barcha o'zgarishlar — manba, obyekt, amal va sana bo'yicha filtr; odam bo'lmagan manbalar (yordamchi, rejalashtiruvchi, tizim) alohida rangda
+
 **Xavfsizlik**
 
 - Sirlar (bot token, R2 kaliti, Turnstile secret va h.k.) bazada `BETTER_AUTH_SECRET`dan olingan kalit bilan AES-256-GCM shifrlangan holda saqlanadi
@@ -420,6 +427,13 @@ abdusoft blog is a self-hosted, single-author tech blog platform. The public sid
 - Comment notifications land in an admin chat with inline buttons to approve/reject/ban directly
 - Bot commands: `/stats`, `/posts`, `/pending`, `/comments <slug> on|off`, `/publish` / `/unpublish`, `/digest`
 - Daily digest — when enabled, sends a stats summary to the admin chat at a fixed time
+
+**Reliable editing in the admin panel**
+
+- **Trash** (`Posts` > `Trash`, admin only): deleted posts are kept here — who deleted and when is shown; "Restore" (with a clear notice when the original slug was taken and a new one was assigned) or "Delete permanently" (comments, channel versions and history go too)
+- **History** (in the editor): a post's earlier versions — time, who, via what (web panel / Telegram / scheduler / assistant connector), a read-only preview, which fields differ from the current version, and "Restore this version". The current state is saved automatically before restoring; a published post keeps its URL by default
+- **Conflict protection**: every request the editor makes goes through one queue and carries the latest `updatedAt` token. If the post was changed elsewhere (another tab, Telegram, the assistant) autosave stops, the typed text stays safe in the browser, and a banner offers three actions: load the latest version (your local text is offered for recovery) / overwrite with mine (with confirmation, the other version stays in History) / open History. Two tabs of the same user count as a genuine conflict — the banner says "you changed this in another window or device" and nothing is silently overwritten
+- **Journal** (`/admin/jurnal`, admin only): every change — filter by source, entity, action and date; non-human sources (assistant, scheduler, system) are visually distinct
 
 **Security**
 
