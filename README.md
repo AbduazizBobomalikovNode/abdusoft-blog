@@ -9,6 +9,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169e1?logo=postgresql&logoColor=white)
 ![pnpm](https://img.shields.io/badge/pnpm-10-f69220?logo=pnpm&logoColor=white)
+[![CI](https://github.com/AbduazizBobomalikovNode/abdusoft-blog/actions/workflows/ci.yml/badge.svg)](https://github.com/AbduazizBobomalikovNode/abdusoft-blog/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/License-All%20rights%20reserved-lightgrey)
 
 [🇺🇿 O'zbekcha](#ozbekcha) · [🇬🇧 English](#english)
@@ -367,7 +368,7 @@ Hech narsa avtomatik deploy qilinmaydi. Asosiy yo'l: **API — VDS'da Docker Com
 
 ### 10. Litsenziya va Muallif
 
-**Litsenziya**: barcha huquqlar himoyalangan (All rights reserved). Repo hozircha shaxsiy (private) — ochiq litsenziya belgilanmagan.
+**Litsenziya**: barcha huquqlar himoyalangan (All rights reserved). Repo ochiq (public) va kodni GitHub'da ko'rish mumkin, lekin ochiq-manbali litsenziya hali belgilanmagan — shu sabab barcha huquqlar muallifda qoladi.
 
 **Muallif**: Abduaziz Bobomalikov — [abdusoft.uz](https://abdusoft.uz)
 
@@ -721,6 +722,6 @@ Nothing deploys automatically. Primary path: **API on a VDS via Docker Compose, 
 
 ### 10. License and Author
 
-**License**: All rights reserved. The repository is currently private — no open-source license has been chosen.
+**License**: All rights reserved. The repository is public and the code can be viewed on GitHub, but no open-source license has been chosen yet — so all rights remain with the author.
 
 **Author**: Abduaziz Bobomalikov — [abdusoft.uz](https://abdusoft.uz)
