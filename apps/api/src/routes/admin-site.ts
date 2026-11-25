@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { SocialLinksSchema, PostSettingsSchema, TelegramSettingsSchema, UpdateSiteSettingsBodySchema } from "@blog/shared";
 import { requireAdmin } from "../lib/require-admin.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import { actorFromAdminUser } from "../lib/posts/types.js";
 import { renderPost } from "../lib/content/render.js";
 import {
   ABOUT_KEY,
@@ -56,6 +58,16 @@ export const adminSiteRoute = new Hono()
     if (revalidatePaths.size > 0) {
       revalidateWeb([...revalidatePaths]);
     }
+
+    const sections = Object.entries(parsed.data)
+      .filter(([, value]) => value !== undefined)
+      .map(([name]) => name);
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "site.update",
+      entityType: "site",
+      summary: `Sayt sozlamalari yangilandi: ${sections.join(", ") || "—"}`,
+      meta: { sections },
+    });
 
     const fresh = await loadSiteSettings();
     return c.json(fresh);

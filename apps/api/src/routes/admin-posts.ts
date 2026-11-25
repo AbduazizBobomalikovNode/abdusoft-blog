@@ -62,6 +62,7 @@ import {
   updateChannelVersion,
 } from "../telegram/channel-version-service.js";
 import { getTelegramRefForPost, refreshTelegraphMirror } from "../telegram/publish.js";
+import { recordAuditSafe } from "../lib/audit.js";
 import { errorResponse } from "./service-response.js";
 
 const DEFAULT_LIMIT = 20;
@@ -347,6 +348,12 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
     const result = await createChannelVersion(post, parsed.data, c.get("adminUser").id);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_version_create",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi yaratildi",
+    });
     return c.json(result.data, 201);
   })
   .patch("/:id/channel/versions/:vid", async (c) => {
@@ -361,6 +368,13 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
     const result = await updateChannelVersion(post, vid, parsed.data);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_version_update",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi tahrirlandi",
+      meta: { versionId: vid },
+    });
     return c.json(result.data);
   })
   .delete("/:id/channel/versions/:vid", async (c) => {
@@ -372,6 +386,13 @@ export const adminPostsRoute = new Hono()
     if (forbidden) return forbidden;
     const result = await deleteChannelVersion(post, vid);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_version_delete",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi o'chirildi",
+      meta: { versionId: vid, clearedChoice: result.data.clearedChoice },
+    });
     return c.json({ ok: true, clearedChoice: result.data.clearedChoice });
   })
   .put("/:id/channel/choice", async (c) => {
@@ -384,6 +405,12 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri tanlov", issues: parsed.error.issues }, 400);
     const result = await setChannelChoice(post.id, parsed.data, c.get("adminUser").id);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_choice_set",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi belgilandi",
+    });
     const fresh = await loadPostOr404(post.id);
     return c.json({ choice: fresh ? await resolveChannelChoice(fresh) : null });
   })
@@ -393,6 +420,12 @@ export const adminPostsRoute = new Hono()
     const forbidden = guardChannelPrep(c, post, "write");
     if (forbidden) return forbidden;
     await clearChannelChoice(post.id);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_choice_clear",
+      entityType: "post",
+      entityId: post.id,
+      summary: "Kanal versiyasi belgisi olib tashlandi",
+    });
     return c.json({ ok: true });
   })
   .post("/:id/channel/send", async (c) => {
@@ -418,6 +451,16 @@ export const adminPostsRoute = new Hono()
           });
 
     if (!result.ok) return sendFailureResponse(c, result);
+    await recordAuditSafe(actorOf(c), {
+      action: parsed.data.replaceExisting ? "post.channel_replace" : "post.channel_send",
+      entityType: "post",
+      entityId: id,
+      summary: parsed.data.replaceExisting ? "Post kanalga qayta yuborildi (almashtirildi)" : "Post kanalga yuborildi",
+      meta:
+        "versionId" in parsed.data
+          ? { versionId: parsed.data.versionId, replaceExisting: Boolean(parsed.data.replaceExisting) }
+          : { mode: parsed.data.mode, variant: parsed.data.variant, replaceExisting: Boolean(parsed.data.replaceExisting) },
+    });
     return c.json(result);
   })
   .post("/:id/channel/resync-caption", async (c) => {
@@ -431,6 +474,12 @@ export const adminPostsRoute = new Hono()
     // (`editChannelCaptionForPost` ichida tekshiriladi), shu sabab bu yerda
     // 409 tashlamaymiz: tugma faqat "allaqachon yuborilgan" holatda ko'rinadi.
     await editChannelCaptionForPost(id);
+    await recordAuditSafe(actorOf(c), {
+      action: "post.channel_resync",
+      entityType: "post",
+      entityId: id,
+      summary: "Kanal xabari matni yangilandi",
+    });
     return c.json({ ok: true });
   })
   .get("/:id/preview", async (c) => {

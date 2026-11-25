@@ -4,10 +4,12 @@ import { db } from "../../db/index.js";
 import { user } from "../../db/auth-schema.js";
 import { posts } from "../../db/schema.js";
 import { events } from "../events.js";
+import { recordAudit, type AuditEntry } from "../audit.js";
 import { announcePublished, announceUnpublished } from "./effects.js";
 import { preparePlan } from "./plan.js";
 import {
   loadPost,
+  postLabel,
   requireAdminActor,
   toLifecycleSummary,
   type LifecycleSummary,
@@ -22,6 +24,8 @@ interface TransitionSpec {
   guard?: (post: PostRow) => ServiceResult<never> | null;
   /** O'zgartiriladigan ustunlar (`updatedAt`, `updatedBy`, `updatedVia` har doim o'rnatiladi). */
   buildPatch: (post: PostRow, now: Date) => PostPatch;
+  /** Jurnal yozuvi — o'zgarish bilan BIR tranzaksiyada yoziladi. */
+  audit: (before: PostRow, after: PostRow) => AuditEntry;
 }
 
 interface TransitionData {
@@ -60,7 +64,19 @@ async function transition(
       .returning();
     if (!after) return fail("not_found", "Topilmadi");
 
+    await recordAudit(tx, actor, spec.audit(before, after));
+
     return ok({ before, after });
+  });
+}
+
+function statusChange(action: string, verb: string, extra: Record<string, unknown> = {}) {
+  return (before: PostRow, after: PostRow): AuditEntry => ({
+    action,
+    entityType: "post",
+    entityId: after.id,
+    summary: `Post ${verb}: ${postLabel(after)}`,
+    meta: { from: before.status, to: after.status, slug: after.slug, ...extra },
   });
 }
 
@@ -103,6 +119,10 @@ async function executePublish(
 ): Promise<ServiceResult<PostRow>> {
   const result = await transition(actor, id, {
     guard,
+    audit: statusChange(
+      args.kind === "approve" ? "post.approve" : args.kind === "scheduled" ? "post.publish_scheduled" : "post.publish",
+      args.kind === "approve" ? "tasdiqlandi va chop etildi" : "chop etildi",
+    ),
     buildPatch: (post, now) => {
       switch (args.kind) {
         case "approve":
@@ -184,21 +204,32 @@ async function leavePublished(
   actor: Actor,
   id: string,
   buildPatch: TransitionSpec["buildPatch"],
+  audit: TransitionSpec["audit"],
 ): Promise<ServiceResult<LifecycleSummary>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
-  const result = await transition(actor, id, { buildPatch });
+  const result = await transition(actor, id, { buildPatch, audit });
   if (!result.ok) return result;
   if (result.data.before.status === "published") await announceUnpublished(result.data.after);
   return ok(toLifecycleSummary(result.data.after));
 }
 
 export function unpublishPost(actor: Actor, id: string) {
-  return leavePublished(actor, id, () => ({ status: "draft", channelPlan: null, channelSendAt: null }));
+  return leavePublished(
+    actor,
+    id,
+    () => ({ status: "draft", channelPlan: null, channelSendAt: null }),
+    statusChange("post.unpublish", "qoralamaga qaytarildi"),
+  );
 }
 
 export function archivePost(actor: Actor, id: string) {
-  return leavePublished(actor, id, () => ({ status: "archived", channelPlan: null, channelSendAt: null }));
+  return leavePublished(
+    actor,
+    id,
+    () => ({ status: "archived", channelPlan: null, channelSendAt: null }),
+    statusChange("post.archive", "arxivlandi"),
+  );
 }
 
 export interface ScheduleInput {
@@ -227,6 +258,10 @@ export async function schedulePost(
   }
 
   const result = await transition(actor, id, {
+    audit: statusChange("post.schedule", "rejalashtirildi", {
+      scheduledAt: scheduledAt.toISOString(),
+      hasChannelPlan: storedPlan !== null,
+    }),
     buildPatch: () => ({ status: "scheduled", scheduledAt, channelPlan: storedPlan, channelSendAt: null }),
   });
   if (!result.ok) return result;
@@ -257,6 +292,7 @@ export async function submitPostForReview(
       }
       return null;
     },
+    audit: statusChange("post.submit", "ko'rib chiqishga yuborildi"),
     buildPatch: (_post, now) => ({ status: "in_review", submittedAt: now, reviewNote: null }),
   });
   if (!result.ok) return result;
@@ -288,6 +324,7 @@ export async function requestPostChanges(
   if (denied) return denied;
   const result = await transition(actor, id, {
     guard: (post) => (post.status !== "in_review" ? fail("conflict", "Post ko'rib chiqishda emas") : null),
+    audit: statusChange("post.request_changes", "tuzatish uchun qaytarildi", { noteLength: note.length }),
     buildPatch: (_post, now) => ({
       status: "changes_requested",
       reviewNote: note,
@@ -307,6 +344,15 @@ export async function deletePost(actor: Actor, id: string): Promise<ServiceResul
   if (post.status !== "draft" && post.status !== "archived") {
     return fail("conflict", "Chop etilgan postni o'chirish uchun avval uni qoralamaga qaytaring yoki arxivlang");
   }
-  await db.delete(posts).where(eq(posts.id, id));
+  await db.transaction(async (tx) => {
+    await tx.delete(posts).where(eq(posts.id, id));
+    await recordAudit(tx, actor, {
+      action: "post.delete",
+      entityType: "post",
+      entityId: id,
+      summary: `Post o'chirildi: ${postLabel(post)}`,
+      meta: { status: post.status, slug: post.slug },
+    });
+  });
   return ok(null);
 }

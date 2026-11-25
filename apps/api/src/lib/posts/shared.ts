@@ -10,12 +10,17 @@ import {
 import { db } from "../../db/index.js";
 import { user } from "../../db/auth-schema.js";
 import { posts } from "../../db/schema.js";
+import type { Executor } from "../executor.js";
 import { fail, isAdminActor, type Actor, type ServiceFailure } from "./types.js";
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type { Executor };
 
-/** `db` yoki tranzaksiya (`tx`) — ikkalasida ham so'rov yozish mumkin. */
-export type Executor = typeof db | Tx;
+/** Jurnal xulosalarida post nomi (qisqartirilgan). */
+export function postLabel(post: { title: string }): string {
+  const title = post.title.trim() || "Nomsiz";
+  return `"${title.length > 80 ? `${title.slice(0, 80)}…` : title}"`;
+}
+
 
 export type PostRow = typeof posts.$inferSelect;
 

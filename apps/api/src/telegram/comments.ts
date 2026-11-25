@@ -2,6 +2,8 @@ import { InlineKeyboard } from "grammy";
 import { eq } from "drizzle-orm";
 import { events, type CommentCreatedEventPayload } from "../lib/events.js";
 import { config } from "../config.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import type { Actor } from "../lib/posts/types.js";
 import { getSettings } from "../lib/settings.js";
 import { setPendingReply, takePendingReply } from "../lib/site-settings.js";
 import { banCommentAuthor, deleteCommentCascade, isBanAvailable, loadCommentRow, replyToCommentAsAdmin, setCommentStatus, TelegramReplyError } from "../lib/comments-admin.js";
@@ -119,16 +121,24 @@ export function registerCommentBotHandlers(): void {
       return;
     }
 
+    // Telegramdagi moderatsiya ham jurnalga yoziladi (`via: telegram`).
+    const botActor: Actor = { userId: (await findAdminUser())?.id ?? null, role: "admin", via: "telegram" };
+    const audit = (auditAction: string, summary: string) =>
+      recordAuditSafe(botActor, { action: auditAction, entityType: "comment", entityId: commentId, summary });
+
     let statusLine = "";
     if (action === "approve") {
       const updated = await setCommentStatus(commentId, "visible");
       statusLine = updated ? "✅ Tasdiqlandi" : "Topilmadi";
+      if (updated) await audit("comment.status", "Izoh holati o'zgardi: visible");
     } else if (action === "hide") {
       const updated = await setCommentStatus(commentId, "hidden");
       statusLine = updated ? "🙈 Yashirildi" : "Topilmadi";
+      if (updated) await audit("comment.status", "Izoh holati o'zgardi: hidden");
     } else if (action === "delete") {
       const updated = await deleteCommentCascade(commentId);
       statusLine = updated ? "🗑 O'chirildi" : "Topilmadi";
+      if (updated) await audit("comment.delete", "Izoh o'chirildi");
     } else if (action === "ban") {
       const target = await loadCommentRow(commentId);
       if (target && !isBanAvailable(target)) {
@@ -136,6 +146,7 @@ export function registerCommentBotHandlers(): void {
       } else {
         const updated = await banCommentAuthor(commentId);
         statusLine = updated ? "🚫 Bloklandi" : "Topilmadi";
+        if (updated) await audit("comment.ban", "Izoh muallifi bloklandi");
       }
     } else {
       await ctx.answerCallbackQuery();
@@ -180,6 +191,16 @@ export function registerCommentBotHandlers(): void {
       await ctx.reply("Izoh topilmadi — javob yaratilmadi.");
       return;
     }
+    await recordAuditSafe(
+      { userId: adminUser.id, role: "admin", via: "telegram" },
+      {
+        action: "comment.reply",
+        entityType: "comment",
+        entityId: created.id,
+        summary: "Izohga admin javob yozdi",
+        meta: { parentId: pending.commentId },
+      },
+    );
 
     await ctx.reply(`✅ Javob yuborildi: ${config.WEB_ORIGIN}/${created.postSlug}#comment-${created.id}`);
   });

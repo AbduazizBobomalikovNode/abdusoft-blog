@@ -317,3 +317,35 @@ export const siteSettings = pgTable("site_settings", {
   key: text("key").primaryKey(),
   value: jsonb("value").notNull(),
 });
+
+/**
+ * Admin amallari jurnali — kim, qaysi kanaldan (`via`), nima qildi. `meta` — kichik jsonb
+ * (o'zgargan maydon nomlari, holat from -> to); HECH QACHON to'liq kontent yoki sirlar emas.
+ * `entity_id` ataylab FK emas: post butunlay o'chirilsa ham jurnal saqlanadi.
+ */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Foydalanuvchi o'chirilsa `null` (jurnal qoladi); scheduler/tizim amallarida ham `null`. */
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** `admin` | `staff` | `system`. */
+    actorRole: text("actor_role").notNull(),
+    /** `web` | `mcp` | `telegram` | `scheduler` | `system`. */
+    via: text("via").notNull(),
+    /** Masalan `post.publish`, `comment.delete`, `tag.create`. */
+    action: text("action").notNull(),
+    /** `post` | `comment` | `tag` | `media` | `settings` | `ban` | `site`. */
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id"),
+    summary: text("summary").notNull(),
+    meta: jsonb("meta").notNull().default({}),
+  },
+  (table) => [
+    index("audit_log_created_at_idx").on(table.createdAt),
+    index("audit_log_entity_idx").on(table.entityType, table.entityId),
+    index("audit_log_actor_idx").on(table.actorUserId),
+    index("audit_log_action_idx").on(table.action),
+  ],
+);

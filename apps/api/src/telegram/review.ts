@@ -6,6 +6,7 @@ import { db } from "../db/index.js";
 import { channelPostVersions, posts } from "../db/schema.js";
 import { events, type PostSubmittedEventPayload } from "../lib/events.js";
 import { approvePost, requestPostChanges, type Actor } from "../lib/posts/index.js";
+import { recordAuditSafe } from "../lib/audit.js";
 import { getSettings } from "../lib/settings.js";
 import { setPendingReply } from "../lib/site-settings.js";
 import { bot } from "./client.js";
@@ -26,6 +27,15 @@ import type { ChannelPreflightResponse } from "@blog/shared";
 /** Telegram admin chat orqali bajariladigan amallar (tasdiqlash/qaytarish) — `via: "telegram"`. */
 function telegramActor(userId: string): Actor {
   return { userId, role: "admin", via: "telegram" };
+}
+
+/** Telegram orqali kanalga yuborish ham jurnalga yoziladi (`via: telegram`). */
+async function auditChannelSend(postId: string, meta: Record<string, unknown>): Promise<void> {
+  const admin = await findAdminUser();
+  await recordAuditSafe(
+    { userId: admin?.id ?? null, role: "admin", via: "telegram" },
+    { action: "post.channel_send", entityType: "post", entityId: postId, summary: "Post kanalga yuborildi", meta },
+  );
 }
 
 const EXCERPT_LIMIT = 500;
@@ -512,6 +522,7 @@ export function registerReviewHandlers(): void {
         return;
       }
 
+      await auditChannelSend(postId, { mode, variant });
       await ctx.answerCallbackQuery({ text: "✅ Kanalga yuborildi" });
       const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
       if (chatId) {
@@ -591,6 +602,7 @@ export function registerReviewHandlers(): void {
         return;
       }
 
+      await auditChannelSend(postId, { versionId });
       await ctx.answerCallbackQuery({ text: "✅ Kanalga yuborildi" });
       if (chatId) {
         const [version] = await db

@@ -4,6 +4,8 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { media } from "../db/schema.js";
 import { requireRole } from "../lib/require-admin.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import { actorFromAdminUser } from "../lib/posts/types.js";
 import { deleteStoredFile, processImage, storeProcessedFile } from "../lib/media/store.js";
 
 const MAX_SIZE = 10 * 1024 * 1024;
@@ -148,6 +150,13 @@ export const adminMediaRoute = new Hono()
 
     await deleteStoredFile(row.key);
     await db.delete(media).where(eq(media.id, id));
+    await recordAuditSafe(actorFromAdminUser(adminUser), {
+      action: "media.delete",
+      entityType: "media",
+      entityId: id,
+      summary: "Media fayl o'chirildi",
+      meta: { mime: row.mime, size: row.size },
+    });
 
     return c.json({ ok: true });
   });
