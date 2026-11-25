@@ -35,9 +35,13 @@ async function main() {
     const lockTimeoutMs = resolveMigrateLockTimeoutMs(process.env.MIGRATE_LOCK_TIMEOUT_MS);
     const pool = new Pool({ connectionString: process.env.DATABASE_URL, options: lockTimeoutStartupOption(lockTimeoutMs) });
     const db = drizzle(pool);
-    await migrate(db, { migrationsFolder });
-    await backfillPostCreatedBy(db);
-    await pool.end();
+    try {
+      await migrate(db, { migrationsFolder });
+      await backfillPostCreatedBy(db);
+    } finally {
+      // Xato yo'lida ham pool yopiladi — aks holda idle timeout tufayli jarayon ~10 s osilib qoladi.
+      await pool.end();
+    }
     console.log("Migratsiya (Postgres) muvaffaqiyatli yakunlandi.");
     return;
   }
