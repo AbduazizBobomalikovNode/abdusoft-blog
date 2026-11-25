@@ -150,7 +150,7 @@ describe("PostSync on a genuine 409", () => {
     await sync.run((token) => adminApi.updatePost("p1", { title: "x", expectedUpdatedAt: token })).catch(() => undefined);
     expect(sync.conflict).not.toBeNull();
 
-    const result = await sync.runForced(() => adminApi.updatePost("p1", { title: "x", snapshot: true }));
+    const result = await sync.runForced(() => adminApi.updatePost("p1", { title: "x", overwrite: true }));
     expect(server.log.at(-1)).toMatchObject({ status: 200, token: undefined });
     expect(sync.conflict).toBeNull();
     expect(sync.token).toBe(result.updatedAt);

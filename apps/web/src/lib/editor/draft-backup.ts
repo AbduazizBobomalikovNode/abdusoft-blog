@@ -13,6 +13,13 @@ export interface DraftBackup {
   savedAt: number;
   title: string;
   contentJson: unknown;
+  /**
+   * Ixtiyoriy (eski zaxiralarda yo'q): saqlanmagan maydon kalitlari. Yo'q bo'lsa — eskicha: faqat `title` va `contentJson`.
+   * Bor bo'lsa, tiklashda FAQAT shu maydonlar qaytariladi.
+   */
+  dirty?: string[];
+  /** Ixtiyoriy: `title`/`contentJson`dan boshqa saqlanmagan maydonlar qiymati (`excerpt`, `tagSlugs`, `coverUrl`, `slug`, `settings`, `pinned`, `channelPlan`). */
+  extra?: Record<string, unknown>;
 }
 
 export interface StorageLike {
@@ -42,7 +49,11 @@ export function loadBackup(storage: StorageLike | null, postId: string): DraftBa
     if (!parsed || typeof parsed !== "object") return null;
     const b = parsed as Partial<DraftBackup>;
     if (b.v !== 1 || b.postId !== postId || typeof b.savedAt !== "number" || typeof b.title !== "string" || typeof b.baseUpdatedAt !== "string") return null;
-    return b as DraftBackup;
+    const backup = b as DraftBackup;
+    // Yangi ixtiyoriy maydonlar: noto'g'ri shaklda bo'lsa tashlab yuboriladi (eski zaxira sifatida yuklanadi).
+    if (!Array.isArray(backup.dirty) || !backup.dirty.every((k) => typeof k === "string")) delete backup.dirty;
+    if (!backup.extra || typeof backup.extra !== "object" || Array.isArray(backup.extra)) delete backup.extra;
+    return backup;
   } catch {
     return null;
   }
@@ -80,4 +91,86 @@ export function browserStorage(): StorageLike | null {
   } catch {
     return null;
   }
+}
+
+/** Zaxirada qaytarilishi mumkin bo'lgan maydonlar (kalit -> o'zbekcha nom). */
+export const BACKUP_FIELD_LABELS: Record<string, string> = {
+  title: "Sarlavha",
+  contentJson: "Matn",
+  slug: "Havola (slug)",
+  excerpt: "Qisqa tavsif",
+  coverUrl: "Muqova rasmi",
+  tagSlugs: "Teglar",
+  settings: "Sozlamalar",
+  pinned: "Muhim belgisi",
+  channelPlan: "Kanal rejasi",
+};
+
+/** Zaxira qaytaradigan maydon kalitlari: `dirty` bo'lsa shu, bo'lmasa (eski format) `title` va `contentJson`. */
+export function backupFieldKeys(backup: DraftBackup): string[] {
+  const keys = backup.dirty ?? ["title", "contentJson"];
+  return keys.filter((key) => key in BACKUP_FIELD_LABELS);
+}
+
+/** Zaxiradagi maydon qiymati. */
+export function backupValue(backup: DraftBackup, key: string): unknown {
+  if (key === "title") return backup.title;
+  if (key === "contentJson") return backup.contentJson;
+  return backup.extra?.[key];
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return stableJson(a) === stableJson(b);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** Serverdagi nusxa (to'liq): zaxira maydonlarini solishtirish uchun. */
+export interface ServerFields {
+  title: string;
+  slug: string;
+  excerpt: string | null;
+  coverUrl: string | null;
+  tags: { slug: string }[];
+  contentJson: unknown;
+  settings: Record<string, unknown>;
+  pinned: boolean;
+  channelPlan?: unknown;
+}
+
+function serverValue(server: ServerFields, key: string): unknown {
+  switch (key) {
+    case "tagSlugs":
+      return server.tags.map((t) => t.slug).sort();
+    case "excerpt":
+      return server.excerpt ?? "";
+    default:
+      return (server as unknown as Record<string, unknown>)[key];
+  }
+}
+
+/** Zaxiradagi qaysi maydonlar serverdagi nusxadan farq qiladi (tiklash taklifida ko'rsatiladi). */
+export function backupDiffKeys(backup: DraftBackup, server: ServerFields): string[] {
+  return backupFieldKeys(backup).filter((key) => {
+    const mine = backupValue(backup, key);
+    if (key === "tagSlugs") return !sameValue([...((mine as string[]) ?? [])].sort(), serverValue(server, key));
+    if (key === "settings") {
+      return Object.entries((mine as Record<string, unknown>) ?? {}).some(([k, v]) => !sameValue(v, server.settings[k]));
+    }
+    if (key === "excerpt") return (mine ?? "") !== serverValue(server, key);
+    return !sameValue(mine, serverValue(server, key));
+  });
+}
+
+export function backupFieldLabels(keys: string[]): string[] {
+  return keys.map((key) => BACKUP_FIELD_LABELS[key] ?? key);
 }
