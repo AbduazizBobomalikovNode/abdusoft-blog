@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { comments, posts } from "../db/schema.js";
@@ -25,8 +25,13 @@ function postUrl(slug: string): string {
   return `${config.WEB_ORIGIN}/${slug}`;
 }
 
-async function findPostBySlug(slug: string) {
-  const [post] = await db.select().from(posts).where(eq(posts.slug, slug)).limit(1);
+/** Bot buyruqlari uchun slug bo'yicha qidiruv — chiqindi qutisidagi post "topilmadi". */
+export async function findPostBySlug(slug: string) {
+  const [post] = await db
+    .select()
+    .from(posts)
+    .where(and(eq(posts.slug, slug), isNull(posts.deletedAt)))
+    .limit(1);
   return post ?? null;
 }
 
@@ -108,6 +113,7 @@ async function postsListMessage(): Promise<string> {
   const rows = await db
     .select()
     .from(posts)
+    .where(isNull(posts.deletedAt))
     .orderBy(desc(posts.pinned), desc(posts.updatedAt))
     .limit(POSTS_LIST_LIMIT);
 
@@ -131,7 +137,7 @@ async function sendPendingComments(chatId: number | string): Promise<void> {
     })
     .from(comments)
     .innerJoin(posts, eq(comments.postId, posts.id))
-    .where(eq(comments.status, "pending"))
+    .where(and(eq(comments.status, "pending"), isNull(posts.deletedAt)))
     .orderBy(desc(comments.createdAt))
     .limit(PENDING_LIST_LIMIT);
 

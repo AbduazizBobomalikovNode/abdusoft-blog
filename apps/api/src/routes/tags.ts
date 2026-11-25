@@ -11,7 +11,7 @@ export const tagsRoute = new Hono().get("/", async (c) => {
       name: tags.name,
       description: tags.description,
       color: tags.color,
-      postsCount: sql<number>`count(${posts.id}) filter (where ${posts.status} = 'published')::int`,
+      postsCount: sql<number>`count(${posts.id}) filter (where ${posts.status} = 'published' and ${posts.deletedAt} is null)::int`,
     })
     .from(tags)
     .leftJoin(postTags, eq(postTags.tagId, tags.id))

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   DEFAULT_POST_SETTINGS,
   PostSettingsSchema,
@@ -9,6 +9,7 @@ import {
 import { db } from "../db/index.js";
 import { comments, posts, reactions } from "../db/schema.js";
 import { getDevice } from "../lib/device.js";
+import { postNotTrashed } from "../lib/posts/live.js";
 import { isBanned, recountPostComments } from "../lib/comments.js";
 import { renderCommentBody } from "../lib/markdown.js";
 import { checkRateLimit } from "../lib/rate-limit.js";
@@ -21,7 +22,12 @@ const REACTION_RATE_WINDOW_MS = 60 * 1000;
 const REACTION_IP_RATE_LIMIT = 120;
 
 async function loadComment(id: string) {
-  const [row] = await db.select().from(comments).where(eq(comments.id, id)).limit(1);
+  // Chiqindi qutisidagi postning izohlari hech qayerda ko'rinmaydi.
+  const [row] = await db
+    .select()
+    .from(comments)
+    .where(and(eq(comments.id, id), postNotTrashed(comments.postId)))
+    .limit(1);
   return row ?? null;
 }
 
@@ -93,7 +99,11 @@ export const commentItemRoute = new Hono()
     const comment = await loadComment(c.req.param("id"));
     if (!comment) return c.json({ error: "Topilmadi" }, 404);
 
-    const [post] = await db.select().from(posts).where(eq(posts.id, comment.postId)).limit(1);
+    const [post] = await db
+      .select()
+      .from(posts)
+      .where(and(eq(posts.id, comment.postId), isNull(posts.deletedAt)))
+      .limit(1);
     if (!post) return c.json({ error: "Topilmadi" }, 404);
 
     const settings = PostSettingsSchema.parse({

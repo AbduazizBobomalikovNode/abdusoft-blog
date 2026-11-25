@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import {
   ChannelPlanSchema,
   DEFAULT_POST_SETTINGS,
@@ -24,8 +24,15 @@ export function postLabel(post: { title: string }): string {
 
 export type PostRow = typeof posts.$inferSelect;
 
+/** Jonli (chiqindi qutisida EMAS) postni yuklaydi — chiqindi qutisidagi post "topilmadi". */
 export async function loadPost(executor: Executor, id: string): Promise<PostRow | null> {
-  const [row] = await executor.select().from(posts).where(eq(posts.id, id)).limit(1);
+  const [row] = await executor.select().from(posts).where(and(eq(posts.id, id), isNull(posts.deletedAt))).limit(1);
+  return row ?? null;
+}
+
+/** Faqat chiqindi qutisidagi postni yuklaydi. */
+export async function loadTrashedPost(executor: Executor, id: string): Promise<PostRow | null> {
+  const [row] = await executor.select().from(posts).where(and(eq(posts.id, id), isNotNull(posts.deletedAt))).limit(1);
   return row ?? null;
 }
 

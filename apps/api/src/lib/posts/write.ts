@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
   DEFAULT_POST_SETTINGS,
@@ -195,7 +195,12 @@ export async function updatePost(
   const tagRows = data.tagSlugs !== undefined ? await resolveTagIds(data.tagSlugs) : null;
 
   const outcome = await db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(posts).where(eq(posts.id, id)).for("update").limit(1);
+    const [locked] = await tx
+      .select()
+      .from(posts)
+      .where(and(eq(posts.id, id), isNull(posts.deletedAt)))
+      .for("update")
+      .limit(1);
     if (!locked) return fail("not_found", "Topilmadi");
 
     if (data.settings !== undefined) {

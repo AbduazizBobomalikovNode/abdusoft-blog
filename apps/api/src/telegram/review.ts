@@ -1,6 +1,6 @@
 import { isChannelComboValid, type ChannelMode, type ChannelVariant } from "@blog/shared";
 import { InlineKeyboard, type Context } from "grammy";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { channelPostVersions, posts } from "../db/schema.js";
@@ -196,7 +196,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 async function buildVariantKeyboard(postId: string): Promise<InlineKeyboard> {
   const mediaCheck = await computeChannelPost(postId, "media", "m");
   const versions = await listVersionChoices(postId);
-  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  const [post] = await db.select().from(posts).where(and(eq(posts.id, postId), isNull(posts.deletedAt))).limit(1);
   const marked = post && parseStoredChoice(post.channelChoice) ? await resolveChannelChoice(post) : null;
   return channelVariantKeyboard(postId, mediaCheck.ok, versions, marked?.label ?? null);
 }
@@ -222,7 +222,7 @@ function channelConfirmKeyboard(postId: string, mode: ChannelMode, variant: Chan
 }
 
 async function notificationText(payload: PostSubmittedEventPayload): Promise<string> {
-  const [row] = await db.select().from(posts).where(eq(posts.id, payload.id)).limit(1);
+  const [row] = await db.select().from(posts).where(and(eq(posts.id, payload.id), isNull(posts.deletedAt))).limit(1);
   const excerpt = truncate(stripHtml(row?.contentText ?? ""), EXCERPT_LIMIT);
   // Xodim kanal versiyasini tayyorlagan bo'lsa — qaysi biri ekani xabarda ko'rinadi.
   const marked = row && parseStoredChoice(row.channelChoice) ? await resolveChannelChoice(row) : null;
@@ -554,7 +554,7 @@ export function registerReviewHandlers(): void {
       await ctx.answerCallbackQuery({ text: "Post topilmadi" });
       return;
     }
-    const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+    const [post] = await db.select().from(posts).where(and(eq(posts.id, postId), isNull(posts.deletedAt))).limit(1);
     const choice = post ? parseStoredChoice(post.channelChoice) : null;
     if (!choice) {
       await ctx.answerCallbackQuery({ text: "Belgilangan versiya yo'q" });

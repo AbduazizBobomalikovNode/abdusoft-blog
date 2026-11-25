@@ -77,7 +77,7 @@ export async function listStaffMembers(): Promise<StaffMember[]> {
       postsCount: sql<number>`count(${posts.id})::int`,
     })
     .from(user)
-    .leftJoin(posts, eq(posts.createdBy, user.id))
+    .leftJoin(posts, and(eq(posts.createdBy, user.id), isNull(posts.deletedAt)))
     .where(eq(user.role, "staff"))
     .groupBy(user.id)
     .orderBy(desc(user.createdAt));

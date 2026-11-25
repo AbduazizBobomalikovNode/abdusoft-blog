@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { DEFAULT_POST_SETTINGS, PostSettingsSchema } from "@blog/shared";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
@@ -19,7 +19,11 @@ import { createOrUpdateTelegraphPage, resolveTelegraphAuthorName, tiptapToTelegr
  * barcha xatolar shu yerda log qilinadi.
  */
 async function syncPostToTelegram(postId: string): Promise<void> {
-  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  const [post] = await db
+    .select()
+    .from(posts)
+    .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
+    .limit(1);
   if (!post || post.status !== "published") return;
 
   const postSettings = PostSettingsSchema.parse({

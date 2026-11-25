@@ -22,6 +22,7 @@ import {
   setCommentStatus,
   TelegramReplyError,
 } from "../lib/comments-admin.js";
+import { postNotTrashed } from "../lib/posts/live.js";
 import { requireAdmin } from "../lib/require-admin.js";
 import { recordAuditSafe } from "../lib/audit.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
@@ -150,6 +151,7 @@ async function computeCommentCounts(): Promise<Record<"all" | "pending" | "visib
   const rows = await db
     .select({ status: comments.status, count: sql<number>`count(*)::int` })
     .from(comments)
+    .where(postNotTrashed(comments.postId))
     .groupBy(comments.status);
 
   const counts = { all: 0, pending: 0, visible: 0, hidden: 0, deleted: 0 };
@@ -164,6 +166,7 @@ async function computeSourceCounts(): Promise<{ all: number; web: number; telegr
   const rows = await db
     .select({ source: comments.source, count: sql<number>`count(*)::int` })
     .from(comments)
+    .where(postNotTrashed(comments.postId))
     .groupBy(comments.source);
 
   const counts = { all: 0, web: 0, telegram: 0 };
@@ -195,7 +198,8 @@ export const adminCommentsRoute = new Hono()
     }
     const offset = (page - 1) * limit;
 
-    const conditions = [];
+    // Chiqindi qutisidagi postlarning izohlari ro'yxatda ham, sanoqlarda ham ko'rinmaydi.
+    const conditions = [postNotTrashed(comments.postId)];
     if (status !== "all") conditions.push(eq(comments.status, status));
     if (source !== "all") conditions.push(eq(comments.source, source));
     if (postId) conditions.push(eq(comments.postId, postId));

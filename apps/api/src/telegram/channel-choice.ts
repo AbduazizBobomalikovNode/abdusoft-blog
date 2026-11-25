@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import {
   CHANNEL_CAPTION_HARD_LIMIT,
   CHANNEL_TEXT_HARD_LIMIT,
@@ -48,7 +48,7 @@ export type ChoiceForSend = { selection: ChannelSelection; fallback: boolean };
  * Belgi yo'q (yoki buzilgan / versiyasi yo'qolgan) bo'lsa — standart tanlov va `fallback: true`.
  */
 export async function resolveChoiceForSend(postId: string): Promise<ChoiceForSend | null> {
-  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  const [post] = await db.select().from(posts).where(and(eq(posts.id, postId), isNull(posts.deletedAt))).limit(1);
   if (!post) return null;
   const stored = parseStoredChoice(post.channelChoice);
   if (stored) {

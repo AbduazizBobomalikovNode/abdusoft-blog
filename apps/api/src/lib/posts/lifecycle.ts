@@ -1,4 +1,4 @@
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, isNull, lte } from "drizzle-orm";
 import { ChannelPlanSchema, type ChannelPlan } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { user } from "../../db/auth-schema.js";
@@ -47,7 +47,12 @@ async function transition(
   spec: TransitionSpec,
 ): Promise<ServiceResult<TransitionData>> {
   return db.transaction(async (tx): Promise<ServiceResult<TransitionData>> => {
-    const [before] = await tx.select().from(posts).where(eq(posts.id, id)).for("update").limit(1);
+    const [before] = await tx
+      .select()
+      .from(posts)
+      .where(and(eq(posts.id, id), isNull(posts.deletedAt)))
+      .for("update")
+      .limit(1);
     if (!before) return fail("not_found", "Topilmadi");
 
     const guarded = spec.guard?.(before);
@@ -192,7 +197,7 @@ export async function publishDuePosts(now: Date = new Date()): Promise<void> {
   const due = await db
     .select({ id: posts.id })
     .from(posts)
-    .where(and(eq(posts.status, "scheduled"), lte(posts.scheduledAt, now)));
+    .where(and(eq(posts.status, "scheduled"), isNull(posts.deletedAt), lte(posts.scheduledAt, now)));
 
   for (const { id } of due) {
     const result = await executePublish(SCHEDULER_ACTOR, id, { kind: "scheduled" }, (post) =>
@@ -343,26 +348,4 @@ export async function requestPostChanges(
     }),
   });
   return result.ok ? ok(toLifecycleSummary(result.data.after)) : (result);
-}
-
-/** `DELETE /admin/posts/:id` — faqat `draft`/`archived` (admin). */
-export async function deletePost(actor: Actor, id: string): Promise<ServiceResult<null>> {
-  const denied = requireAdminActor(actor);
-  if (denied) return denied;
-  const post = await loadPost(db, id);
-  if (!post) return fail("not_found", "Topilmadi");
-  if (post.status !== "draft" && post.status !== "archived") {
-    return fail("conflict", "Chop etilgan postni o'chirish uchun avval uni qoralamaga qaytaring yoki arxivlang");
-  }
-  await db.transaction(async (tx) => {
-    await tx.delete(posts).where(eq(posts.id, id));
-    await recordAudit(tx, actor, {
-      action: "post.delete",
-      entityType: "post",
-      entityId: id,
-      summary: `Post o'chirildi: ${postLabel(post)}`,
-      meta: { status: post.status, slug: post.slug },
-    });
-  });
-  return ok(null);
 }

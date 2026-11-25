@@ -65,7 +65,7 @@ describe("posts service — staff rules are enforced without HTTP", () => {
       svc.schedulePost(actor, post.id, { scheduledAt: new Date().toISOString() }),
       svc.approvePost(actor, post.id),
       svc.requestPostChanges(actor, post.id, "x"),
-      svc.deletePost(actor, post.id),
+      svc.trashPost(actor, post.id),
     ]);
     for (const result of results) expect(result).toMatchObject({ ok: false, error: { kind: "forbidden" } });
   });

@@ -92,6 +92,13 @@
       "when": 1795608078111,
       "tag": "0012_perfect_tana_nile",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795608340363,
+      "tag": "0013_minor_juggernaut",
+      "breakpoints": true
     }
   ]
 }

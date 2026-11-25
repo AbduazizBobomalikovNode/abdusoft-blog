@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { StatsRangeSchema } from "@blog/shared";
 import { db } from "../db/index.js";
 import { posts } from "../db/schema.js";
@@ -93,7 +93,7 @@ export const adminStatsRoute = new Hono()
     const [post] = await db
       .select({ id: posts.id, slug: posts.slug, title: posts.title, status: posts.status, likesCount: posts.likesCount, dislikesCount: posts.dislikesCount, viewsCount: posts.viewsCount, commentsCount: posts.commentsCount })
       .from(posts)
-      .where(eq(posts.id, id))
+      .where(and(eq(posts.id, id), isNull(posts.deletedAt)))
       .limit(1);
 
     if (!post) return c.json({ error: "Topilmadi" }, 404);

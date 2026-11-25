@@ -63,7 +63,7 @@ export async function recoverInterruptedChannelSends(now: Date = new Date()): Pr
   const rows = await db
     .update(posts)
     .set({ channelSendAt: now })
-    .where(and(eq(posts.status, "published"), isNotNull(posts.channelPlan), isNull(posts.channelSendAt)))
+    .where(and(eq(posts.status, "published"), isNull(posts.deletedAt), isNotNull(posts.channelPlan), isNull(posts.channelSendAt)))
     .returning();
   return rows.length;
 }
@@ -84,7 +84,7 @@ export async function runDueChannelSends(now: Date = new Date()): Promise<void> 
   const due = await db
     .select({ id: posts.id })
     .from(posts)
-    .where(and(eq(posts.status, "published"), isNotNull(posts.channelSendAt), lte(posts.channelSendAt, now)));
+    .where(and(eq(posts.status, "published"), isNull(posts.deletedAt), isNotNull(posts.channelSendAt), lte(posts.channelSendAt, now)));
 
   for (const { id } of due) {
     await runChannelPlanFor(id, now);
@@ -99,7 +99,7 @@ export async function runChannelPlanFor(id: string, now: Date = new Date()): Pro
   const [claimed] = await db
     .update(posts)
     .set({ channelSendAt: null })
-    .where(and(eq(posts.id, id), eq(posts.status, "published"), isNotNull(posts.channelSendAt)))
+    .where(and(eq(posts.id, id), eq(posts.status, "published"), isNull(posts.deletedAt), isNotNull(posts.channelSendAt)))
     .returning();
   if (!claimed) return { state: "skipped" }; // boshqa tick/jarayon allaqachon oldi
 
@@ -176,7 +176,7 @@ export async function sendMarkedChoiceNow(postId: string): Promise<PlanOutcome> 
   await db
     .update(posts)
     .set({ channelPlan: { useChoice: true, delayMinutes: 0, attempts: 0 }, channelSendAt: now })
-    .where(and(eq(posts.id, postId), eq(posts.status, "published")));
+    .where(and(eq(posts.id, postId), eq(posts.status, "published"), isNull(posts.deletedAt)));
   return runChannelPlanFor(postId, now);
 }
 
