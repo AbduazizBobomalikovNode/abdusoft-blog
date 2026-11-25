@@ -37,6 +37,9 @@ app.use(
   cors({
     origin: config.WEB_ORIGIN,
     credentials: true,
+    // Brauzer cross-origin javobda faqat shu header'larni JS'ga ko'rsatadi: admin panel
+    // 429 javobidagi `Retry-After`ni o'qib, "qancha kutish kerak"ligini aytadi.
+    exposeHeaders: ["Retry-After"],
   }),
 );
 
