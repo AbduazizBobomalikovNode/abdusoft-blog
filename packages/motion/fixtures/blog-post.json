@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "title": "Zod bilan API chegarasini himoyalash",
+  "theme": "dark",
+  "siteName": "abdusoft",
+  "format": "landscape",
+  "defaultTransition": "fade",
+  "scenes": [
+    {
+      "type": "title",
+      "id": "intro",
+      "kicker": "abdusoft blog · TypeScript",
+      "title": "Zod bilan API chegarasini himoyalang",
+      "subtitle": "Kiruvchi maʼlumotga ishonmang: uni chegarada tekshiring va turlarni bepul oling.",
+      "tags": [
+        "TypeScript",
+        "zod",
+        "API",
+        "xavfsizlik"
+      ]
+    },
+    {
+      "type": "bullets",
+      "id": "why",
+      "heading": "Nega aynan chegarada tekshiriladi?",
+      "items": [
+        "Tashqaridan kelgan har bir maʼlumot gumonli",
+        "TypeScript turlari ish vaqtida mavjud emas",
+        "Bitta sxema: ham tekshiruv, ham tur",
+        "Xatolar aniq yoʻl bilan qaytadi"
+      ]
+    },
+    {
+      "type": "code",
+      "id": "schema",
+      "language": "typescript",
+      "fileName": "schema.ts",
+      "typing": true,
+      "code": "import { z } from \"zod\";\n\nexport const Post = z.strictObject({\n  title: z.string().min(1).max(80),\n  tags: z.array(z.string()).max(5),\n});\n\nexport type Post = z.infer<typeof Post>;\n",
+      "steps": [
+        {
+          "lines": {
+            "from": 3,
+            "to": 6
+          },
+          "label": "Sxema chegarani tavsiflaydi"
+        },
+        {
+          "lines": {
+            "from": 8,
+            "to": 8
+          },
+          "label": "Tur sxemadan olinadi, qayta yozish shart emas"
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "id": "usage",
+      "language": "typescript",
+      "fileName": "route.ts",
+      "code": "const result = Post.safeParse(input);\n\nif (!result.success) {\n  return c.json({ error: result.error.issues }, 400);\n}\n\n// toʻgʻri tiplangan, tekshirilgan qiymat\nconst post = result.data;\n",
+      "steps": [
+        {
+          "lines": {
+            "from": 1,
+            "to": 1
+          },
+          "label": "Tekshiruv istisno otmaydi"
+        },
+        {
+          "lines": {
+            "from": 3,
+            "to": 5
+          },
+          "label": "Xato boʻlsa, aniq yoʻl bilan 400 qaytadi"
+        },
+        {
+          "lines": {
+            "from": 8,
+            "to": 8
+          },
+          "label": "Shundan keyin post toʻliq tiplangan"
+        }
+      ]
+    },
+    {
+      "type": "outro",
+      "id": "outro",
+      "cta": "Toʻliq maqolani blogda oʻqing",
+      "url": "blog.abdusoft.uz"
+    }
+  ]
+}

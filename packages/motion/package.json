@@ -1,0 +1,44 @@
+{
+  "name": "@blog/motion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic storyboard-to-video engine (Remotion) for blog explainers",
+  "exports": {
+    ".": "./src/index.ts",
+    "./render": "./src/render/index.ts"
+  },
+  "bin": {
+    "blog-motion": "./src/cli.ts"
+  },
+  "scripts": {
+    "motion": "node src/cli.ts",
+    "schema": "node src/cli.ts schema --out storyboard.schema.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:render": "MOTION_RENDER_TESTS=1 vitest run src/render.smoke.test.ts"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.536",
+    "@remotion/renderer": "4.0.536",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.536",
+    "shiki": "^4.4.3",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.38.0",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9.38.0",
+    "fontkit": "^2.0.4",
+    "@types/fontkit": "^2.0.8",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}

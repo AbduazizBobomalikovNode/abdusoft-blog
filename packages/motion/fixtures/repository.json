@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "title": "abdusoft-blog repozitoriysi",
+  "theme": "light",
+  "siteName": "abdusoft",
+  "format": "landscape",
+  "defaultTransition": "slide",
+  "accent": "#4f46e5",
+  "scenes": [
+    {
+      "type": "title",
+      "id": "intro",
+      "kicker": "GitHub repozitoriy",
+      "title": "abdusoft-blog: shaxsiy blog platformasi",
+      "subtitle": "Next.js, Hono va Postgres asosidagi monorepo. Bir buyruqda ishga tushadi.",
+      "tags": [
+        "Next.js",
+        "Hono",
+        "pnpm",
+        "monorepo"
+      ]
+    },
+    {
+      "type": "terminal",
+      "id": "install",
+      "title": "~/abdusoft-blog",
+      "lines": [
+        {
+          "kind": "command",
+          "text": "git clone https://github.com/AbduazizBobomalikovNode/abdusoft-blog"
+        },
+        {
+          "kind": "output",
+          "text": "Cloning into 'abdusoft-blog'... done.",
+          "tone": "muted"
+        },
+        {
+          "kind": "command",
+          "text": "cd abdusoft-blog && pnpm install"
+        },
+        {
+          "kind": "output",
+          "text": "Packages: +1253",
+          "tone": "muted"
+        },
+        {
+          "kind": "output",
+          "text": "Done in 23s",
+          "tone": "success"
+        },
+        {
+          "kind": "command",
+          "text": "pnpm dev"
+        },
+        {
+          "kind": "output",
+          "text": "web  ready on http://localhost:3000"
+        },
+        {
+          "kind": "output",
+          "text": "api  listening on http://localhost:4000",
+          "tone": "success"
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "id": "api",
+      "language": "typescript",
+      "fileName": "apps/api/src/app.ts",
+      "typing": true,
+      "code": "import { Hono } from \"hono\";\nimport { PostSettingsSchema } from \"@blog/shared\";\n\nconst app = new Hono();\n\napp.get(\"/health\", (c) => c.json({ ok: true }));\n\napp.post(\"/posts\", async (c) => {\n  const body = PostSettingsSchema.parse(await c.req.json());\n  return c.json(body, 201);\n});\n\nexport default app;\n",
+      "steps": [
+        {
+          "lines": {
+            "from": 1,
+            "to": 2
+          },
+          "label": "Hono va umumiy zod sxemalar paketi"
+        },
+        {
+          "lines": {
+            "from": 6,
+            "to": 6
+          },
+          "label": "Sogʻlomlik tekshiruvi uchun yengil marshrut"
+        },
+        {
+          "lines": {
+            "from": 8,
+            "to": 11
+          },
+          "label": "Kiruvchi soʻrov chegarada tekshiriladi"
+        }
+      ]
+    },
+    {
+      "type": "outro",
+      "id": "outro",
+      "cta": "Repozitoriyni GitHub’da koʻring",
+      "url": "github.com/AbduazizBobomalikovNode/abdusoft-blog"
+    }
+  ]
+}
