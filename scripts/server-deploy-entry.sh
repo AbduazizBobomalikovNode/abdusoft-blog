@@ -5,9 +5,10 @@
 #   restrict,command="/home/abdusoft/bin/abdusoft-blog-deploy-entry" ssh-ed25519 AAAA...
 #
 # Qabul qilinadigan so'rovlar (SSH_ORIGINAL_COMMAND yoki qo'lda 1-argument):
-#   <40 belgili kichik hex SHA> [<64 belgili kichik hex sha256>]   — deploy
-#   status                                                          — hech narsani o'zgartirmaydi
-#   rollback                                                        — FAQAT qo'lda (SSH orqali emas)
+#   <40 belgili kichik hex SHA> <64 belgili kichik hex sha256>   — deploy (hash MAJBURIY)
+#   status                                                        — hech narsani o'zgartirmaydi
+#   rollback                                                      — FAQAT qo'lda (SSH orqali emas)
+#   --force <sha> <sha256>                                        — FAQAT qo'lda: shu commit allaqachon ishlayotgan bo'lsa ham qayta deploy
 # Boshqa har qanday narsa shell'ga umuman berilmaydi — rad etiladi (kod 64).
 #
 # Wrapper o'zi deyarli hech narsa qilmaydi: origin/main'ni fetch qiladi va
@@ -22,7 +23,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Chaqiruvchi muhitidan hech qanday sozlama olinmaydi: avval hammasini tozalaymiz,
 # so'ng faqat wrapper yonidagi (egasi boshqaradigan) conf faylidan o'qiymiz.
-CONF_NAMES="LIVE_DIR SRC_DIR STATE_DIR NODE_BIN REPO_URL RELEASE_BASE_URL BACKUP_SCRIPT SERVICES API_HEALTH_URL WEB_HEALTH_URL HEALTH_TRIES HEALTH_INTERVAL MAX_BUNDLE_BYTES"
+CONF_NAMES="LIVE_DIR SRC_DIR STATE_DIR NODE_BIN REPO_URL RELEASE_BASE_URL BUNDLE_KEY_FILE BACKUP_SCRIPT SERVICES API_HEALTH_URL API_DB_URL WEB_BASE_URL HEALTH_TRIES HEALTH_INTERVAL MAX_BUNDLE_BYTES MAX_UNCOMPRESSED_BYTES MAX_ENTRIES MIN_FREE_MB LOG_MAX_BYTES TIMEOUT_GIT TIMEOUT_PNPM_FETCH TIMEOUT_INSTALL TIMEOUT_BACKUP TIMEOUT_MIGRATE TIMEOUT_RESTART TIMEOUT_DOWNLOAD"
 for n in $CONF_NAMES; do unset "BLOGDEPLOY_$n"; done
 CONF="$HERE/abdusoft-blog-deploy.conf"
 if [ -f "$CONF" ]; then
@@ -36,7 +37,7 @@ REPO_URL="${BLOGDEPLOY_REPO_URL:-https://github.com/AbduazizBobomalikovNode/abdu
 export PATH="$NODE_BIN:/usr/local/bin:/usr/bin:/bin"
 
 reject() {
-  echo "Rad etildi: faqat '<40-belgili-sha> [<64-belgili-sha256>]' yoki 'status' qabul qilinadi." >&2
+  echo "Rad etildi: faqat '<40-belgili-sha> <64-belgili-sha256>' yoki 'status' qabul qilinadi." >&2
   exit 64
 }
 
@@ -54,19 +55,23 @@ fi
 MODE=""
 SHA=""
 HASH=""
-if [ "$REQ" = "status" ]; then
+FORCE=0
+# --force faqat qo'lda (SSH_ORIGINAL_COMMAND yo'q): forced-command yo'lida u oddiy noto'g'ri argument.
+if [ "$FORCED" -eq 0 ] && [ "${REQ:0:8}" = "--force " ]; then
+  FORCE=1
+  REQ="${REQ:8}"
+fi
+if [ "$REQ" = "status" ] && [ "$FORCE" -eq 0 ]; then
   MODE=status
-elif [ "$REQ" = "rollback" ] && [ "$FORCED" -eq 0 ]; then
+elif [ "$REQ" = "rollback" ] && [ "$FORCED" -eq 0 ] && [ "$FORCE" -eq 0 ]; then
   MODE=rollback
 else
   SHA="${REQ%% *}"
   is_hex 40 "$SHA" || reject
   REST="${REQ#"$SHA"}"
-  if [ -n "$REST" ]; then
-    [ "${REST:0:1}" = " " ] || reject
-    HASH="${REST:1}"
-    is_hex 64 "$HASH" || reject
-  fi
+  [ "${REST:0:1}" = " " ] || reject
+  HASH="${REST:1}"
+  is_hex 64 "$HASH" || reject
   MODE=deploy
 fi
 
@@ -88,10 +93,11 @@ fi
 
 # ---- skriptni origin/main'dan olish ---------------------------------------
 export GIT_TERMINAL_PROMPT=0
+T_GIT="${BLOGDEPLOY_TIMEOUT_GIT:-120}"
 if [ ! -d "$SRC_DIR/.git" ]; then
-  git clone --quiet "$REPO_URL" "$SRC_DIR"
+  timeout -k 10 "$T_GIT" git clone --quiet "$REPO_URL" "$SRC_DIR"
 fi
-if ! git -C "$SRC_DIR" fetch --quiet --prune origin '+refs/heads/main:refs/remotes/origin/main'; then
+if ! timeout -k 10 "$T_GIT" git -C "$SRC_DIR" fetch --quiet --prune origin '+refs/heads/main:refs/remotes/origin/main'; then
   if [ "$MODE" = rollback ]; then
     echo "Ogohlantirish: fetch muvaffaqiyatsiz — oxirgi olingan origin/main skriptidan foydalaniladi." >&2
   else
@@ -113,9 +119,9 @@ done
 set +e
 if [ "$MODE" = rollback ]; then
   env -i "${ENVARGS[@]}" /bin/bash "$TMP" rollback
-elif [ -n "$HASH" ]; then
-  env -i "${ENVARGS[@]}" /bin/bash "$TMP" deploy "$SHA" "$HASH"
+elif [ "$FORCE" -eq 1 ]; then
+  env -i "${ENVARGS[@]}" /bin/bash "$TMP" deploy --force "$SHA" "$HASH"
 else
-  env -i "${ENVARGS[@]}" /bin/bash "$TMP" deploy "$SHA"
+  env -i "${ENVARGS[@]}" /bin/bash "$TMP" deploy "$SHA" "$HASH"
 fi
 exit $?
