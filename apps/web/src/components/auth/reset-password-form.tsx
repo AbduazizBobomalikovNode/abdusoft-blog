@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2, LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { BackLink } from "@/components/auth/auth-shell";
 import { PasswordInput } from "@/components/auth/password-input";
 import { authClient } from "@/lib/auth-client";
 import { NEW_PASSWORD_MIN } from "@/lib/password-change";
@@ -61,7 +62,11 @@ export function ResetPasswordForm() {
 
   if (link === null) {
     // Server renderi / gidratsiyadan oldin: bo'sh karta (token hali o'qilmagan).
-    return <Card aria-busy="true"><CardContent className="h-40" /></Card>;
+    return (
+      <Card aria-busy="true">
+        <CardContent className="h-40" />
+      </Card>
+    );
   }
 
   if (done) {
@@ -88,22 +93,25 @@ export function ResetPasswordForm() {
     const view = linkDead || link.kind === "ready" ? describeLinkState({ kind: "invalid" }) : describeLinkState(link);
     const retryable = link.kind === "rate_limited" && !linkDead;
     return (
-      <Card>
-        <CardContent className="flex flex-col gap-4 pt-6">
-          <div role="alert" className="flex items-start gap-2">
-            <LinkIcon className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
-            <div className="flex flex-col gap-1">
-              <h2 className="text-sm font-medium">{view.title}</h2>
-              <p className="text-sm text-muted-foreground">{view.message}</p>
+      <>
+        <Card>
+          <CardContent className="flex flex-col gap-4 pt-6">
+            <div role="alert" className="flex items-start gap-2">
+              <LinkIcon className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
+              <div className="flex flex-col gap-1">
+                <h2 className="text-sm font-medium">{view.title}</h2>
+                <p className="text-sm text-muted-foreground">{view.message}</p>
+              </div>
             </div>
-          </div>
-          {retryable ? null : (
-            <Button asChild variant="outline">
-              <Link href={FORGOT_PAGE_PATH}>Yangi havola so&apos;rash</Link>
-            </Button>
-          )}
-        </CardContent>
-      </Card>
+            {retryable ? null : (
+              <Button asChild variant="outline">
+                <Link href={FORGOT_PAGE_PATH}>Yangi havola so&apos;rash</Link>
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+        <BackLink />
+      </>
     );
   }
 
@@ -172,48 +180,53 @@ export function ResetPasswordForm() {
   }
 
   return (
-    <Card>
-      <CardContent className="pt-6">
-        <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
-          <PasswordInput
-            id="reset-new-password"
-            label="Yangi parol"
-            value={newPassword}
-            onChange={(v) => {
-              setNewPassword(v);
-              clearField("newPassword");
-            }}
-            error={errors.newPassword}
-            hint={`Kamida ${NEW_PASSWORD_MIN} ta belgi.`}
-            disabled={saving}
-            autoFocus
-          />
-          <PasswordInput
-            id="reset-confirm-password"
-            label="Yangi parolni takrorlang"
-            value={confirmPassword}
-            onChange={(v) => {
-              setConfirmPassword(v);
-              clearField("confirmPassword");
-            }}
-            error={errors.confirmPassword}
-            disabled={saving}
-          />
+    <>
+      <Card>
+        <CardContent className="pt-6">
+          <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
+            <PasswordInput
+              id="reset-new-password"
+              label="Yangi parol"
+              toggleName="Yangi parol"
+              value={newPassword}
+              onChange={(v) => {
+                setNewPassword(v);
+                clearField("newPassword");
+              }}
+              error={errors.newPassword}
+              hint={`Kamida ${NEW_PASSWORD_MIN} ta belgi.`}
+              disabled={saving}
+              autoFocus
+            />
+            <PasswordInput
+              id="reset-confirm-password"
+              label="Yangi parolni takrorlang"
+              toggleName="Takroriy parol"
+              value={confirmPassword}
+              onChange={(v) => {
+                setConfirmPassword(v);
+                clearField("confirmPassword");
+              }}
+              error={errors.confirmPassword}
+              disabled={saving}
+            />
 
-          {formError ? (
-            <p role="alert" className="text-sm text-destructive">
-              {formError}
+            {formError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {formError}
+              </p>
+            ) : null}
+
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saqlanmoqda…" : "Parolni o'rnatish"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Parol o&apos;rnatilgach barcha qurilmalardagi sessiyalar tugatiladi.
             </p>
-          ) : null}
-
-          <Button type="submit" disabled={saving}>
-            {saving ? "Saqlanmoqda…" : "Parolni o'rnatish"}
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            Parol o&apos;rnatilgach barcha qurilmalardagi sessiyalar tugatiladi.
-          </p>
-        </form>
-      </CardContent>
-    </Card>
+          </form>
+        </CardContent>
+      </Card>
+      <BackLink />
+    </>
   );
 }

@@ -10,9 +10,10 @@ export const metadata: Metadata = {
   referrer: "no-referrer",
 };
 
+// "Kirish sahifasiga qaytish" havolasini forma o'zi chiqaradi (muvaffaqiyatdan keyin takrorlanmasligi uchun).
 export default function ResetPasswordPage() {
   return (
-    <AuthShell subtitle="Yangi parol o'rnatish">
+    <AuthShell subtitle="Yangi parol o'rnatish" backHref={null}>
       <ResetPasswordForm />
     </AuthShell>
   );
