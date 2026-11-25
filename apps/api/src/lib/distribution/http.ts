@@ -17,16 +17,36 @@ export interface ProviderDeps {
   now?: () => Date;
   /** Test uchun soxta kutish (polling). */
   sleep?: (ms: number) => Promise<void>;
-  /** Bitta so'rov uchun timeout (ms). Standart 30 soniya. */
+  /** Bitta so'rov uchun timeout (ms) — sarlavhalar VA javob tanasini o'qishni qamrab oladi. Standart 30 soniya. */
   timeoutMs?: number;
+  /** O'qishga tayyor javob tanasi chegarasi (bayt). Standart 4 MiB. */
+  maxResponseBytes?: number;
 }
 
 /**
  * - `read`: GET — qayta urinish xavfsiz.
  * - `safe_write`: yozadi, lekin qayta urinish zararsiz (token almashtirish, konteyner/yuklash boshlash, o'chirish...).
- * - `create`: ko'rinadigan post yaratadi — timeout/5xx = `outcome_unknown`, ko'r-ko'rona qayta urinmang.
+ * - `create`: ko'rinadigan post yaratadi — timeout/uzilish/408/5xx = `outcome_unknown`, ko'r-ko'rona qayta urinmang.
+ *   Bu qoida HAR QANDAY provider `refine` qoidasidan USTUN (`fail` ichida birinchi tekshiriladi).
+ * - `refresh`: rotatsiyali refresh token almashtirish — timeout/uzilish/408/5xx = `refresh_ambiguous` (token almashgan bo'lishi mumkin).
  */
-export type RequestMode = "read" | "safe_write" | "create";
+export type RequestMode = "read" | "safe_write" | "create" | "refresh";
+
+export const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+function ambiguousError(mode: RequestMode, detail: string, status?: number): DistributionError | undefined {
+  if (mode === "create") {
+    return new DistributionError({ kind: "outcome_unknown", status, message: `Yaratish so'rovi natijasi noma'lum (${detail}). Post yaratilgan bo'lishi mumkin — qayta urinmang, platformani tekshiring.` });
+  }
+  if (mode === "refresh") {
+    return new DistributionError({
+      kind: "refresh_ambiguous",
+      status,
+      message: `Token yangilash natijasi noma'lum (${detail}): token almashtirilgan bo'lishi mumkin. Keyingi yangilash ham xato bersa, akkauntni qayta ulang.`,
+    });
+  }
+  return undefined;
+}
 
 export interface HttpRequest {
   method: "GET" | "POST" | "PUT" | "DELETE";
@@ -78,63 +98,58 @@ export class HostClient {
     const url = this.assertAllowed(req.url);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    let res: Response;
     try {
-      res = await this.deps.fetch(url.toString(), {
-        method: req.method,
-        headers: req.headers,
-        body: req.body as RequestInit["body"],
-        redirect: "manual",
-        signal: controller.signal,
-      });
-    } catch (e) {
-      const aborted = controller.signal.aborted || (e instanceof Error && e.name === "AbortError");
-      const reason = aborted ? "timeout" : "ulanish uzildi";
-      if (req.mode === "create") {
-        throw new DistributionError({
-          kind: "outcome_unknown",
-          message: `Yaratish so'rovi natijasi noma'lum (${reason}). Post yaratilgan bo'lishi mumkin — qayta urinmang, platformani tekshiring.`,
+      let res: Response;
+      try {
+        res = await this.deps.fetch(url.toString(), {
+          method: req.method,
+          headers: req.headers,
+          body: req.body as RequestInit["body"],
+          redirect: "manual",
+          signal: controller.signal,
         });
+      } catch (e) {
+        const aborted = controller.signal.aborted || (e instanceof Error && e.name === "AbortError");
+        const detail = aborted ? "timeout" : "ulanish uzildi";
+        throw ambiguousError(req.mode, detail) ?? new DistributionError({ kind: "transient", message: `Tarmoq xatosi (${detail})` });
       }
-      throw new DistributionError({ kind: "transient", message: `Tarmoq xatosi (${reason})` });
+
+      if (res.status === 0 || (res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
+        // Redirect KUZATILMAYDI — boshqa host'ga yo'naltirish imkoni yo'q.
+        throw ambiguousError(req.mode, "kutilmagan redirect", res.status || undefined) ??
+          new DistributionError({ kind: "transient", status: res.status || undefined, message: "Kutilmagan redirect — kuzatilmadi" });
+      }
+
+      // Timeout javob TANASINI o'qishni ham qamraydi (tugamaydigan tana osilib qolmaydi) va hajm cheklangan.
+      let text: string;
+      try {
+        text = await readBody(res, controller.signal, this.deps.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
+      } catch (e) {
+        const reason = e instanceof BodyLimitError ? "javob juda katta" : controller.signal.aborted ? "tana o'qishda timeout" : "javob tanasi uzildi";
+        throw ambiguousError(req.mode, reason, res.status) ?? new DistributionError({ kind: "transient", status: res.status, message: `Javob o'qilmadi (${reason})` });
+      }
+      let json: unknown;
+      if (text) {
+        try {
+          json = JSON.parse(text);
+        } catch {
+          json = undefined;
+        }
+      }
+      return { status: res.status, headers: res.headers, text, json };
     } finally {
       clearTimeout(timer);
     }
-
-    if (res.status === 0 || (res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
-      // Redirect KUZATILMAYDI — boshqa host'ga yo'naltirish imkoni yo'q.
-      throw new DistributionError({
-        kind: req.mode === "create" ? "outcome_unknown" : "transient",
-        status: res.status || undefined,
-        message: "Kutilmagan redirect — kuzatilmadi",
-      });
-    }
-
-    let text = "";
-    try {
-      text = await res.text();
-    } catch {
-      if (req.mode === "create" && res.status >= 200 && res.status < 300) {
-        // Javob keldi, lekin tanasi uzildi — yaratilgan bo'lishi mumkin; id sarlavhadan o'qiladi.
-        text = "";
-      } else if (req.mode === "create") {
-        throw new DistributionError({ kind: "outcome_unknown", message: "Javob tanasi uzildi — natija noma'lum" });
-      }
-    }
-    let json: unknown;
-    if (text) {
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = undefined;
-      }
-    }
-    return { status: res.status, headers: res.headers, text, json };
   }
 
   /** Muvaffaqiyatsiz javobni (2xx emas) `DistributionError`ga aylantiradi. `refine` — platformaga xos qoidalar. */
   fail(res: HttpResponse, mode: RequestMode, refine?: (r: HttpResponse, msg: string) => DistributionError | undefined): DistributionError {
     const platformMessage = sanitizeMessage(extractMessage(res), this.secrets);
+    // Create/refresh rejimida server xatosi har qanday provider qoidasidan USTUN: natija noma'lum, qayta urinish xavfli.
+    if (res.status === 408 || res.status >= 500) {
+      const amb = ambiguousError(mode, `server xatosi ${res.status}`, res.status);
+      if (amb) return new DistributionError({ kind: amb.kind, message: amb.message, status: res.status, platformMessage: platformMessage || undefined });
+    }
     const refined = refine?.(res, platformMessage);
     if (refined) return refined;
     const retryAt = parseRetryAfter(res.headers.get("retry-after"), this.deps.now?.() ?? new Date());
@@ -149,9 +164,7 @@ export class HostClient {
       case res.status === 429:
         return new DistributionError({ ...base, kind: "rate_limited", retryAt, message: "So'rovlar limiti oshib ketdi" });
       case res.status === 408 || res.status >= 500:
-        return mode === "create"
-          ? new DistributionError({ ...base, kind: "outcome_unknown", message: `Server xatosi (${res.status}) yaratish paytida — natija noma'lum, qayta urinmang` })
-          : new DistributionError({ ...base, kind: "transient", retryAt, message: `Vaqtinchalik xato (${res.status})` });
+        return new DistributionError({ ...base, kind: "transient", retryAt, message: `Vaqtinchalik xato (${res.status})` });
       default:
         return new DistributionError({ ...base, kind: "validation_rejected", message: `Platforma so'rovni rad etdi (${res.status})` });
     }
@@ -178,7 +191,7 @@ export function extractMessage(res: HttpResponse): string {
       if (typeof m === "string") return m;
     }
   }
-  return res.text.slice(0, 300);
+  return res.text;
 }
 
 export function parseRetryAfter(value: string | null, now: Date): Date | undefined {
@@ -204,3 +217,39 @@ export function str(v: unknown): string | undefined {
 }
 
 export const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+class BodyLimitError extends Error {}
+
+/** Javob tanasini abort signal va hajm chegarasi bilan o'qiydi. */
+async function readBody(res: Response, signal: AbortSignal, cap: number): Promise<string> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > cap) throw new BodyLimitError("too large");
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const aborted = new Promise<never>((_, reject) => {
+    const onAbort = () => {
+      void reader.cancel().catch(() => undefined);
+      reject(new Error("aborted"));
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  aborted.catch(() => undefined);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const loop = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > cap) {
+        void reader.cancel().catch(() => undefined);
+        throw new BodyLimitError("too large");
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  })();
+  loop.catch(() => undefined);
+  return Promise.race([loop, aborted]);
+}

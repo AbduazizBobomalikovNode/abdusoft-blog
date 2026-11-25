@@ -1,4 +1,5 @@
 import type { ChannelCheck } from "@blog/shared";
+import type { PartialRefs } from "./errors.js";
 import type { ProviderDeps } from "./http.js";
 import type { TokenPolicy, TokenStatus } from "./token-status.js";
 
@@ -32,6 +33,8 @@ export interface ProviderCapabilities {
   delete: boolean;
   /** Platformaning o'z rejalashtirishi. Hozirgi barcha platformalar uchun false — rejalashtirish chaqiruvchi tomonda. */
   nativeScheduling: false;
+  /** Qo'llanmaydigan amallar sababi (`delete: false` / `edit: false` bo'lganda). `remove`/`update` shunda `not_supported` tashlaydi. */
+  notes?: { delete?: string; edit?: string };
 }
 
 export interface ProviderLimits {
@@ -67,6 +70,12 @@ export interface ConnectedAccount {
   meta?: Record<string, string>;
 }
 
+export interface RefreshResult {
+  account: ConnectedAccount;
+  /** Javobda YANGI refresh token keldimi (rotatsiya). `false` bo'lsa `account.refreshToken` eskisi. */
+  refreshTokenRotated: boolean;
+}
+
 export interface AuthorizationUrlInput {
   creds: ClientCredentials;
   state: string;
@@ -87,8 +96,13 @@ export interface ProviderAuth {
   /** `oauth_*` uchun. Sof funksiya (tarmoqsiz). */
   buildAuthorizationUrl?(input: AuthorizationUrlInput): string;
   exchangeCode?(deps: ProviderDeps, input: ExchangeCodeInput): Promise<ConnectedAccount>;
-  /** Yangilash mumkin bo'lgan platformalar: yangi akkaunt yozuvi qaytaradi (X: yangi refresh token ham — SAQLANISHI SHART). */
-  refresh?(deps: ProviderDeps, creds: ClientCredentials, account: ConnectedAccount): Promise<ConnectedAccount>;
+  /**
+   * Yangilash mumkin bo'lgan platformalar. MUHIM (X, rotatsiyali refresh token): qaytgan `account` ni (yangi refresh token
+   * bilan) YANGI access token'dan FOYDALANISHDAN OLDIN saqlang — aks holda eski refresh token bekor bo'lib, akkaunt yo'qoladi.
+   * `refreshTokenRotated=false` — javobda yangi refresh token kelmadi (eskisi saqlandi; X hujjati rotatsiyani aniq aytmaydi — UNVERIFIED).
+   * Aloqa uzilishi/5xx: `refresh_ambiguous` — token almashgan bo'lishi mumkin; keyingi yangilash ham xato bersa, qayta ulang.
+   */
+  refresh?(deps: ProviderDeps, creds: ClientCredentials, account: ConnectedAccount): Promise<RefreshResult>;
   /** Yopishtirilgan token (GitHub): tokenni tekshiradi va akkaunt yozuvini qaytaradi. */
   connectWithToken?(deps: ProviderDeps, token: string): Promise<ConnectedAccount>;
 }
@@ -144,8 +158,13 @@ export interface PublishInput {
   image?: ImageInput;
   imageUrl?: string;
   linkMode?: "article" | "text";
-  /** GitHub: README ro'yxati uchun oxirgi postlar (yangisi birinchi). */
+  /** GitHub: README ro'yxati uchun oxirgi postlar (yangisi birinchi). GitHub uchun MAJBURIY (bo'sh bo'lmagan), boshqalar e'tiborsiz qoldiradi. */
   latestPosts?: readonly DistributionPost[];
+  /**
+   * Oldingi urinishdan qolgan TAYYOR narsalar (`DistributionError.partial`): shu bilan `publish` mavjud rasm/konteynerni
+   * qayta ishlatadi, ikkinchisini yaratmaydi. `outcome_unknown` dan keyin davom ettirishdan oldin platformani tekshiring.
+   */
+  resume?: PartialRefs;
 }
 
 export interface PublishResult {
@@ -175,8 +194,8 @@ export interface DistributionProvider {
   preflight(input: PreflightInput): ChannelCheck[];
   /** Post yaratadi. `outcome_unknown` — qayta urinmang (yuqoridagi qoida). */
   publish(ctx: ProviderContext, input: PublishInput): Promise<PublishResult>;
-  /** Postni o'chiradi (`capabilities.delete`). Idempotent bo'lmasligi mumkin. */
-  remove?(ctx: ProviderContext, externalId: string): Promise<void>;
+  /** Postni o'chiradi. `capabilities.delete=false` bo'lsa `DistributionError{kind:"not_supported"}` tashlaydi. */
+  remove(ctx: ProviderContext, externalId: string): Promise<void>;
   /** Mavjud postni yangilaydi (`capabilities.edit`). */
   update?(ctx: ProviderContext, externalId: string, input: PublishInput): Promise<PublishResult>;
 }
