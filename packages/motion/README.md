@@ -183,6 +183,12 @@ Tema qatlamida (`src/theme/presets.ts`) amalga oshirilgan, shuning uchun eski va
 
 `title` va `bullets` uchun joylashuv variantlari — 16:9 da o'ng yarmi bo'sh qolmasligi uchun: `"layout": "centered"` (markazda) yoki `"layout": "split"` (chapda aksent panel, o'ngda matn). Belgilanmasa — avvalgi ko'rinish.
 
+### Render xarajati va determinizm
+
+Bitta Mac'da (M-seriya, 8 yadro, Remotion standart parallelizmi) o'lchangan: kod sahnasi ~0.6 s render / 1 s video (2 GiB atrofida RSS, brauzer jarayonlari bilan); har intro/closing varianti 0.85-1.4 s/s; to'liq ko'rgazma (57 s) `default` presetda 0.64 s/s, `vivid` ~1.05, `neon` / `blueprint` ~0.8 s/s. Kichik serverda (4 yadro, ~2 GB bo'sh RAM) `--concurrency 2` bering. Preset fonlari ataylab statik yoki juda sekin qadamli: harakatlanuvchi katta gradient har kadrda qayta chiziladi va renderni bir necha baravar sekinlashtiradi.
+
+Bir xil storyboard bir xil kadrlarni beradi. Istisno (Chrome'ning o'zi): katta xira gradient maydonlari va yumshoq soyalar (aurora/constellation fonlari, `vivid` mesh, `neon` nuri) taxminan 10 sessiyadan birida bir necha piksel uchun <= 6/255 farq bilan bo'yaladi; `default` presetdagi matn, karta, chiziq va kod sahnalari baytma-bayt bir xil (`render.smoke.test.ts` shuni tekshiradi).
+
 ### Cheklovlar
 
 Hammasi `src/limits.ts` da; xabarlar va README shu yerdan olinadi.
