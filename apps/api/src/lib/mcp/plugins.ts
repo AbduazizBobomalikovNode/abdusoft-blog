@@ -4,12 +4,12 @@ import { jwt } from "better-auth/plugins";
 import { mcp } from "@better-auth/mcp";
 import { cimd } from "@better-auth/cimd";
 import { fetchClientMetadataResource } from "@better-auth/cimd/node";
-import { MCP_GRANTABLE_OAUTH_SCOPES, MCP_OFFLINE_SCOPE } from "@blog/shared";
+import { MCP_OFFLINE_SCOPE } from "@blog/shared";
 import { config } from "../../config.js";
 import { revokeAllConnections } from "./connections.js";
 import { MCP_CONSENT_PAGE, MCP_LOGIN_PAGE, MCP_RESOURCE_URL } from "./endpoints.js";
 import { isAllowedRedirectUri } from "./redirect-policy.js";
-import { OAUTH_SCOPES, SCOPE_DESCRIPTIONS_EN } from "./scopes.js";
+import { ALL_OAUTH_SCOPES, grantableNow, scopeDescriptionsEn } from "./scopes.js";
 
 type MetadataFetch = typeof fetchClientMetadataResource;
 
@@ -62,11 +62,14 @@ export function buildMcpPlugins(): BetterAuthPlugin[] {
       loginPage: MCP_LOGIN_PAGE,
       consentPage: MCP_CONSENT_PAGE,
       resource: MCP_RESOURCE_URL,
-      scopes: OAUTH_SCOPES,
+      scopes: ALL_OAUTH_SCOPES,
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
       clientRegistrationDefaultScopes: ["blog:read", MCP_OFFLINE_SCOPE],
-      clientRegistrationAllowedScopes: OAUTH_SCOPES,
+      // Getter: ro'yxatdan o'tgan klientning ruxsatlar SHIFTI har so'rovda joriy `MCP_WRITE_TOOLS_ENABLED` bo'yicha (Better Auth shuni saqlaydi).
+      get clientRegistrationAllowedScopes() {
+        return grantableNow();
+      },
       clientRegistrationDefaultApplicationType: "infer",
       accessTokenExpiresIn: config.MCP_ACCESS_TOKEN_TTL_SECONDS,
       refreshTokenExpiresIn: config.MCP_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60,
@@ -84,8 +87,13 @@ export function buildMcpPlugins(): BetterAuthPlugin[] {
       // `oauth-guards.ts`dagi `registrationGuard`da (IP bo'yicha va umumiy). Standart 5/daqiqa o'rniga 10/daqiqa:
       // egasi ulanishni bir necha marta qayta urinsa ham bloklanmasin. Faqat prod'da (yoki AUTH_RATE_LIMIT_ENABLED=true) faol.
       rateLimit: { register: { window: 60, max: 10 } },
-      advertisedMetadata: { scopes_supported: [...MCP_GRANTABLE_OAUTH_SCOPES] },
-      extensions: [{ metadata: () => ({ scope_descriptions: SCOPE_DESCRIPTIONS_EN }) }],
+      // Getter: har so'rovda joriy `MCP_WRITE_TOOLS_ENABLED` bo'yicha (o'chiq bo'lsa faqat o'qish e'lon qilinadi).
+      advertisedMetadata: {
+        get scopes_supported() {
+          return grantableNow();
+        },
+      },
+      extensions: [{ metadata: () => ({ scope_descriptions: scopeDescriptionsEn() }) }],
     }),
     cimd({
       fetchClientMetadataResource: cimdFetch,

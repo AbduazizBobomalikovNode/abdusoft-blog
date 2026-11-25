@@ -114,6 +114,10 @@ const EnvSchema = z.object({
   // `/mcp`ga brauzer `Origin` bilan kelganda ruxsat etiladigan qo'shimcha originlar (vergul bilan); `WEB_ORIGIN` doim ruxsat. `Origin`siz so'rovlar (Claude serveri, Claude Code) o'tadi.
   MCP_ALLOWED_ORIGINS: z.string().optional().default(""),
   MCP_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS: intEnv(3600, 1),
+  // `client_id` https URL bo'lgan (Client ID Metadata Document) authorize so'rovlari uchun IP bo'yicha ALOHIDA byudjet (ro'yxatdan o'tish byudjetidan mustaqil).
+  // Bo'sh qoldirilsa mos `MCP_REGISTRATION_RATE_LIMIT_*` qiymati olinadi (lekin hisob ALOHIDA yuritiladi).
+  MCP_CIMD_RATE_LIMIT_MAX: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).optional()),
+  MCP_CIMD_RATE_LIMIT_WINDOW_SECONDS: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).optional()),
   // `/mcp` so'rovlari: IP bo'yicha oynada ko'pi bilan MAX (0 — o'chirilgan).
   MCP_RATE_LIMIT_MAX: intEnv(300, 0),
   MCP_RATE_LIMIT_WINDOW_SECONDS: intEnv(60, 1),

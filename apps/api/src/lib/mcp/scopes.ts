@@ -1,22 +1,37 @@
-import { MCP_GRANTABLE_OAUTH_SCOPES, MCP_GRANTABLE_SCOPE_IDS, MCP_OFFLINE_SCOPE, MCP_SCOPES } from "@blog/shared";
+import { MCP_OFFLINE_SCOPE, MCP_SCOPES, MCP_SCOPE_IDS, clampToGrantable, grantableOAuthScopes, grantableScopeIds } from "@blog/shared";
+import { config } from "../../config.js";
 
 /**
- * Authorization server FAQAT hozir berilishi mumkin bo'lgan ruxsatlarni taniydi (o'qish + `offline_access`).
- * To'liq ruxsatlar modeli `@blog/shared`da qoladi, lekin yozuv vositalari yo'qligida ular berilmaydi.
+ * Hozir (HAR SO'ROVDA, `config` bo'yicha) berilishi mumkin bo'lgan ruxsatlar: `MCP_WRITE_TOOLS_ENABLED` o'chiq bo'lsa faqat
+ * o'qish + `offline_access` (PR #11 bilan bir xil), yoqilgan bo'lsa barcha yozuv ruxsatlari ham. Authorization server
+ * to'liq ro'yxatni tanib turadi (`ALL_OAUTH_SCOPES`), lekin berish faqat shu yerda hal qilinadi (ro'yxatdan o'tish,
+ * authorize, rozilik, token -> `principal.ts`).
  */
-export const OAUTH_SCOPES: string[] = [...MCP_GRANTABLE_OAUTH_SCOPES];
+export const writeToolsEnabled = (): boolean => config.MCP_WRITE_TOOLS_ENABLED;
 
-/** Ruxsat qilinmagan so'rov uchun standart: faqat o'qish + ulanishni saqlash. */
-export const DEFAULT_SCOPE_STRING = [...MCP_GRANTABLE_SCOPE_IDS, MCP_OFFLINE_SCOPE].join(" ");
+export const ALL_OAUTH_SCOPES: string[] = [...MCP_SCOPE_IDS, MCP_OFFLINE_SCOPE];
+
+export const grantableNow = (): string[] => [...grantableOAuthScopes(writeToolsEnabled())];
+export const grantableIdsNow = (): string[] => [...grantableScopeIds(writeToolsEnabled())];
+export const clampNow = (scopes: readonly string[]): string[] => clampToGrantable(scopes, writeToolsEnabled());
+
+/**
+ * Ruxsat so'ralmagan so'rov uchun standart: faqat o'qish + ulanishni saqlash. Yozuv HECH QACHON standart emas — klient
+ * yozuv ruxsatlarini aniq so'rashi va foydalanuvchi rozilik sahifasida belgilashi kerak.
+ */
+export const DEFAULT_SCOPE_STRING = ["blog:read", MCP_OFFLINE_SCOPE].join(" ");
 
 /**
  * `/mcp` 401 javobidagi `scope` — berilishi mumkin bo'lgan BARCHA ruxsatlar + `offline_access`: klient aynan shularni so'raydi,
  * aks holda refresh token berilmaydi.
  */
-export const CHALLENGE_SCOPES: string[] = [...MCP_GRANTABLE_OAUTH_SCOPES];
+export const challengeScopes = (): string[] => grantableNow();
 
-/** Metadata (`scope_descriptions`) uchun inglizcha tavsiflar (faqat berilishi mumkinlari). */
-export const SCOPE_DESCRIPTIONS_EN: Record<string, string> = {
-  ...Object.fromEntries(MCP_SCOPES.filter((scope) => MCP_GRANTABLE_SCOPE_IDS.includes(scope.id)).map((scope) => [scope.id, scope.english])),
-  [MCP_OFFLINE_SCOPE]: "Stay connected: lets the application renew its access without asking you to sign in again.",
-};
+/** Metadata (`scope_descriptions`) uchun inglizcha tavsiflar (faqat hozir berilishi mumkinlari). */
+export function scopeDescriptionsEn(): Record<string, string> {
+  const ids = grantableIdsNow();
+  return {
+    ...Object.fromEntries(MCP_SCOPES.filter((scope) => ids.includes(scope.id)).map((scope) => [scope.id, scope.english])),
+    [MCP_OFFLINE_SCOPE]: "Stay connected: lets the application renew its access without asking you to sign in again.",
+  };
+}

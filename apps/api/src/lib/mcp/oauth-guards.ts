@@ -1,5 +1,5 @@
 import type { Context, Next } from "hono";
-import { MCP_OFFLINE_SCOPE, clampToGrantable, parseScopeString } from "@blog/shared";
+import { MCP_OFFLINE_SCOPE, MCP_REQUIRED_SCOPE_ID, parseScopeString } from "@blog/shared";
 import { config } from "../../config.js";
 import { auth } from "../auth.js";
 import { handleAuthRequest } from "../auth-handler.js";
@@ -7,9 +7,9 @@ import { recordAuditSafe } from "../audit.js";
 import { clientIp } from "../device.js";
 import { consumeRateLimit } from "../rate-limit.js";
 import { MCP_RESOURCE_URL } from "./endpoints.js";
-import { trimUnconsentedClients } from "./connections.js";
+import { clientExists, trimUnconsentedClients, widenClientScopes } from "./connections.js";
 import { isAllowedRedirectUri } from "./redirect-policy.js";
-import { DEFAULT_SCOPE_STRING } from "./scopes.js";
+import { DEFAULT_SCOPE_STRING, clampNow, writeToolsEnabled } from "./scopes.js";
 
 const MAX_REGISTRATION_BODY = 16 * 1024;
 const MAX_REDIRECT_URIS = 5;
@@ -80,7 +80,7 @@ export async function registrationGuard(c: Context, next: Next) {
     console.error("MCP: ishlatilmagan klientlarni qisqartirib bo'lmadi:", error instanceof Error ? error.message : error),
   );
 
-  const requested = typeof body.scope === "string" ? clampToGrantable(parseScopeString(body.scope)) : [];
+  const requested = typeof body.scope === "string" ? clampNow(parseScopeString(body.scope)) : [];
   const forwarded = { ...body, token_endpoint_auth_method: "none", scope: requested.length > 0 ? requested.join(" ") : DEFAULT_SCOPE_STRING };
   const headers = new Headers(c.req.raw.headers);
   headers.delete("content-length");
@@ -97,7 +97,9 @@ export async function registrationGuard(c: Context, next: Next) {
  * 3. `resource` (RFC 8707) yo'q bo'lsa `MCP_RESOURCE_URL` qo'shiladi: `resource`siz token shaffof bo'lib `/mcp`da 401
  *    bergan bo'lardi. Aniq boshqa `resource` tegilmaydi (AS `invalid_target` bilan rad etadi).
  * 4. `client_id` https URL bo'lsa (Client ID Metadata Document) — begona URL'lar orqali server tashqi so'rovlar
- *    ko'paytirmasligi uchun `/register` bilan bir xil IP chegarasi qo'llanadi.
+ *    ko'paytirmasligi uchun IP bo'yicha ALOHIDA chegara (`MCP_CIMD_RATE_LIMIT_*`) qo'llanadi.
+ * 5. Yozuv kaliti yoqilgan bo'lsa: avval faqat o'qish bilan ro'yxatdan o'tgan klientning ruxsatlar shifti kengaytiriladi
+ *    (rozilik EMAS — foydalanuvchi baribir yangi rozilik beradi).
  */
 export async function authorizeHook(c: Context, next: Next) {
   if (c.req.method !== "GET") return next();
@@ -106,14 +108,15 @@ export async function authorizeHook(c: Context, next: Next) {
 
   const clientId = url.searchParams.get("client_id") ?? "";
   if (/^https?:\/\//i.test(clientId)) {
-    const limit = consumeRateLimit(`mcp-cimd:${clientIp(c)}`, config.MCP_REGISTRATION_RATE_LIMIT_MAX, config.MCP_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS * 1000);
+    // Alohida byudjet (ro'yxatdan o'tishdan mustaqil): oddiy qayta ulanishlar `/register` limitiga tegmaydi va aksincha.
+    const limit = consumeRateLimit(`mcp-cimd:${clientIp(c)}`, config.MCP_CIMD_RATE_LIMIT_MAX ?? config.MCP_REGISTRATION_RATE_LIMIT_MAX, (config.MCP_CIMD_RATE_LIMIT_WINDOW_SECONDS ?? config.MCP_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS) * 1000);
     if (!limit.allowed) {
       c.header("Retry-After", String(limit.retryAfterSeconds));
       return oauthError(c, 429, "temporarily_unavailable", "Too many client metadata lookups; retry later.");
     }
   }
 
-  const requested = clampToGrantable(parseScopeString(url.searchParams.get("scope")));
+  const requested = clampNow(parseScopeString(url.searchParams.get("scope")));
   if (config.MCP_FORCE_OFFLINE_ACCESS && !requested.includes(MCP_OFFLINE_SCOPE)) requested.push(MCP_OFFLINE_SCOPE);
   if (!requested.some((scope) => scope !== MCP_OFFLINE_SCOPE)) requested.unshift(...DEFAULT_SCOPE_STRING.split(" ").filter((scope) => scope !== MCP_OFFLINE_SCOPE));
   const scope = requested.join(" ");
@@ -124,6 +127,11 @@ export async function authorizeHook(c: Context, next: Next) {
   if (!url.searchParams.has("resource")) {
     url.searchParams.set("resource", MCP_RESOURCE_URL);
     changed = true;
+  }
+  if (writeToolsEnabled() && clientId) {
+    await widenClientScopes(clientId, requested).catch((error: unknown) =>
+      console.error("MCP: klient ruxsatlar shiftini kengaytirib bo'lmadi:", error instanceof Error ? error.message : error),
+    );
   }
 
   if (!changed) return next();
@@ -138,7 +146,7 @@ export async function consentGuard(c: Context, next: Next) {
   if (c.req.method !== "POST") return next();
 
   const text = await c.req.raw.clone().text();
-  let body: { accept?: unknown; oauth_query?: unknown } = {};
+  let body: { accept?: unknown; oauth_query?: unknown; scope?: unknown } = {};
   try {
     body = (JSON.parse(text) ?? {}) as typeof body;
   } catch {
@@ -147,6 +155,7 @@ export async function consentGuard(c: Context, next: Next) {
 
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   const role = (session?.user as { role?: string } | undefined)?.role ?? "user";
+  const oauthQuery = new URLSearchParams(typeof body.oauth_query === "string" ? body.oauth_query : "");
 
   if (session && body.accept !== false && role !== "admin") {
     await recordAuditSafe(
@@ -159,25 +168,46 @@ export async function consentGuard(c: Context, next: Next) {
     );
   }
 
+  // Klient o'chirilgan/yo'q bo'lsa — Better Auth ichida tashqi kalit xatosi (500) o'rniga toza `invalid_client`.
+  const queryClientId = oauthQuery.get("client_id");
+  if (session && queryClientId && !(await clientExists(queryClientId))) {
+    return c.json({ error: "invalid_client", error_description: "This application is not registered (any more). Start the connection again from the application." }, 400);
+  }
+
+  // Tanlangan ruxsatlar (qisman rozilik): so'ralganlarning qism to'plami, `blog:read` doim kerak.
+  let granted: string[] | null = null;
   if (session && body.accept !== false) {
-    const requested = parseScopeString(new URLSearchParams(typeof body.oauth_query === "string" ? body.oauth_query : "").get("scope"));
-    if (clampToGrantable(requested).length !== requested.length) {
+    const requested = parseScopeString(oauthQuery.get("scope"));
+    if (clampNow(requested).length !== requested.length) {
       return c.json({ error: "invalid_scope", error_description: "The request asks for permissions that cannot be granted yet." }, 403);
+    }
+    if (body.scope !== undefined) {
+      const selected = typeof body.scope === "string" ? parseScopeString(body.scope) : null;
+      if (!selected || selected.some((scope) => !requested.includes(scope)) || !selected.includes(MCP_REQUIRED_SCOPE_ID)) {
+        return c.json(
+          { error: "invalid_scope", error_description: `The selection must be part of what was requested and include '${MCP_REQUIRED_SCOPE_ID}'.` },
+          400,
+        );
+      }
+      granted = selected;
     }
   }
 
   await next();
 
   if (session && body.accept !== false && c.res.status === 200) {
-    const query = new URLSearchParams(typeof body.oauth_query === "string" ? body.oauth_query : "");
     await recordAuditSafe(
       { userId: session.user.id, role: "admin", via: "mcp" },
       {
         action: "mcp.authorize",
         entityType: "mcp",
-        entityId: query.get("client_id"),
+        entityId: oauthQuery.get("client_id"),
         summary: "Ilovaga ruxsat berildi",
-        meta: { clientId: query.get("client_id"), scopes: parseScopeString(query.get("scope")) },
+        meta: {
+          clientId: oauthQuery.get("client_id"),
+          scopes: granted ?? parseScopeString(oauthQuery.get("scope")),
+          requestedScopes: parseScopeString(oauthQuery.get("scope")),
+        },
       },
     );
   }

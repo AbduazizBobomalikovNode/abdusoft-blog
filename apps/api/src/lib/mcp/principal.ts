@@ -1,8 +1,9 @@
 import { and, eq } from "drizzle-orm";
 import type { JWTPayload } from "jose";
-import { MCP_GRANTABLE_SCOPE_IDS, parseScopeString } from "@blog/shared";
+import { parseScopeString } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { oauthClient, oauthConsent, user } from "../../db/auth-schema.js";
+import { grantableIdsNow } from "./scopes.js";
 
 export interface McpPrincipal {
   userId: string;
@@ -61,7 +62,8 @@ export async function resolvePrincipal(claims: JWTPayload): Promise<PrincipalRes
 
   const tokenScopes = new Set(parseScopeString(typeof claims.scope === "string" ? claims.scope : ""));
   const consented = new Set(row.consentScopes);
-  const scopes = new Set(MCP_GRANTABLE_SCOPE_IDS.filter((id) => tokenScopes.has(id) && consented.has(id)));
+  // Uch tomonli kesishma: token VA rozilik VA hozir berilishi mumkin (kalit o'chirilsa yozuv ruxsatlari darhol ishlamay qoladi).
+  const scopes = new Set(grantableIdsNow().filter((id) => tokenScopes.has(id) && consented.has(id)));
 
   return {
     ok: true,
