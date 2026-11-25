@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ArticleBody } from "@/components/article-body";
+import { JsonLd } from "@/components/json-ld";
 import { PostComments } from "@/components/post-comments";
 import { PostMetaStats } from "@/components/post-meta-stats";
 import { PostReactions } from "@/components/post-reactions";
@@ -13,6 +14,7 @@ import { TableOfContents } from "@/components/table-of-contents";
 import { ViewBeacon } from "@/components/view-beacon";
 import { getPost, getSite } from "@/lib/api";
 import { formatDate, formatReadingTime } from "@/lib/format";
+import { buildBlogPostingJsonLd } from "@/lib/json-ld";
 import { site } from "@/lib/site";
 
 export const revalidate = 300;
@@ -71,6 +73,7 @@ export default async function PostPage({
 
   return (
     <>
+      <JsonLd data={buildBlogPostingJsonLd(post, site)} />
       <ReadingProgress />
       <ViewBeacon slug={post.slug} />
       <article className="flex flex-col gap-6">
