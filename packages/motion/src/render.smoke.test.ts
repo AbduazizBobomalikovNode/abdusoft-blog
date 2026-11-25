@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { MotionRenderer } from "./render/renderer.ts";
+import { FPS } from "./timing.ts";
+import { assertStoryboard } from "./validate.ts";
 import { base } from "./test-helpers.ts";
 
 /**
@@ -32,9 +35,62 @@ function boxes(file: string): string[] {
   return out;
 }
 
+const md5 = (file: string): string => createHash("md5").update(readFileSync(file)).digest("hex");
+
+/** One scene of every new type, in the order the showcase uses them. */
+const showcase = (preset: "default" | "vivid" | "blueprint" | "neon", theme: "light" | "dark") => ({
+  ...base([
+    { type: "intro", id: "intro", variant: "aurora", kicker: "TypeScript", title: "Oʻzbekcha maʼlumot gʻoyasi", subtitle: "Deterministik kadrlar", tags: ["zod", "API"] },
+    { type: "diagram", id: "flow", nodes: [{ id: "a", label: "Mijoz" }, { id: "b", label: "API" }, { id: "c", label: "DB" }], edges: [{ from: "a", to: "b", label: "so'rov" }, { from: "b", to: "c" }], transition: "wipe" },
+    { type: "compare", id: "cmp", left: { title: "Oldin", items: ["sekin", "xatolar"] }, right: { title: "Keyin", items: ["tez", "aniq"] }, transition: "push" },
+    { type: "stat", id: "stat", stats: [{ value: 1200, label: "foydalanuvchi", suffix: "+" }, { value: 99.9, decimals: 1, suffix: "%", label: "uptime" }], transition: "zoom" },
+    { type: "steps", id: "steps", items: [{ title: "Yozing" }, { title: "Tekshiring" }, { title: "Chiqaring" }] },
+    { type: "quote", id: "quote", quote: "Oddiylik — ishonchlilikning sharti.", author: "E. Dijkstra" },
+    { type: "codeDiff", id: "diff", language: "typescript", diff: " const a = 1;\n-const b = 2;\n+const b = 3;" },
+    { type: "closing", id: "bye", variant: "aurora", cta: "Toʻliq maqolani oʻqing", url: "blog.abdusoft.uz" },
+  ]),
+  theme,
+  preset,
+});
+
 describe.skipIf(!enabled)("render smoke (opt-in: MOTION_RENDER_TESTS=1)", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "motion-smoke-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("is deterministic: the same storyboard renders byte-identical stills in two separate sessions, for every new scene and preset", async () => {
+    for (const preset of ["default", "neon"] as const) {
+      const hashes: string[][] = [];
+      for (const run of [1, 2]) {
+        const renderer = await MotionRenderer.create();
+        try {
+          const res = await renderer.stills(showcase(preset, "dark"), { outDir: path.join(dir, `det-${preset}-${run}`) });
+          expect(res.map((r) => r.sceneType)).toEqual(["intro", "diagram", "compare", "stat", "steps", "quote", "codeDiff", "closing"]);
+          hashes.push(res.map((r) => md5(r.file)));
+        } finally {
+          await renderer.close();
+        }
+      }
+      expect(hashes[0], preset).toEqual(hashes[1]);
+    }
+  }, 480_000);
+
+  it("a closing scene's settled hold repeats every loop period (so its last 2 s loop seamlessly as a GIF)", async () => {
+    const renderer = await MotionRenderer.create();
+    try {
+      const sb = showcase("default", "dark") as unknown as { scenes: Array<{ durationSeconds?: number }> };
+      (sb.scenes[sb.scenes.length - 1] as { durationSeconds?: number }).durationSeconds = 8; // a long hold: room for two periods
+      const bye = assertStoryboard(sb).timeline.scenes.find((s) => s.id === "bye");
+      if (!bye) throw new Error("closing scene missing");
+      const settled = bye.startFrame + bye.leadFrames + bye.doneAt + 6;
+      const period = bye.content.type === "closing" ? bye.content.loopFrames : 0;
+      expect(period).toBe(60);
+      const res = await renderer.stills(sb, { outDir: path.join(dir, "loop"), at: [settled / FPS, (settled + period) / FPS, (settled + 7) / FPS] });
+      expect(md5(res[0]?.file as string)).toBe(md5(res[1]?.file as string));
+      expect(md5(res[0]?.file as string)).not.toBe(md5(res[2]?.file as string)); // the hold does move inside a period
+    } finally {
+      await renderer.close();
+    }
+  }, 240_000);
 
   it("renders stills, a faststart MP4 and a GIF, and cleans up", async () => {
     const renderer = await MotionRenderer.create();

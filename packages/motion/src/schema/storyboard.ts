@@ -366,6 +366,8 @@ type DiagramInput = {
 };
 
 function checkDiagram(scene: DiagramInput, ctx: z.RefinementCtx): void {
+  // Structural minimums (nodes, edges) are reported by the array rules; do not pile cross-field noise on top.
+  if (scene.nodes.length < LIMITS.minNodes || scene.edges.length < 1) return;
   const ids = scene.nodes.map((n) => n.id);
   const known = new Set<string>();
   scene.nodes.forEach((n, i) => {

@@ -182,6 +182,14 @@ const SUGGESTIONS: Record<string, string> = {
   durationSeconds: `Use a value between ${LIMITS.minSceneSeconds} and ${LIMITS.maxSceneSeconds}, or omit it for automatic timing.`,
 };
 
+/** Suggestions for "too few" errors (the general ones above are about "too many"). */
+const MIN_SUGGESTIONS: Record<string, string> = {
+  nodes: 'Add at least two nodes, e.g. { "id": "api", "label": "API" }, and connect them with an edge.',
+  edges: 'Add an arrow such as { "from": "a", "to": "b" }.',
+  stats: 'Add a number such as { "value": 42, "label": "foydalanuvchi" }.',
+  items: "Add more entries.",
+};
+
 function suggestionFor(segments: ReadonlyArray<PropertyKey>): string | undefined {
   const keys = segments.filter((s): s is string => typeof s === "string");
   const last = keys.at(-1);
@@ -236,7 +244,10 @@ export function convertZodIssue(issue: ZIssue, input: unknown): StoryboardIssue 
     }
     case "too_small": {
       const min = Number(issue.minimum);
-      if (issue.message && !/^(Too small|Invalid)/.test(issue.message)) return { ...base, message: issue.message, limit: min, ...sug(segments) };
+      if (issue.message && !/^(Too small|Invalid)/.test(issue.message)) {
+        const minSug = MIN_SUGGESTIONS[String(segments.at(-1))];
+        return { ...base, message: issue.message, limit: min, ...(minSug ? { suggestion: minSug } : sug(segments)) };
+      }
       if (issue.origin === "number") return { ...base, message: `${name} is ${String(value)}; the minimum is ${min}`, limit: min, ...(typeof value === "number" ? { actual: value } : {}), ...sug(segments) };
       return { ...base, message: `${name} must have at least ${min} ${issue.origin === "array" ? "entries" : "characters"}`, limit: min, ...sug(segments) };
     }
