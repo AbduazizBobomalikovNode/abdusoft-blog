@@ -176,7 +176,8 @@ export function ChangePasswordForm({ email }: { email: string }) {
     setConfirmPassword("");
     setErrors({});
     setSuccess({ revoked: revokeOtherSessions });
-    toast.success("Parol almashtirildi");
+    // Telefonda pastki tab bar ostida qolmasligi uchun tepada.
+    toast.success("Parol almashtirildi", { position: "top-center" });
   }
 
   return (
@@ -187,7 +188,7 @@ export function ChangePasswordForm({ email }: { email: string }) {
           <CardDescription>Faqat o&apos;z hisobingiz uchun. Avval joriy parolingizni tasdiqlashingiz kerak.</CardDescription>
         </CardHeader>
 
-        <CardContent className="flex flex-col gap-4">
+        <CardContent className="flex flex-col gap-4 pt-3 pb-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="account-email">Email</Label>
             {/* Brauzer/parol menejeri "username" sifatida taniydi; faqat o'qish uchun. */}
