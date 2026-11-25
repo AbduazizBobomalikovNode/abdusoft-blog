@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { config } from "../config.js";
 import { rateLimitWrites } from "../lib/rate-limit-middleware.js";
 import { requireRole } from "../lib/require-admin.js";
+import { adminAuditRoute } from "./admin-audit.js";
 import { adminBansRoute, adminCommentsRoute } from "./admin-comments.js";
 import { adminMediaRoute } from "./admin-media.js";
 import { adminPostsRoute } from "./admin-posts.js";
@@ -39,4 +40,5 @@ export const adminRoute = new Hono()
   .route("/stats", adminStatsRoute)
   .route("/telegram", adminTelegramRoute)
   .route("/settings", adminSettingsRoute)
-  .route("/staff", adminStaffRoute);
+  .route("/staff", adminStaffRoute)
+  .route("/audit", adminAuditRoute);

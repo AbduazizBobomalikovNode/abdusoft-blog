@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { SettingsPatchSchema, SettingsSectionSchema, type SettingsTestResult } from "@blog/shared";
 import { bootedGithubConfig } from "../lib/auth.js";
 import { requireAdmin } from "../lib/require-admin.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import { actorFromAdminUser } from "../lib/posts/types.js";
 import {
   SettingsValidationError,
   generateRandomSecret,
@@ -124,6 +126,17 @@ export const adminSettingsRoute = new Hono()
       }
       throw error;
     }
+
+    // Faqat BO'LIM nomlari yoziladi — qiymatlar (token, kalit, parol) jurnalga hech qachon tushmaydi.
+    const sections = Object.entries(parsed.data)
+      .filter(([, value]) => value !== undefined)
+      .map(([name]) => name);
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "settings.update",
+      entityType: "settings",
+      summary: `Sozlamalar yangilandi: ${sections.join(", ") || "—"}`,
+      meta: { sections },
+    });
 
     const admin = await getSettingsForAdmin();
     const current = await getSettings();

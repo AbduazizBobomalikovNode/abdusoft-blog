@@ -10,12 +10,15 @@ import {
 import { db } from "../../db/index.js";
 import { postTags, posts, tags } from "../../db/schema.js";
 import { renderPost } from "../content/render.js";
+import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { announceUpdated } from "./effects.js";
 import { preparePlan } from "./plan.js";
-import { checkCanEdit, loadPost, resolveSettings, type PostRow } from "./shared.js";
+import { checkCanEdit, loadPost, postLabel, resolveSettings, type PostRow } from "./shared.js";
 import { fail, ok, type Actor, type ServiceResult } from "./types.js";
 
 const SLUG_ID_LENGTH = 6;
+/** Avtosaqlash PATCH'lari jurnalda bitta yozuvga birlashtiriladigan oyna (aktyor + kanal bir xil bo'lsa). */
+const AUDIT_COALESCE_MS = 10 * 60_000;
 
 async function generateDraftSlug(): Promise<string> {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -63,23 +66,35 @@ export async function createPost(
   const emptyDoc = { type: "doc", content: [{ type: "paragraph" }] };
   const rendered = await renderPost(emptyDoc);
 
-  const [created] = await db
-    .insert(posts)
-    .values({
-      slug,
-      title,
-      contentJson: emptyDoc,
-      contentHtml: rendered.html,
-      contentText: rendered.text,
-      toc: rendered.toc,
-      readingTime: rendered.readingTime,
-      status: "draft",
-      settings: DEFAULT_POST_SETTINGS,
-      createdBy: actor.userId,
-      updatedBy: actor.userId,
-      updatedVia: actor.via,
-    })
-    .returning();
+  const created = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(posts)
+      .values({
+        slug,
+        title,
+        contentJson: emptyDoc,
+        contentHtml: rendered.html,
+        contentText: rendered.text,
+        toc: rendered.toc,
+        readingTime: rendered.readingTime,
+        status: "draft",
+        settings: DEFAULT_POST_SETTINGS,
+        createdBy: actor.userId,
+        updatedBy: actor.userId,
+        updatedVia: actor.via,
+      })
+      .returning();
+    if (row) {
+      await recordAudit(tx, actor, {
+        action: "post.create",
+        entityType: "post",
+        entityId: row.id,
+        summary: `Post yaratildi: ${postLabel(row)}`,
+        meta: { slug: row.slug },
+      });
+    }
+    return row;
+  });
 
   if (!created) return fail("bad_request", "Post yaratib bo'lmadi");
   return ok({ id: created.id, slug: created.slug });
@@ -211,6 +226,24 @@ export async function updatePost(
     }
 
     const [fresh] = await tx.select().from(posts).where(eq(posts.id, id)).limit(1);
+
+    if (fresh && (hasColumnChanges || tagRows)) {
+      const fields = Object.keys(data);
+      await recordAuditCoalesced(
+        tx,
+        actor,
+        {
+          action: "post.update",
+          entityType: "post",
+          entityId: id,
+          summary: `Post tahrirlandi: ${postLabel(fresh)}`,
+          meta: { status: fresh.status },
+          fields,
+        },
+        AUDIT_COALESCE_MS,
+      );
+    }
+
     return ok({ fresh: fresh ?? null, previousSlug: locked.slug });
   });
   if (!outcome.ok) return outcome;

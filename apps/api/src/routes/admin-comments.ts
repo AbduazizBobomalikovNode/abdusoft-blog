@@ -23,6 +23,8 @@ import {
   TelegramReplyError,
 } from "../lib/comments-admin.js";
 import { requireAdmin } from "../lib/require-admin.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import { actorFromAdminUser } from "../lib/posts/types.js";
 import { escapeLike } from "../lib/like.js";
 
 const DEFAULT_LIMIT = 20;
@@ -244,6 +246,13 @@ export const adminCommentsRoute = new Hono()
 
     const updated = await setCommentStatus(id, parsed.data.status);
     if (!updated) return c.json({ error: "Topilmadi" }, 404);
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "comment.status",
+      entityType: "comment",
+      entityId: id,
+      summary: `Izoh holati o'zgardi: ${parsed.data.status}`,
+      meta: { status: parsed.data.status, postId: updated.postId },
+    });
 
     return c.json({ ok: true });
   })
@@ -259,6 +268,13 @@ export const adminCommentsRoute = new Hono()
       const updated = await setCommentStatus(id, parsed.data.status);
       if (updated) rows.push({ id: updated.id });
     }
+
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "comment.bulk_status",
+      entityType: "comment",
+      summary: `Izohlar holati o'zgardi (${rows.length} ta): ${parsed.data.status}`,
+      meta: { status: parsed.data.status, count: rows.length, ids: rows.map((row) => row.id) },
+    });
 
     return c.json({ ok: true, updated: rows.length });
   })
@@ -276,6 +292,13 @@ export const adminCommentsRoute = new Hono()
         name: adminUser.name ?? adminUser.email,
       });
       if (!created) return c.json({ error: "Topilmadi" }, 404);
+      await recordAuditSafe(actorFromAdminUser(adminUser), {
+        action: "comment.reply",
+        entityType: "comment",
+        entityId: created.id,
+        summary: "Izohga admin javob yozdi",
+        meta: { parentId: id },
+      });
 
       return c.json({ id: created.id }, 201);
     } catch (error) {
@@ -287,6 +310,12 @@ export const adminCommentsRoute = new Hono()
     try {
       const sent = await sendAdminReplyToTelegram(c.req.param("id"));
       if (!sent) return c.json({ error: "Topilmadi" }, 404);
+      await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+        action: "comment.send_to_telegram",
+        entityType: "comment",
+        entityId: sent.id,
+        summary: "Admin javobi Telegramga yuborildi",
+      });
       return c.json({ ok: true, id: sent.id });
     } catch (error) {
       if (error instanceof TelegramReplyError) return c.json({ error: error.message }, error.status);
@@ -296,6 +325,13 @@ export const adminCommentsRoute = new Hono()
   .delete("/:id", async (c) => {
     const deleted = await deleteCommentCascade(c.req.param("id"));
     if (!deleted) return c.json({ error: "Topilmadi" }, 404);
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "comment.delete",
+      entityType: "comment",
+      entityId: deleted.id,
+      summary: "Izoh o'chirildi",
+      meta: { postId: deleted.postId },
+    });
     return c.json({ ok: true });
   })
   .post("/:id/ban", async (c) => {
@@ -312,6 +348,13 @@ export const adminCommentsRoute = new Hono()
 
     const banned = await banCommentAuthor(id, parsed.data.reason);
     if (!banned) return c.json({ error: "Topilmadi" }, 404);
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "comment.ban",
+      entityType: "comment",
+      entityId: id,
+      summary: "Izoh muallifi bloklandi",
+      meta: { hasReason: Boolean(parsed.data.reason) },
+    });
 
     return c.json({ ok: true });
   });
@@ -331,6 +374,13 @@ export const adminBansRoute = new Hono()
     });
   })
   .delete("/:id", async (c) => {
-    await db.delete(bannedDevices).where(eq(bannedDevices.id, c.req.param("id")));
+    const banId = c.req.param("id");
+    await db.delete(bannedDevices).where(eq(bannedDevices.id, banId));
+    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
+      action: "ban.remove",
+      entityType: "ban",
+      entityId: banId,
+      summary: "Blok olib tashlandi",
+    });
     return c.json({ ok: true });
   });

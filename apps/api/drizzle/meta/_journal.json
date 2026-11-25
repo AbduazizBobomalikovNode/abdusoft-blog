@@ -78,6 +78,13 @@
       "when": 1795607732249,
       "tag": "0010_careful_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795607816526,
+      "tag": "0011_futuristic_silver_sable",
+      "breakpoints": true
     }
   ]
 }
