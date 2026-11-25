@@ -54,7 +54,7 @@ function RowActions({
   onPurge: () => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2 md:flex-nowrap">
       <Button size="sm" variant="outline" className="max-md:h-11" disabled={busy} onClick={onRestore} data-testid={`trash-restore-${item.id}`}>
         <Undo2 className="size-4" />
         Tiklash

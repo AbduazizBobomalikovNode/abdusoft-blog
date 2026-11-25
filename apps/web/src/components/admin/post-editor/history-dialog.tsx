@@ -54,7 +54,7 @@ export function RevisionRow({
           "flex w-full flex-col gap-1 rounded-lg border px-3 py-2 text-left transition-colors max-md:min-h-11",
           selected ? "border-foreground/40 bg-muted" : "border-border hover:bg-muted/60",
           // Oxirida: `border-border` yon chegara rangini ham bosib ketmasin (tailwind-merge tartibi).
-          automated && "border-l-4 border-l-violet-500/60",
+          automated && "border-l-4 border-l-violet-500/60 pl-2",
         )}
       >
         <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
