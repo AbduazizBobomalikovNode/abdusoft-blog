@@ -33,6 +33,7 @@ describe("GIF limits", () => {
 
   it("MotionRenderer.gif refuses before touching the bundle or a browser", async () => {
     const { MotionRenderer } = await import("./render/renderer.ts");
+    (await import("./render/private-tmp.ts")).enterDedicatedRenderProcess();
     const events: string[] = [];
     const r = await MotionRenderer.create({ onProgress: (p) => events.push(p.phase) });
     try {

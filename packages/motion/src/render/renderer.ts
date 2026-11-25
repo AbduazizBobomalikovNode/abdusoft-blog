@@ -8,9 +8,12 @@ import { FPS } from "../timing.ts";
 import { resolveScene, sceneFrameRange, sceneReviewFrames } from "../scene-ref.ts";
 import { assertStoryboard } from "../validate.ts";
 import { ensureBundle, type BundleResult } from "./bundle.ts";
-import { GifLimitError, type ProgressCallback, RenderCancelledError } from "./errors.ts";
+import { BrowserMissingError, GifLimitError, type ProgressCallback, RenderCancelledError, RenderTimeoutError } from "./errors.ts";
+import { clampConcurrency, clampTimeoutMs } from "./limits.ts";
+import { sweepStale } from "./sweep.ts";
 import { checkGifRange } from "./gif-limits.ts";
-import { withPrivateTmp } from "./private-tmp.ts";
+import { withPackageCwd } from "./browser.ts";
+import { assertDedicatedRenderProcess, withPrivateTmp } from "./private-tmp.ts";
 import { DEFAULT_CACHE_DIR } from "./paths.ts";
 import { prepareRenderProps } from "./prepare.ts";
 
@@ -23,11 +26,29 @@ export interface MotionRendererOptions {
   cacheDir?: string;
   /** Use this browser instead of Remotion's managed Chrome Headless Shell. */
   browserExecutable?: string;
+  /**
+   * Allow downloading Chrome Headless Shell (~100 MB) when it is missing. Default FALSE: a missing browser fails fast
+   * with BrowserMissingError. The CLI's `browser install` command and the server setup script are the places that opt in.
+   */
+  allowBrowserDownload?: boolean;
   onProgress?: ProgressCallback;
   /** Abort to cancel: the browser and encoder are stopped and temp output is removed. */
   signal?: AbortSignal;
-  /** Frames rendered in parallel (default: Remotion's choice, about half the cores). */
+  /** Frames rendered in parallel, clamped to 1..min(8, CPU count). Default 1 (the safe value for a shared server). */
   concurrency?: number;
+  /**
+   * Whole-job wall clock in ms (default 10 min, clamped to 1 s..1 h), counted from create(). When it elapses the
+   * operation rejects with RenderTimeoutError, the render is cancelled and close() removes temp output.
+   */
+  timeoutMs?: number;
+  /**
+   * Wraps the browser launch. Remotion's launcher installs process signal listeners (SIGINT calls process.exit(130));
+   * a process entry point that owns signals (the CLI) passes `isolateBrowserSignals` here. The library itself never
+   * touches signal handlers.
+   */
+  launchHook?: <T>(launch: () => Promise<T>) => Promise<T>;
+  /** Sweep stale temp/bundle directories when the renderer is created (default true). */
+  sweepOnStart?: boolean;
   /** Override the theme of the storyboard (fixtures are rendered in both modes). */
   themeOverride?: "light" | "dark";
   /** Override the style preset of the storyboard. */
@@ -107,20 +128,63 @@ export class MotionRenderer {
   #tmpFiles = new Set<string>();
   #closed = false;
   #onAbort: (() => void) | null = null;
+  /** Rejects when the job times out or is aborted, so every public operation settles even if Remotion hangs. */
+  readonly #interrupt: Promise<never>;
+  #timer: NodeJS.Timeout | null = null;
+  #timedOut = false;
+  #browserChecked = false;
+  readonly #timeoutMs: number;
+  readonly concurrency: number;
 
   private constructor(opts: MotionRendererOptions, renderer: Renderer) {
     this.#opts = opts;
     this.#renderer = renderer;
     this.#cancel = renderer.makeCancelSignal();
+    this.concurrency = clampConcurrency(opts.concurrency);
+    this.#timeoutMs = clampTimeoutMs(opts.timeoutMs);
+    let reject!: (e: Error) => void;
+    this.#interrupt = new Promise<never>((_, rej) => {
+      reject = rej;
+    });
+    this.#interrupt.catch(() => undefined); // never an unhandled rejection
+    this.#timer = setTimeout(() => {
+      this.#timedOut = true;
+      this.#cancelRender();
+      reject(new RenderTimeoutError(this.#timeoutMs));
+    }, this.#timeoutMs);
+    this.#timer.unref();
     if (opts.signal) {
-      this.#onAbort = () => this.#cancel.cancel();
+      this.#onAbort = () => {
+        this.#cancelRender();
+        reject(new RenderCancelledError());
+      };
       if (opts.signal.aborted) this.#onAbort();
       else opts.signal.addEventListener("abort", this.#onAbort, { once: true });
     }
   }
 
+  /**
+   * Refuses to run outside a process that opted in with enterDedicatedRenderProcess(): rendering rewrites TMPDIR/TMP/TEMP
+   * for the whole process. Throws RendererProcessError otherwise.
+   */
   static async create(opts: MotionRendererOptions = {}): Promise<MotionRenderer> {
+    assertDedicatedRenderProcess();
+    if (opts.sweepOnStart !== false) sweepStale({ cacheDir: opts.cacheDir ?? DEFAULT_CACHE_DIR });
     return new MotionRenderer(opts, await import("@remotion/renderer"));
+  }
+
+  #cancelRender(): void {
+    try {
+      this.#cancel.cancel();
+    } catch {
+      /* already settled */
+    }
+  }
+
+  /** Run an operation against the job clock and the abort signal; the loser keeps running only until close(). */
+  #race<T>(work: Promise<T>): Promise<T> {
+    work.catch(() => undefined);
+    return Promise.race([work, this.#interrupt]);
   }
 
   get #r(): Renderer {
@@ -130,6 +194,7 @@ export class MotionRenderer {
 
   #check(): void {
     if (this.#closed) throw new Error("MotionRenderer is closed");
+    if (this.#timedOut) throw new RenderTimeoutError(this.#timeoutMs);
     if (this.#opts.signal?.aborted) throw new RenderCancelledError();
   }
 
@@ -138,7 +203,37 @@ export class MotionRenderer {
   }
 
   /** Bundle (cached by source hash) and open the shared browser. */
-  async warmUp(): Promise<{ bundle: BundleResult }> {
+  warmUp(): Promise<{ bundle: BundleResult }> {
+    return this.#race(this.#warmUp());
+  }
+
+  /** Fail fast (before the ~10-25 s bundle) when no browser is installed and downloading is not allowed. */
+  async #ensureBrowserInstalled(): Promise<void> {
+    if (this.#browserChecked) return;
+    const explicit = this.#opts.browserExecutable;
+    if (explicit) {
+      if (!existsSync(explicit)) throw new BrowserMissingError(`browserExecutable "${explicit}" does not exist`);
+    } else {
+      this.#emit("browser", 0, "checking browser");
+      const allow = this.#opts.allowBrowserDownload === true;
+      // ensureBrowser calls onBrowserDownload only when nothing usable is installed: refuse there unless downloading is allowed.
+      await withPackageCwd(() =>
+        this.#r.ensureBrowser({
+          logLevel: "error",
+          onBrowserDownload: () => {
+            if (!allow) throw new BrowserMissingError();
+            this.#emit("browser", null, "downloading Chrome Headless Shell (first run only)");
+            return { version: null, onProgress: ({ percent }: { percent: number }) => this.#emit("browser", percent, "downloading Chrome Headless Shell") };
+          },
+        }),
+      );
+    }
+    this.#browserChecked = true;
+  }
+
+  async #warmUp(): Promise<{ bundle: BundleResult }> {
+    this.#check();
+    await this.#ensureBrowserInstalled();
     this.#check();
     if (!this.#bundle) {
       this.#emit("bundle", 0, "bundling composition");
@@ -147,27 +242,15 @@ export class MotionRenderer {
     }
     if (!this.#browser) {
       this.#emit("browser", 0, "opening browser");
-      if (!this.#opts.browserExecutable) {
-        await this.#r.ensureBrowser({
-          logLevel: "error",
-          onBrowserDownload: () => {
-            this.#emit("browser", null, "downloading Chrome Headless Shell (first run only)");
-            return { version: null, onProgress: ({ percent }: { percent: number }) => this.#emit("browser", percent, "downloading Chrome Headless Shell") };
-          },
-        });
-      }
       this.#check();
-      // Remotion's browser launcher installs a SIGINT listener that kills the browser and calls
-      // process.exit(130) at once, which skips our cleanup (temp files, partial output). Remove exactly the
-      // listeners it adds: cancellation goes through `signal`, and the launcher's own 'exit' hook still
-      // kills the browser when the process ends.
-      const before = new Set(process.listeners("SIGINT"));
-      this.#browser = await this.#r.openBrowser("chrome", {
-        chromeMode: "headless-shell",
-        logLevel: "error",
-        ...(this.#opts.browserExecutable ? { browserExecutable: this.#opts.browserExecutable } : {}),
-      });
-      for (const l of process.listeners("SIGINT")) if (!before.has(l)) process.removeListener("SIGINT", l);
+      const explicit = this.#opts.browserExecutable;
+      const launch = (): ReturnType<Renderer["openBrowser"]> =>
+        this.#r.openBrowser("chrome", {
+          chromeMode: "headless-shell",
+          logLevel: "error",
+          ...(explicit ? { browserExecutable: explicit } : {}),
+        });
+      this.#browser = await withPackageCwd(() => (this.#opts.launchHook ? this.#opts.launchHook(launch) : launch()));
       this.#emit("browser", 1, "browser ready");
     }
     return { bundle: this.#bundle };
@@ -204,7 +287,11 @@ export class MotionRenderer {
   }
 
   /** Small JPEG stills (default 960x540) for sending back to an assistant as images. */
-  async stills(input: unknown, req: StillRequest): Promise<StillResult[]> {
+  stills(input: unknown, req: StillRequest): Promise<StillResult[]> {
+    return this.#race(this.#stills(input, req));
+  }
+
+  async #stills(input: unknown, req: StillRequest): Promise<StillResult[]> {
     this.#check();
     const s = await this.#session(input);
     mkdirSync(req.outDir, { recursive: true });
@@ -254,7 +341,11 @@ export class MotionRenderer {
   }
 
   /** Silent H.264 MP4: yuv420p, constant 30 fps, faststart (moov first), no audio track. */
-  async video(input: unknown, outFile: string, req: VideoRequest = {}): Promise<VideoResult> {
+  video(input: unknown, outFile: string, req: VideoRequest = {}): Promise<VideoResult> {
+    return this.#race(this.#video(input, outFile, req));
+  }
+
+  async #video(input: unknown, outFile: string, req: VideoRequest): Promise<VideoResult> {
     this.#check();
     const s = await this.#session(input);
     if (req.scene !== undefined) {
@@ -265,7 +356,11 @@ export class MotionRenderer {
   }
 
   /** GIF for short clips only (<= 15 s, <= 800 px wide, 15 fps). Longer: GifLimitError, use video(). */
-  async gif(input: unknown, outFile: string, req: GifRequest = {}): Promise<VideoResult> {
+  gif(input: unknown, outFile: string, req: GifRequest = {}): Promise<VideoResult> {
+    return this.#race(this.#gif(input, outFile, req));
+  }
+
+  async #gif(input: unknown, outFile: string, req: GifRequest): Promise<VideoResult> {
     this.#check();
     // Limits are checked on the pure timeline, before any bundling or browser work.
     const tl = assertStoryboard(this.#withTheme(input)).timeline;
@@ -307,7 +402,7 @@ export class MotionRenderer {
         logLevel: "error",
         cancelSignal: this.#cancel.cancelSignal,
         frameRange: [startFrame, endFrame],
-        ...(this.#opts.concurrency ? { concurrency: this.#opts.concurrency } : {}),
+        concurrency: this.concurrency,
         ...(isGif
           ? {
               codec: "gif" as const,
@@ -340,6 +435,7 @@ export class MotionRenderer {
     try {
       return await withPrivateTmp(fn);
     } catch (err) {
+      if (this.#timedOut) throw new RenderTimeoutError(this.#timeoutMs);
       if (this.#opts.signal?.aborted || /cancelled|canceled|aborted/i.test(String((err as Error)?.message))) throw new RenderCancelledError();
       throw err;
     }
@@ -349,12 +445,10 @@ export class MotionRenderer {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = null;
     if (this.#onAbort) this.#opts.signal?.removeEventListener("abort", this.#onAbort);
-    try {
-      this.#cancel.cancel();
-    } catch {
-      /* already settled */
-    }
+    this.#cancelRender();
     const b = this.#browser;
     this.#browser = null;
     await b?.close({ silent: true }).catch(() => undefined);

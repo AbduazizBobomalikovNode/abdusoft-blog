@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { enterDedicatedRenderProcess } from "./render/private-tmp.ts";
 import { MotionRenderer } from "./render/renderer.ts";
 import { FPS } from "./timing.ts";
 import { assertStoryboard } from "./validate.ts";
@@ -13,6 +14,8 @@ import { base } from "./test-helpers.ts";
  * download a browser or render video. Run:  MOTION_RENDER_TESTS=1 pnpm --filter @blog/motion test:render
  */
 const enabled = process.env.MOTION_RENDER_TESTS === "1";
+if (enabled) enterDedicatedRenderProcess(); // the test process is a render process; the browser may be downloaded once
+const create = (o: Parameters<typeof MotionRenderer.create>[0] = {}) => MotionRenderer.create({ allowBrowserDownload: true, concurrency: 2, ...o });
 
 const storyboard = (theme: "light" | "dark") => ({
   ...base([
@@ -75,7 +78,7 @@ describe.skipIf(!enabled)("render smoke (opt-in: MOTION_RENDER_TESTS=1)", () => 
     for (const preset of ["default", "neon"] as const) {
       const runs: Array<Array<{ file: string; sceneType: string }>> = [];
       for (const run of [1, 2]) {
-        const renderer = await MotionRenderer.create();
+        const renderer = await create();
         try {
           const res = await renderer.stills(showcase(preset, "dark"), { outDir: path.join(dir, `det-${preset}-${run}`) });
           expect(res.map((r) => r.sceneType)).toEqual(["intro", "diagram", "compare", "stat", "steps", "quote", "codeDiff", "closing"]);
@@ -89,7 +92,7 @@ describe.skipIf(!enabled)("render smoke (opt-in: MOTION_RENDER_TESTS=1)", () => 
   }, 480_000);
 
   it("a closing scene's settled hold repeats every loop period (so its last 2 s loop seamlessly as a GIF)", async () => {
-    const renderer = await MotionRenderer.create();
+    const renderer = await create();
     try {
       const sb = showcase("default", "dark") as unknown as { scenes: Array<{ durationSeconds?: number }> };
       (sb.scenes[sb.scenes.length - 1] as { durationSeconds?: number }).durationSeconds = 8; // a long hold: room for two periods
@@ -107,7 +110,7 @@ describe.skipIf(!enabled)("render smoke (opt-in: MOTION_RENDER_TESTS=1)", () => 
   }, 240_000);
 
   it("renders stills, a faststart MP4 and a GIF, and cleans up", async () => {
-    const renderer = await MotionRenderer.create();
+    const renderer = await create();
     try {
       const stills = await renderer.stills(storyboard("dark"), { outDir: path.join(dir, "stills") });
       expect(stills).toHaveLength(2);
@@ -140,7 +143,7 @@ describe.skipIf(!enabled)("render smoke (opt-in: MOTION_RENDER_TESTS=1)", () => 
 
   it("cancellation stops the render and removes partial output", async () => {
     const ctl = new AbortController();
-    const renderer = await MotionRenderer.create({
+    const renderer = await create({
       signal: ctl.signal,
       onProgress: (p) => {
         if (p.phase === "render" && (p.fraction ?? 0) > 0.05) ctl.abort();
