@@ -336,6 +336,7 @@ export const updatePostTool = defineTool({
             `Replacing the body from Markdown would lose or change ${report.lossyBlocks.length} block(s) that Markdown cannot represent exactly. Nothing was written.`,
             "Use content_document to edit structurally, edit in the web editor, or - if losing those parts is acceptable - repeat with acknowledge_lossy_overwrite=true (the old version stays in the revision history).",
             { lossyBlocks: report.lossyBlocks },
+            ["error.lossyBlocks[].preview"],
           );
         }
         acknowledgedLoss = report.lossyBlocks.length;

@@ -1,4 +1,5 @@
 import type { ToolError } from "./types.js";
+import { untrusted } from "./untrusted.js";
 import type { ToolOutput } from "./types.js";
 
 export interface McpToolResult {
@@ -79,6 +80,7 @@ export function okResult(text: string): McpToolResult {
 
 export function errorResult(error: ToolError): McpToolResult {
   const payload = {
+    ...(error.untrustedFields && error.untrustedFields.length > 0 ? untrusted(error.untrustedFields) : {}),
     error: {
       code: error.code,
       message: error.message,

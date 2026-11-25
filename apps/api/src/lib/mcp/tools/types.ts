@@ -74,6 +74,8 @@ export class ToolError extends Error {
     message: string,
     readonly hint?: string,
     readonly extra?: Record<string, unknown>,
+    /** Xato yukida uchinchi shaxs matni bo'lsa — qaysi maydonlar (javobga `untrusted` belgisi qo'shiladi). */
+    readonly untrustedFields?: string[],
   ) {
     super(message);
     this.name = "ToolError";

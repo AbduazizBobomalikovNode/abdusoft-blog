@@ -148,3 +148,24 @@ describe("connector images and covers must be the blog's own media", () => {
     expect(own.isError, own.text.slice(0, 300)).toBe(false);
   });
 });
+
+describe("error payloads that carry third-party text are marked untrusted", () => {
+  it("conflict errors flag the author name; lossy_content errors flag the block previews", async () => {
+    const created = await callTool(app, token, "create_post_draft", { title: "Xato belgilari", content_markdown: "## A\n\nmatn matn matn" });
+    const post = (created.json as Json).post;
+    const stale = await callTool(app, token, "update_post", { id: post.id, expected_updated_at: "2001-01-01T00:00:00.000Z", title: "Yangi" });
+    expect((stale.json as Json).error.code).toBe("conflict");
+    expect((stale.json as Json).untrusted).toBe(true);
+    expect((stale.json as Json).untrustedFields).toContain("error.lastChangedBy.name");
+
+    const { db } = await import("../../db/index.js");
+    const { posts } = await import("../../db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    await db.update(posts).set({ contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "ochiq havola: ", marks: [] }, { type: "text", text: "x", marks: [{ type: "link", attrs: { href: "javascript:alert(1)" } }] }] }] } }).where(eq(posts.id, post.id));
+    const fresh = (await callTool(app, token, "get_post", { id: post.id })).json as Json;
+    const lossy = await callTool(app, token, "update_post", { id: post.id, expected_updated_at: fresh.post.updatedAt, content_markdown: "## B\n\nmatn" });
+    expect((lossy.json as Json).error.code).toBe("lossy_content");
+    expect((lossy.json as Json).untrusted).toBe(true);
+    expect((lossy.json as Json).untrustedFields).toContain("error.lossyBlocks[].preview");
+  });
+});

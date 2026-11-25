@@ -45,13 +45,19 @@ const NOT_FOUND_POST = "Use list_posts to find a valid post id. Trashed posts ar
 
 type IncludeMode = "markdown" | "text" | "document" | "both" | "markdown+document";
 
-const INCLUDE_FIELD = z
-  .enum(["markdown", "text", "document", "both", "markdown+document"])
-  .optional()
-  .describe(
-    "Which content form to return. 'markdown': the body as Markdown (the form update_post accepts) - the default when write tools are enabled. 'text': readable plain text. 'document': the exact structured Tiptap JSON. " +
-      "'both': plain text + document (the default when write tools are disabled). 'markdown+document': Markdown + document.",
-  );
+/**
+ * Yozuv kaliti O'CHIQ bo'lsa vositaning sxemasi `main`dagi bilan bir xil ("both" standart ko'rinib turadi, Markdown shakllari yo'q);
+ * yoqilganda Markdown shakllari qo'shiladi va standart Markdown bo'ladi.
+ */
+const INCLUDE_FIELD = config.MCP_WRITE_TOOLS_ENABLED
+  ? z
+      .enum(["markdown", "text", "document", "both", "markdown+document"])
+      .optional()
+      .describe(
+        "Which content form to return. 'markdown': the body as Markdown (the form update_post accepts) - the default when write tools are enabled. 'text': readable plain text. 'document': the exact structured Tiptap JSON. " +
+          "'both': plain text + document. 'markdown+document': Markdown + document.",
+      )
+  : z.enum(["both", "text", "document"]).default("both").describe("Which content form to return (default both).");
 
 /** Yozuv vositalari yoqilgan bo'lsa standart — Markdown; o'chiq bo'lsa PR #11 xatti-harakati ("both"). */
 function resolveInclude(include: IncludeMode | undefined): IncludeMode {
@@ -176,8 +182,11 @@ export const getPost = defineTool({
   description:
     U + "Read one post in full: metadata, settings, tags, review state, Telegram channel status and its content. " +
     "'updatedBy' and 'updatedVia' (web panel, telegram, scheduler, assistant...) say who/what changed it last. " +
-    "'updatedAt' is the concurrency token that every edit tool requires (expected_updated_at) - pass it back unchanged. " +
-    "Content comes as Markdown ('content', include='markdown') when write tools are enabled, otherwise as readable plain text plus the exact Tiptap JSON ('document'); use include to choose.",
+    (config.MCP_WRITE_TOOLS_ENABLED
+      ? "'updatedAt' is the concurrency token that every edit tool requires (expected_updated_at) - pass it back unchanged. " +
+        "Content comes as Markdown ('content', include='markdown') by default; use include to choose plain text, the exact Tiptap JSON ('document') or both."
+      : "'updatedAt' is the concurrency token that future edit tools require - pass it back unchanged. " +
+        "Content comes as readable plain text ('content') and as the exact Tiptap JSON ('document'); use include to receive only one of them."),
   scope: "blog:read",
   inputSchema: {
     ...idOrSlug,
@@ -337,7 +346,9 @@ export const listPostRevisions = defineTool({
 export const getPostRevision = defineTool({
   name: "get_post_revision",
   title: "Get a post revision",
-  description: U + "Read one saved revision of a post with its content (Markdown, readable text and/or the Tiptap JSON; see include). Read-only; restoring is done with restore_post_revision when write tools are enabled.",
+  description: config.MCP_WRITE_TOOLS_ENABLED
+    ? U + "Read one saved revision of a post with its content (Markdown, readable text and/or the Tiptap JSON; see include). Read-only; restoring is done with restore_post_revision."
+    : U + "Read one saved revision of a post with its content (readable text and/or the Tiptap JSON). Read-only; restoring is not available yet.",
   scope: "blog:read",
   inputSchema: {
     ...idOrSlug,

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { Gate } from "../gate.js";
 import { eq, or, sql } from "drizzle-orm";
 import sharp from "sharp";
 import { config } from "../../../config.js";
@@ -106,6 +107,9 @@ export function sniffImageMime(buf: Buffer): AllowedImageMime | null {
   return null;
 }
 
+const UPLOAD_CONCURRENCY = 2;
+const uploadGate = new Gate(UPLOAD_CONCURRENCY, 6);
+
 const maxBase64Chars = () => Math.ceil((config.MCP_MEDIA_MAX_BYTES * 4) / 3) + 8;
 
 export const uploadImageTool = defineTool({
@@ -114,7 +118,7 @@ export const uploadImageTool = defineTool({
   description:
     `Upload ONE image (PNG, JPEG, GIF or WebP; not SVG) given as base64 into the media library. The server checks the real file type from the bytes (the declared type is ignored), rejects disguised files and huge pixel counts, converts to WebP (max width 1600 px) and stores it. ` +
     `Size limit: ${Math.round(config.MCP_MEDIA_MAX_BYTES / 1024)} KB after decoding (about ${Math.round(maxBase64Chars() / 1024)} KB of base64 text); realistically use small, already optimised images. ` +
-    "alt text is required (describe the image for readers who cannot see it). The server never downloads images from URLs. It does not attach the image to any post: put its returned url into content_markdown as ![alt](url) or use cover_media_id. Pass idempotency_key so a retry does not upload twice.",
+    "alt text is required (describe the image for readers who cannot see it). This tool never downloads images from URLs (it only accepts the bytes you send; the server fetches images only when it prepares a Telegram post, and then only the blog's own media or images already in the post). It does not attach the image to any post: put its returned url into content_markdown as ![alt](url) or use cover_media_id. Pass idempotency_key so a retry does not upload twice.",
   scope: "media:upload",
   limit: "upload",
   inputSchema: {
@@ -144,13 +148,19 @@ export const uploadImageTool = defineTool({
       // 2) Haqiqiy tur (magic bytes) va tasvir sifatida o'qilishi.
       const mime = sniffImageMime(buffer);
       if (!mime) throw new ToolError("invalid_input", "The data is not a PNG, JPEG, GIF or WebP image.", "Only these four formats are accepted (SVG and other files are refused).");
-      try {
-        const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
-        if (!meta.width || !meta.height) throw new Error("no dimensions");
-      } catch {
-        throw new ToolError("invalid_input", "The file looks like an image but cannot be decoded (corrupt, or more than 40 megapixels).");
+      // Og'ir qayta ishlash (dekodlash + WebP) bir vaqtda ko'pi bilan UPLOAD_CONCURRENCY ta; navbat to'lsa — "band".
+      const created = await uploadGate.run(async () => {
+        try {
+          const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
+          if (!meta.width || !meta.height) throw new Error("no dimensions");
+        } catch {
+          throw new ToolError("invalid_input", "The file looks like an image but cannot be decoded (corrupt, or more than 40 megapixels).");
+        }
+        return unwrap(await createMediaFromBuffer(ctx.actor, { buffer, mime, alt: args.alt }));
+      });
+      if (created === null) {
+        throw new ToolError("rate_limited", "Too many images are being processed right now.", "Wait a few seconds and upload again (uploads are processed a couple at a time).", { retryAfterSeconds: 5 });
       }
-      const created = await unwrap(await createMediaFromBuffer(ctx.actor, { buffer, mime, alt: args.alt }));
       return {
         data: {
           ok: true,

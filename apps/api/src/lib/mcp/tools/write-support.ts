@@ -95,6 +95,7 @@ export async function conflictError(post: PostRow, extra: { updatedBy?: { id: st
       comparedWithRevisionAt: comparedWith,
       comparisonNote: "changedSinceLastRevision compares the post with its newest saved revision (taken just before the latest change); edits made in the web editor within 10 minutes may be merged into one revision, so the list can be broader than the single latest change.",
     },
+    ["error.lastChangedBy.name"],
   );
 }
 
@@ -134,6 +135,8 @@ export async function unwrapPost<T>(result: ServiceResult<T>, postId: string, hi
         ? "Read the post (get_post) to see its current status, then choose an action that fits it."
         : undefined,
     extra,
+    // Xizmat xabarlari post sarlavhasi/slug/nomlarni o'z ichiga olishi mumkin.
+    ["error.message"],
   );
 }
 
