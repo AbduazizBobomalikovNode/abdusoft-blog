@@ -3,6 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { config, isProduction } from "../config.js";
 import { db, fullSchema } from "../db/index.js";
 import { buildAuthAdvanced, buildAuthRateLimit } from "./auth-options.js";
+import { PASSWORD_RESET_TTL_SECONDS, onPasswordResetCompleted, sendPasswordResetLink } from "./password-reset.js";
 import { getSettings } from "./settings.js";
 
 // GitHub OAuth provider'ni betterAuth BOOT vaqtida ro'yxatga oladi (better-auth
@@ -36,6 +37,12 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     disableSignUp: true,
+    // Parolni tiklash (faqat admin, Telegram orqali): token/muddat/bir martalik ishlatish — Better Auth'niki.
+    // Havolani yuborish `lib/password-reset.ts`da. Muvaffaqiyatli tiklashda barcha sessiyalar tugatiladi.
+    sendResetPassword: sendPasswordResetLink,
+    resetPasswordTokenExpiresIn: PASSWORD_RESET_TTL_SECONDS,
+    revokeSessionsOnPasswordReset: true,
+    onPasswordReset: onPasswordResetCompleted,
   },
   socialProviders: githubEnabled
     ? {

@@ -94,6 +94,17 @@ const EnvSchema = z.object({
   POST_REVISION_INTERVAL_MINUTES: intEnv(10, 0),
   // Bitta postda saqlanadigan revision'lar soni (eng eskilari o'chiriladi, eng yangisi hech qachon).
   POST_REVISION_MAX_PER_POST: intEnv(100, 1),
+  // --- Parolni tiklash (Telegram orqali, faqat admin) ---
+  // Tiklash havolasi shuncha daqiqa amal qiladi (10..30; default 20) va faqat bir marta ishlaydi.
+  PASSWORD_RESET_TTL_MINUTES: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(10).max(30).default(20),
+  ),
+  // Bitta admin hisobi uchun soatiga ko'pi bilan shuncha Telegram xabari yuboriladi (1..10; default 3).
+  PASSWORD_RESET_MAX_PER_HOUR: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(1).max(10).default(3),
+  ),
   // --- Claude konnektori (MCP) — default o'chiq; o'chiq bo'lsa API avvalgidek ishlaydi (hech qanday yangi marshrut/plagin yo'q) ---
   MCP_ENABLED: z
     .string()
