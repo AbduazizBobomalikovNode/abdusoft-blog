@@ -83,6 +83,8 @@ export const posts = pgTable(
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     /** Postni oxirgi marta o'zgartirgan foydalanuvchi. */
     updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+    /** Oxirgi o'zgartirish qaysi kanaldan kelgan: `web` | `mcp` | `telegram` | `scheduler` | `system` (eski qatorlarda `null`). */
+    updatedVia: text("updated_via"),
     /** Admin "Qaytarish" (`changes_requested`) bosganda qoldirgan izohi — xodimga ko'rinadi. */
     reviewNote: text("review_note"),
     /** Xodim "Ko'rib chiqishga yuborish" bosgan payt (`in_review`ga o'tganda). */

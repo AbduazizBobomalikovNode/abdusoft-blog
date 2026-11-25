@@ -122,3 +122,55 @@ describe("posts service — one publish path for admin, approve and scheduler", 
     expect(row?.status).toBe("draft");
   });
 });
+
+describe("posts service — updated_by / updated_via on every transition", () => {
+  async function stamp(id: string) {
+    const [row] = await db.select().from(schema.posts).where(eq(schema.posts.id, id));
+    return { by: row?.updatedBy ?? null, via: row?.updatedVia ?? null, status: row?.status };
+  }
+
+  it("records the acting user and channel for each admin transition", async () => {
+    const mcp = svc.actorFromAdminUser({ id: admin.id, role: "admin" }, "mcp");
+    const post = await newPost(adminActor());
+    expect(await stamp(post.id)).toMatchObject({ by: admin.id, via: "web" });
+
+    await svc.publishPost(mcp, post.id);
+    expect(await stamp(post.id)).toMatchObject({ by: admin.id, via: "mcp", status: "published" });
+
+    const telegram = { userId: admin.id, role: "admin" as const, via: "telegram" as const };
+    await svc.unpublishPost(telegram, post.id);
+    expect(await stamp(post.id)).toMatchObject({ via: "telegram", status: "draft" });
+
+    await svc.archivePost(mcp, post.id);
+    expect(await stamp(post.id)).toMatchObject({ via: "mcp", status: "archived" });
+
+    await svc.schedulePost(adminActor(), post.id, { scheduledAt: new Date(Date.now() + 3_600_000).toISOString() });
+    expect(await stamp(post.id)).toMatchObject({ via: "web", status: "scheduled" });
+  });
+
+  it("records the author on submit and the reviewer on approve / request-changes", async () => {
+    const post = await newPost(staffActor());
+    await svc.submitPostForReview(staffActor(), post.id);
+    expect(await stamp(post.id)).toMatchObject({ by: staff.id, via: "web", status: "in_review" });
+
+    await svc.requestPostChanges(adminActor(), post.id, "Tuzating");
+    expect(await stamp(post.id)).toMatchObject({ by: admin.id, status: "changes_requested" });
+
+    await svc.submitPostForReview(staffActor(), post.id);
+    await svc.approvePost(adminActor(), post.id);
+    expect(await stamp(post.id)).toMatchObject({ by: admin.id, via: "web", status: "published" });
+  });
+
+  it("the scheduler is a system actor: updated_by stays null (no invented user id)", async () => {
+    const post = await newPost(adminActor());
+    await svc.schedulePost(adminActor(), post.id, { scheduledAt: new Date(Date.now() - 1000).toISOString() });
+    await svc.publishDuePosts();
+    expect(await stamp(post.id)).toEqual({ by: null, via: "scheduler", status: "published" });
+  });
+
+  it("plain updates record the editor and channel too", async () => {
+    const post = await newPost(adminActor());
+    await svc.updatePost(svc.actorFromAdminUser({ id: admin.id, role: "admin" }, "mcp"), post.id, { title: "Yangi sarlavha" });
+    expect(await stamp(post.id)).toMatchObject({ by: admin.id, via: "mcp" });
+  });
+});
