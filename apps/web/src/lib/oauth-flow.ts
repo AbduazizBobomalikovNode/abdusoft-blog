@@ -122,10 +122,13 @@ export function isReadOnlyRequest(groups: readonly { group: string }[]): boolean
 // Ruxsatlarni alohida tanlash (rozilik sahifasi)
 // ---------------------------------------------------------------------------------------------
 
-/** Standart tanlov: o'qish (majburiy), yozish va chop etish — yoqilgan; xavfli amallar — O'CHIQ. Faqat so'ralgan ruxsatlar. */
+/**
+ * Standart tanlov: o'qish (majburiy) va qoralama yozish + rasm yuklash — oldindan belgilangan. Chop etish guruhi (chop etish,
+ * kanalga yuborish) va xavfli guruh BELGILANMAGAN: ularni egasi ongli ravishda yoqadi. Faqat so'ralgan ruxsatlar.
+ */
 export function defaultScopeSelection(requested: readonly string[]): string[] {
   const asked = new Set(requested);
-  return MCP_SCOPES.filter((scope) => asked.has(scope.id) && (scope.id === MCP_REQUIRED_SCOPE_ID || scope.group !== "danger")).map((scope) => scope.id);
+  return MCP_SCOPES.filter((scope) => asked.has(scope.id) && (scope.id === MCP_REQUIRED_SCOPE_ID || scope.group === "write")).map((scope) => scope.id);
 }
 
 /** Bitta ruxsatni almashtiradi. Majburiy ruxsat o'chirilmaydi, so'ralmagan ruxsat qo'shilmaydi. Yangi massiv qaytaradi. */

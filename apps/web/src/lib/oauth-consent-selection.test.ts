@@ -13,8 +13,10 @@ import {
 const ALL = ["blog:read", "posts:write", "media:upload", "posts:publish", "channels:send", "comments:moderate", "posts:delete", "offline_access"];
 
 describe("per-permission consent selection", () => {
-  it("defaults: read + write + publish on, dangerous off, only requested scopes", () => {
-    expect(defaultScopeSelection(ALL)).toEqual(["blog:read", "posts:write", "media:upload", "posts:publish", "channels:send"]);
+  it("defaults: read + writing drafts + image upload on; publishing and dangerous groups off; only requested scopes", () => {
+    expect(defaultScopeSelection(ALL)).toEqual(["blog:read", "posts:write", "media:upload"]);
+    expect(defaultScopeSelection(ALL)).not.toContain("posts:publish");
+    expect(defaultScopeSelection(ALL)).not.toContain("channels:send");
     expect(defaultScopeSelection(["blog:read", "offline_access"])).toEqual(["blog:read"]);
     expect(defaultScopeSelection(["posts:write"])).toEqual(["posts:write"]);
   });
@@ -47,7 +49,7 @@ describe("per-permission consent selection", () => {
     expect(selectionSummary(withDanger, ALL)).toEqual({
       read: { selected: 1, total: 1 },
       write: { selected: 2, total: 2 },
-      publish: { selected: 2, total: 2 },
+      publish: { selected: 0, total: 2 },
       danger: { selected: 1, total: 2 },
     });
   });
