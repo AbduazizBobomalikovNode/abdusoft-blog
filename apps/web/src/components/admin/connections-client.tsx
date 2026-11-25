@@ -19,12 +19,44 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
-import { describeConnectionScopes, displayClientName } from "@/lib/oauth-flow";
+import { describeConnectionPermissions, displayClientName } from "@/lib/oauth-flow";
+import { MCP_SCOPE_GROUP_LABELS, type McpScopeGroup } from "@blog/shared";
+import { cn } from "@/lib/utils";
+
+const GROUP_CHIP: Record<McpScopeGroup, string> = {
+  read: "border-border",
+  write: "border-sky-500/40 bg-sky-500/10",
+  publish: "border-amber-500/40 bg-amber-500/10",
+  danger: "border-destructive/40 bg-destructive/10 text-destructive",
+};
+
+function PermissionList({ perms }: { perms: ReturnType<typeof describeConnectionPermissions> }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {perms.readOnly ? (
+        <span className="w-fit rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">Faqat o&apos;qiydi</span>
+      ) : null}
+      {perms.groups
+        .filter((g) => !(perms.readOnly && g.group === "read"))
+        .map((g) => (
+          <div key={g.group} className="flex flex-wrap items-center gap-1.5">
+            <span className="w-24 shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{MCP_SCOPE_GROUP_LABELS[g.group]}</span>
+            {g.labels.map((label) => (
+              <span key={label} className={cn("rounded-full border px-2 py-0.5 text-xs", GROUP_CHIP[g.group])}>
+                {g.group === "danger" ? <ShieldAlert className="mr-1 inline size-3" aria-hidden="true" /> : null}
+                {label}
+              </span>
+            ))}
+          </div>
+        ))}
+    </div>
+  );
+}
 
 function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; onRevoked: (clientId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const scopes = describeConnectionScopes(connection.scopes);
+  const perms = describeConnectionPermissions(connection.scopes);
   const name = displayClientName(connection.name);
 
   async function handleRevoke() {
@@ -48,19 +80,7 @@ function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; o
         {connection.redirectHost ? <div className="text-xs text-muted-foreground">{connection.redirectHost}</div> : null}
       </TableCell>
       <TableCell className="align-top">
-        <ul className="flex flex-wrap gap-1.5">
-          {scopes.labels.map((label) => (
-            <li key={label} className="rounded-full border border-border px-2 py-0.5 text-xs">
-              {label}
-            </li>
-          ))}
-          {scopes.hasDanger ? (
-            <li className="flex items-center gap-1 rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
-              <ShieldAlert className="size-3" aria-hidden="true" />
-              Xavfli amallar
-            </li>
-          ) : null}
-        </ul>
+        <PermissionList perms={perms} />
       </TableCell>
       <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(connection.connectedAt)}</TableCell>
       <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">
