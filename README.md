@@ -245,6 +245,8 @@ Quyidagilarning barchasi `.env`da ham, `/admin/sozlamalar`da ham sozlanishi mumk
 
 Hech narsa avtomatik deploy qilinmaydi. Asosiy yo'l: **API — VDS'da Docker Compose, mavjud nginx orqasida** (bitta serverda boshqa saytlar bilan bir qatorda); **web — Vercel'da**.
 
+> **Orqaga qaytarish (rollback).** API'ni shu o'zgarishdan OLDINGI versiyaga qaytarishdan avval chiqindi qutisi bo'sh bo'lishi shart (har bir postni qaytaring yoki doimiy o'chiring): eski kod `deleted_at`ni bilmaydi, chiqindidagi postlarni `_trash_<id>` slug'li oddiy post sifatida ko'rsatadi va hatto chop etib yuborishi mumkin. Tekshiruv: `select count(*) from posts where deleted_at is not null;` — `0` bo'lishi kerak. Migratsiyalar (0010–0014) orqaga qaytarilmaydi, joyida qoladi (faqat qo'shimcha ustun/jadval — eski kodga zarar qilmaydi).
+
 > `apps/api/docker-compose.yml` barcha portlarni **faqat lokal interfeysga** bog'laydi (`127.0.0.1:4000` — API, `127.0.0.1:5432` — Postgres, `127.0.0.1:3001` — Umami). Ular internetdan to'g'ridan-to'g'ri ochilmaydi va ufw'ni chetlab o'tmaydi; tashqi kirish faqat nginx + TLS orqali.
 
 **(a) VDS — Docker + nginx orqasida `apps/api`**
@@ -601,6 +603,8 @@ Every one of these can be set via `.env` or `/admin/sozlamalar` — **a non-empt
 ### 8. Deploy
 
 Nothing deploys automatically. Primary path: **API on a VDS via Docker Compose, behind an existing nginx** (one shared server running other sites too); **web on Vercel**.
+
+> **Rollback.** Before rolling the API back to a version from before the trash feature, the trash must be empty (restore or permanently delete every trashed post): old code does not know `deleted_at`, would list trashed posts as normal posts with `_trash_<id>` slugs and could even publish one. Check: `select count(*) from posts where deleted_at is not null;` must return `0`. Migrations (0010–0014) stay in place on rollback (they are additive and harmless to old code).
 
 > `apps/api/docker-compose.yml` binds every port to **localhost only** (`127.0.0.1:4000` — API, `127.0.0.1:5432` — Postgres, `127.0.0.1:3001` — Umami). Nothing is reachable from the internet directly and ufw is not bypassed; public access goes only through nginx + TLS.
 
