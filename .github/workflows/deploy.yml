@@ -223,6 +223,11 @@ jobs:
           name="abdusoft-blog-$DEPLOY_SHA.tar.gz.enc"
           echo "sha256=$(cut -d' ' -f1 < "$RUNNER_TEMP/bundle/$name.sha256")" >> "$GITHUB_OUTPUT"
 
+      # Kalit fayli muvaffaqiyatsizlikda ham o'chiriladi.
+      - name: Kalit faylini o'chirish
+        if: always()
+        run: rm -f "$RUNNER_TEMP/bundle.key"
+
       - uses: actions/upload-artifact@v4
         with:
           name: deploy-bundle
