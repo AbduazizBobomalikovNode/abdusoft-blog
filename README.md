@@ -241,7 +241,9 @@ Quyidagilarning barchasi `.env`da ham, `/admin/sozlamalar`da ham sozlanishi mumk
 
 ### 8. Deploy
 
-Hech narsa avtomatik deploy qilinmaydi. Asosiy yo'l: **API — VDS'da Docker Compose, mavjud nginx orqasida** (bitta serverda boshqa saytlar bilan bir qatorda); **web — Vercel'da**.
+> **Avtomatik deploy (CD):** `main`'ga push + CI muvaffaqiyatli bo'lgach, GitHub Actions production VDS'ga o'zi deploy qiladi (sozlangan bo'lsa). Qanday ishlashi va bir martalik sozlash: [`docs/deploy.md`](docs/deploy.md). Quyida — eski (Docker/Vercel) yo'l tavsifi; hozirgi production Docker'siz (systemd) ishlaydi, qo'lda zaxira yo'l — `./scripts/deploy-vds.sh`.
+
+Avtomatik deploy sozlanmagan bo'lsa, hech narsa avtomatik deploy qilinmaydi. Asosiy yo'l: **API — VDS'da Docker Compose, mavjud nginx orqasida** (bitta serverda boshqa saytlar bilan bir qatorda); **web — Vercel'da**.
 
 > `apps/api/docker-compose.yml` barcha portlarni **faqat lokal interfeysga** bog'laydi (`127.0.0.1:4000` — API, `127.0.0.1:5432` — Postgres, `127.0.0.1:3001` — Umami). Ular internetdan to'g'ridan-to'g'ri ochilmaydi va ufw'ni chetlab o'tmaydi; tashqi kirish faqat nginx + TLS orqali.
 
@@ -596,7 +598,9 @@ Every one of these can be set via `.env` or `/admin/sozlamalar` — **a non-empt
 
 ### 8. Deploy
 
-Nothing deploys automatically. Primary path: **API on a VDS via Docker Compose, behind an existing nginx** (one shared server running other sites too); **web on Vercel**.
+> **Continuous deployment:** after a push to `main` and a green CI, GitHub Actions deploys to the production VDS (once configured). How it works and the one-time setup: [`docs/deploy.md`](docs/deploy.md) (Uzbek). The text below describes the older Docker/Vercel path; production now runs without Docker (systemd), and the manual fallback is `./scripts/deploy-vds.sh`.
+
+Unless automatic deployment is configured, nothing deploys automatically. Primary path: **API on a VDS via Docker Compose, behind an existing nginx** (one shared server running other sites too); **web on Vercel**.
 
 > `apps/api/docker-compose.yml` binds every port to **localhost only** (`127.0.0.1:4000` — API, `127.0.0.1:5432` — Postgres, `127.0.0.1:3001` — Umami). Nothing is reachable from the internet directly and ufw is not bypassed; public access goes only through nginx + TLS.
 
