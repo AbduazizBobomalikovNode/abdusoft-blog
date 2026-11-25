@@ -214,10 +214,15 @@ export async function publishDuePosts(now: Date = new Date()): Promise<void> {
     .where(and(eq(posts.status, "scheduled"), isNull(posts.deletedAt), lte(posts.scheduledAt, now)));
 
   for (const { id } of due) {
-    const result = await executePublish(SCHEDULER_ACTOR, id, { kind: "scheduled" }, (post) =>
-      post.status !== "scheduled" ? fail("conflict", "Post endi rejalashtirilmagan") : null,
-    );
-    if (result.ok) console.log(`Rejalashtirilgan post chop etildi: ${result.data.slug}`);
+    // Har bir post ALOHIDA: bittasining xatosi (DB, hodisa, ...) qolganlarini va keyingi tick'larni to'smasin.
+    try {
+      const result = await executePublish(SCHEDULER_ACTOR, id, { kind: "scheduled" }, (post) =>
+        post.status !== "scheduled" ? fail("conflict", "Post endi rejalashtirilmagan") : null,
+      );
+      if (result.ok) console.log(`Rejalashtirilgan post chop etildi: ${result.data.slug}`);
+    } catch (error: unknown) {
+      console.error(`Rejalashtirilgan postni chop etib bo'lmadi (${id}):`, error instanceof Error ? error.message : error);
+    }
   }
 }
 

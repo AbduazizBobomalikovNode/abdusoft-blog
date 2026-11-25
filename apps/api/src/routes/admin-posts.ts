@@ -568,7 +568,15 @@ export const adminPostsRoute = new Hono()
     if (!UUID_RE.test(rid)) return c.json({ error: "Revision topilmadi" }, 404);
     const expected = await readExpectedUpdatedAt(c);
     if ("response" in expected) return expected.response;
-    const result = await restoreRevision(actorOf(c), id, rid, expected);
+    const rawBody = await c.req.json().catch(() => null);
+    const restoreSlug =
+      rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)
+        ? (rawBody as Record<string, unknown>).restoreSlug
+        : undefined;
+    if (restoreSlug !== undefined && typeof restoreSlug !== "boolean") {
+      return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
+    }
+    const result = await restoreRevision(actorOf(c), id, rid, { ...expected, restoreSlug });
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })

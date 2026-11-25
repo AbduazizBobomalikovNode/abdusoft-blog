@@ -76,8 +76,8 @@ export async function restoreRevision(
   actor: Actor,
   postId: string,
   revisionId: string,
-  opts: ConcurrencyOptions = {},
-): Promise<ServiceResult<{ updatedAt: string }>> {
+  opts: ConcurrencyOptions & { restoreSlug?: boolean } = {},
+): Promise<ServiceResult<{ updatedAt: string; slug: string; slugRestored: boolean }>> {
   const post = await loadPost(db, postId);
   if (!post) return fail("not_found", "Topilmadi");
   const denied = checkCanEdit(actor, post);
@@ -86,13 +86,15 @@ export async function restoreRevision(
   if (!row) return fail("not_found", "Revision topilmadi");
 
   const settings = PostSettingsSchema.partial().safeParse(row.settings);
-  return updatePost(
+  // Jonli URL'ni jimgina o'zgartirmaslik: chop etilgan/rejalashtirilgan postda slug faqat so'ralganda qaytariladi.
+  const keepSlug = (post.status === "published" || post.status === "scheduled") && !opts.restoreSlug;
+  const result = await updatePost(
     actor,
     postId,
     {
       expectedUpdatedAt: opts.expectedUpdatedAt,
       title: row.title,
-      slug: row.slug,
+      ...(keepSlug ? {} : { slug: row.slug }),
       excerpt: row.excerpt,
       contentJson: row.contentJson,
       coverUrl: row.coverUrl,
@@ -106,4 +108,7 @@ export async function restoreRevision(
       audit: { action: "post.restore_revision", summary: "Post eski versiyadan tiklandi", meta: { revisionId, revisionReason: row.reason } },
     },
   );
+  if (!result.ok) return result;
+  const fresh = await loadPost(db, postId);
+  return ok({ updatedAt: result.data.updatedAt, slug: fresh?.slug ?? post.slug, slugRestored: !keepSlug });
 }
