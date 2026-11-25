@@ -7,7 +7,17 @@
 # Ishlatilishi (repo ildizidan, build'dan KEYIN):
 #   ./scripts/make-deploy-bundle.sh <40-belgili-sha> <chiqish-papkasi>
 #
-# Natija: <chiqish>/abdusoft-blog-<sha>.tar.gz va .tar.gz.sha256
+# Muhit: BUNDLE_KEY_FILE — shifrlash kaliti yozilgan fayl yo'li (MAJBURIY; kalit hech
+#        qachon buyruq qatoriga yoki logga chiqmaydi).
+#        NEXT_PUBLIC_* — build'da ishlatilgan ochiq qiymatlar (manifestga yoziladi).
+#
+# Bundle `.next` ichidagi build kalitlarini (preview-props va h.k.) o'z ichiga oladi.
+# Repo va release ochiq bo'lgani uchun bundle, birinchi yuklashdan (artifact ham)
+# OLDIN, AES-256-CBC bilan shifrlanadi. Sir tekshiruvi shifrlashdan oldin, ochiq
+# matnda bajariladi.
+#
+# Natija: <chiqish>/abdusoft-blog-<sha>.tar.gz.enc va .tar.gz.enc.sha256
+#         (hash SHIFRLANGAN fayl uchun)
 set -euo pipefail
 export LC_ALL=C COPYFILE_DISABLE=1
 
@@ -20,6 +30,12 @@ fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
+
+KEY_FILE="${BUNDLE_KEY_FILE:-}"
+if [ -z "$KEY_FILE" ] || [ ! -s "$KEY_FILE" ]; then
+  echo "XATO: BUNDLE_KEY_FILE berilmagan yoki bo'sh — bundle shifrlanmasdan yuklanmaydi." >&2
+  exit 1
+fi
 
 for d in apps/web/.next apps/api/dist packages/shared/dist; do
   [ -d "$d" ] || { echo "XATO: $d topilmadi — avval build qiling." >&2; exit 1; }
@@ -59,10 +75,19 @@ rm -f "$STAGE/.hits"
 
 NEXT_VERSION="$(cd apps/web && node -p 'require("next/package.json").version')"
 node -e '
+  const crypto = require("crypto");
   const [commit, nextVersion, lock, out] = process.argv.slice(1);
+  const names = ["NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_SITE_URL", "NEXT_PUBLIC_SITE_NAME", "NEXT_PUBLIC_TELEGRAM_URL",
+    "NEXT_PUBLIC_GITHUB_URL", "NEXT_PUBLIC_TURNSTILE_SITE_KEY", "NEXT_PUBLIC_GITHUB_LOGIN",
+    "NEXT_PUBLIC_UMAMI_SCRIPT_URL", "NEXT_PUBLIC_UMAMI_WEBSITE_ID"];
+  const publicEnv = {};
+  for (const n of names) publicEnv[n] = process.env[n] ?? "";
+  const publicHash = crypto.createHash("sha256").update(names.map((n) => n + "=" + publicEnv[n]).join("\n")).digest("hex");
   require("fs").writeFileSync(out, JSON.stringify({
-    format: 1,
+    format: 2,
     commit,
+    public_env: publicEnv,
+    public_env_sha256: publicHash,
     node_major: process.versions.node.split(".")[0],
     node_version: process.versions.node,
     next_version: nextVersion,
@@ -71,7 +96,13 @@ node -e '
   }, null, 2) + "\n");
 ' "$SHA" "$NEXT_VERSION" "$(sha256_of pnpm-lock.yaml)" "$STAGE/MANIFEST.json"
 
-NAME="abdusoft-blog-$SHA.tar.gz"
-tar -czf "$OUT_DIR/$NAME" -C "$STAGE" MANIFEST.json apps packages
+PLAIN="$(mktemp "${TMPDIR:-/tmp}/abdusoft-bundle-plain.XXXXXX")"
+trap 'rm -rf "$STAGE" "$PLAIN"' EXIT
+tar -czf "$PLAIN" -C "$STAGE" MANIFEST.json apps packages
+
+# Server tomonidagi `openssl enc -d` bilan BIR XIL parametrlar bo'lishi shart.
+NAME="abdusoft-blog-$SHA.tar.gz.enc"
+openssl enc -aes-256-cbc -pbkdf2 -md sha256 -iter 200000 -pass "file:$KEY_FILE" -in "$PLAIN" -out "$OUT_DIR/$NAME"
+rm -f "$PLAIN"
 echo "$(sha256_of "$OUT_DIR/$NAME")  $NAME" >"$OUT_DIR/$NAME.sha256"
-echo "Bundle tayyor: $OUT_DIR/$NAME ($(du -h "$OUT_DIR/$NAME" | cut -f1)), Next $NEXT_VERSION, Node $(node -p 'process.versions.node')"
+echo "Bundle tayyor (shifrlangan): $OUT_DIR/$NAME ($(du -h "$OUT_DIR/$NAME" | cut -f1)), Next $NEXT_VERSION, Node $(node -p 'process.versions.node')"
