@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 export function PasswordInput({
   id,
   label,
+  toggleName,
   value,
   onChange,
   error,
@@ -18,6 +19,8 @@ export function PasswordInput({
 }: {
   id: string;
   label: string;
+  /** Ko'rsatish/yashirish tugmasi nomi uchun ("yangi parol" -> "Yangi parolni ko'rsatish"). */
+  toggleName: string;
   value: string;
   onChange: (value: string) => void;
   error?: string;
@@ -51,7 +54,7 @@ export function PasswordInput({
         <button
           type="button"
           onClick={() => setVisible((v) => !v)}
-          aria-label={visible ? `${label}ni yashirish` : `${label}ni ko'rsatish`}
+          aria-label={visible ? `${toggleName}ni yashirish` : `${toggleName}ni ko'rsatish`}
           aria-pressed={visible}
           className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-lg text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
         >
