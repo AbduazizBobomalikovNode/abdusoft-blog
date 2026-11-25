@@ -26,7 +26,7 @@ describe("conflictSummary", () => {
 
   it("copes with a missing actor, missing source and unknown sources", () => {
     expect(conflictSummary({ updatedBy: null, via: null }, "me").who).toBe("Kim o'zgartirgani noma'lum");
-    expect(conflictSummary({ updatedBy: null, via: "scheduler" }, "me").who).toBe("O'zgartirgan: Rejalashtiruvchi");
+    expect(conflictSummary({ updatedBy: null, via: "scheduler" }, "me").who).toBe("Post rejalashtirilgan vaqtda avtomatik chop etildi");
     expect(conflictSummary({ updatedBy: { id: "u2", name: null }, via: null }, "me").who).toBe("O'zgartirgan: Noma'lum foydalanuvchi");
     expect(conflictSummary({ updatedBy: { id: "u2", name: "Dilnoza" }, via: "yangi" }, "me").who).toBe("O'zgartirgan: Dilnoza · yangi");
   });

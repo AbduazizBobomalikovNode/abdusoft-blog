@@ -43,6 +43,7 @@ const REVISION_REASON_LABELS: Record<string, string> = {
   schedule: "Rejalashtirishdan oldin",
   trash: "Savatga ko'chirishdan oldin",
   "restore-revision": "Versiyaga qaytarishdan oldin",
+  overwrite: "Almashtirishdan oldin",
 };
 
 export function revisionReasonLabel(reason: string | null | undefined): string {
