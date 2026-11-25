@@ -1,0 +1,474 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1,
+      "description": "Schema version; currently 1"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Storyboard title (metadata and file names; not drawn)"
+    },
+    "theme": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark"
+      ],
+      "description": "light | dark, matching the blog's two themes"
+    },
+    "accent": {
+      "description": "Optional accent colour as #RGB or #RRGGBB; defaults to the blog's blue-violet. Used sparingly",
+      "type": "string",
+      "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+    },
+    "siteName": {
+      "default": "abdusoft",
+      "description": "Wordmark shown in the corner; default 'abdusoft'",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 24
+    },
+    "format": {
+      "default": "landscape",
+      "description": "Only 'landscape' (1920x1080, 30 fps) is accepted for now",
+      "type": "string",
+      "enum": [
+        "landscape"
+      ]
+    },
+    "defaultTransition": {
+      "default": "fade",
+      "description": "Transition used by scenes that do not set their own",
+      "type": "string",
+      "enum": [
+        "cut",
+        "fade",
+        "slide"
+      ]
+    },
+    "scenes": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "title"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide"
+                ]
+              },
+              "kicker": {
+                "description": "Small label above the title, max 32 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "Main title, max 80 chars"
+              },
+              "subtitle": {
+                "description": "One supporting sentence, max 120 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "tags": {
+                "description": "Up to 5 short pills, each max 24 chars",
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 24
+                }
+              }
+            },
+            "required": [
+              "type",
+              "title"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "bullets"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide"
+                ]
+              },
+              "heading": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "description": "Heading above the list, max 60 chars"
+              },
+              "items": {
+                "minItems": 1,
+                "maxItems": 6,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "description": "1-6 bullets revealed one by one, each max 80 chars"
+              }
+            },
+            "required": [
+              "type",
+              "heading",
+              "items"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "code"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide"
+                ]
+              },
+              "language": {
+                "type": "string",
+                "enum": [
+                  "typescript",
+                  "tsx",
+                  "javascript",
+                  "jsx",
+                  "json",
+                  "bash",
+                  "python",
+                  "go",
+                  "rust",
+                  "sql",
+                  "yaml",
+                  "html",
+                  "css",
+                  "markdown",
+                  "diff",
+                  "dockerfile",
+                  "text"
+                ],
+                "description": "Syntax highlighting language"
+              },
+              "fileName": {
+                "description": "Shown in the code block header, max 48 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 48
+              },
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Source text, max 14 lines of max 72 chars; use spaces, not tabs"
+              },
+              "steps": {
+                "description": "Up to 8 highlight steps shown in order; the rest of the code is dimmed",
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "lines": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "description": "First highlighted line (1-based)"
+                        },
+                        "to": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "description": "Last highlighted line (1-based, inclusive)"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Inclusive 1-based line range to highlight"
+                    },
+                    "label": {
+                      "description": "Caption shown under the code while this step is active, max 80 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "durationSeconds": {
+                      "description": "Omit for automatic timing based on label length and number of lines",
+                      "type": "number",
+                      "minimum": 1,
+                      "maximum": 10
+                    }
+                  },
+                  "required": [
+                    "lines"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "typing": {
+                "description": "Type the code out with a caret (default false: the block fades in complete)",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "language",
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "terminal"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide"
+                ]
+              },
+              "title": {
+                "description": "Window title, max 32 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "lines": {
+                "minItems": 1,
+                "maxItems": 12,
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "command"
+                        },
+                        "text": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 72,
+                          "description": "Typed after the prompt, max 72 chars"
+                        },
+                        "waitSeconds": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 5,
+                          "description": "Pause before typing, 0-5 s"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "text"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "output"
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 72,
+                          "description": "One output line, max 72 chars (may be empty for a blank line)"
+                        },
+                        "tone": {
+                          "description": "default | muted | success | error",
+                          "type": "string",
+                          "enum": [
+                            "default",
+                            "muted",
+                            "success",
+                            "error"
+                          ]
+                        },
+                        "waitSeconds": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 5,
+                          "description": "Pause before the line appears, 0-5 s"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "text"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "description": "Commands are typed, outputs appear; at most 12 entries in total"
+              }
+            },
+            "required": [
+              "type",
+              "lines"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "outro"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide"
+                ]
+              },
+              "siteName": {
+                "description": "Defaults to the storyboard's siteName",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24
+              },
+              "cta": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "description": "Call to action, max 60 chars"
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 48,
+                "description": "URL shown as text (never fetched or linked), max 48 chars"
+              }
+            },
+            "required": [
+              "type",
+              "cta",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "description": "Ordered scenes, 1-16; total video at most 60 s"
+    }
+  },
+  "required": [
+    "version",
+    "title",
+    "theme",
+    "scenes"
+  ],
+  "additionalProperties": false,
+  "title": "abdusoft blog motion storyboard",
+  "description": "Storyboard for a silent animated explainer (max 60 s, 1920x1080 @ 30 fps). Pure data: the engine renders it deterministically with no AI and no network access."
+}
