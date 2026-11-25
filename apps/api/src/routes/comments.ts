@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { and, eq, sql } from "drizzle-orm";
+import { publishedLive } from "../lib/posts/live.js";
 import { z } from "zod";
 import {
   CreateCommentBodySchema,
@@ -56,7 +57,7 @@ async function loadPublishedPost(slug: string) {
   const [post] = await db
     .select()
     .from(posts)
-    .where(and(eq(posts.slug, slug), eq(posts.status, "published")))
+    .where(and(eq(posts.slug, slug), publishedLive()))
     .limit(1);
   return post ?? null;
 }

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, ilike, inArray, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { AdminPostStatus, PostListItem, Tag } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { postTags, posts } from "../../db/schema.js";
@@ -81,7 +81,7 @@ async function computeTotals(ownerId?: string): Promise<Record<"all" | AdminPost
   const rows = await db
     .select({ status: posts.status, count: sql<number>`count(*)::int` })
     .from(posts)
-    .where(ownerId ? eq(posts.createdBy, ownerId) : undefined)
+    .where(ownerId ? and(eq(posts.createdBy, ownerId), isNull(posts.deletedAt)) : isNull(posts.deletedAt))
     .groupBy(posts.status);
 
   const totals = {
@@ -112,7 +112,7 @@ export async function listPosts(actor: Actor, input: ListPostsInput) {
   const { status, q, page, limit } = input;
   const offset = (page - 1) * limit;
 
-  const conditions = [];
+  const conditions = [isNull(posts.deletedAt)];
   if (status !== "all") {
     conditions.push(eq(posts.status, status));
   }
@@ -167,7 +167,7 @@ export async function mineSummary(actor: Actor) {
     db
       .select(adminPostSelectColumns)
       .from(posts)
-      .where(eq(posts.createdBy, ownerId))
+      .where(and(eq(posts.createdBy, ownerId), isNull(posts.deletedAt)))
       .orderBy(desc(posts.updatedAt))
       .limit(RECENT_MINE_LIMIT),
   ]);
@@ -266,7 +266,7 @@ export async function previewPost(actor: Actor, id: string) {
     const [prevRow] = await db
       .select({ slug: posts.slug, title: posts.title })
       .from(posts)
-      .where(and(eq(posts.status, "published"), lt(posts.publishedAt, post.publishedAt)))
+      .where(and(eq(posts.status, "published"), isNull(posts.deletedAt), lt(posts.publishedAt, post.publishedAt)))
       .orderBy(desc(posts.publishedAt))
       .limit(1);
     prev = prevRow ?? null;
@@ -274,7 +274,7 @@ export async function previewPost(actor: Actor, id: string) {
     const [nextRow] = await db
       .select({ slug: posts.slug, title: posts.title })
       .from(posts)
-      .where(and(eq(posts.status, "published"), gt(posts.publishedAt, post.publishedAt)))
+      .where(and(eq(posts.status, "published"), isNull(posts.deletedAt), gt(posts.publishedAt, post.publishedAt)))
       .orderBy(asc(posts.publishedAt))
       .limit(1);
     next = nextRow ?? null;
@@ -290,6 +290,7 @@ export async function previewPost(actor: Actor, id: string) {
       .where(
         and(
           eq(posts.status, "published"),
+          isNull(posts.deletedAt),
           ne(posts.id, post.id),
           inArray(
             posts.id,

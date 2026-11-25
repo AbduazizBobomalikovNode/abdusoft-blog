@@ -86,6 +86,12 @@ export const posts = pgTable(
     updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
     /** Oxirgi o'zgartirish qaysi kanaldan kelgan: `web` | `mcp` | `telegram` | `scheduler` | `system` (eski qatorlarda `null`). */
     updatedVia: text("updated_via"),
+    /**
+     * Chiqindi qutisi: `null` — post jonli; qiymat bor — post chiqindi qutisida (status O'ZGARMAYDI, shu sabab "qaytarish"
+     * avvalgi holatga qaytaradi). Slug chiqindi qutisida ham band qoladi (unique). Hamma o'qish so'rovlari `deleted_at is null`ni tekshiradi.
+     */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: text("deleted_by").references(() => user.id, { onDelete: "set null" }),
     /** Admin "Qaytarish" (`changes_requested`) bosganda qoldirgan izohi — xodimga ko'rinadi. */
     reviewNote: text("review_note"),
     /** Xodim "Ko'rib chiqishga yuborish" bosgan payt (`in_review`ga o'tganda). */

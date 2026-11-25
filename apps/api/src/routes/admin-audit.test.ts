@@ -104,12 +104,17 @@ describe("audit rows for post actions", () => {
     }
   });
 
-  it("records the hard delete (draft) with the post label even though the row is gone", async () => {
+  it("records trash, restore and permanent delete (the entry outlives the row)", async () => {
     const created = await createPost(admin.cookie, "O'chiriladigan");
     expect((await del(`/admin/posts/${created.id}`, admin.cookie)).status).toBe(200);
+    expect((await post(`/admin/posts/trash/${created.id}/restore`, admin.cookie)).status).toBe(200);
+    expect((await del(`/admin/posts/${created.id}`, admin.cookie)).status).toBe(200);
+    expect((await del(`/admin/posts/trash/${created.id}`, admin.cookie)).status).toBe(200);
     const rows = await auditRows(created.id);
-    expect(rows.map((row) => row.action)).toEqual(["post.create", "post.delete"]);
-    expect(rows[1]?.summary).toContain("O'chiriladigan");
+    expect(rows.map((row) => row.action)).toEqual(["post.create", "post.trash", "post.restore_trash", "post.trash", "post.purge"]);
+    expect(rows[4]?.summary).toContain("O'chiriladigan");
+    const [gone] = await db.select().from(schema.posts).where(eq(schema.posts.id, created.id));
+    expect(gone).toBeUndefined();
   });
 
   it("does not write an audit row for rejected requests", async () => {

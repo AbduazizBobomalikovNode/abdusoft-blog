@@ -10,6 +10,7 @@ import {
   RequestChangesBodySchema,
   SchedulePostBodySchema,
   SetChannelChoiceBodySchema,
+  TrashListQuerySchema,
   UpdateChannelVersionBodySchema,
   UpdatePostBodySchema,
   type PublishChannelSendResult,
@@ -21,13 +22,16 @@ import {
   archivePost,
   authorizeEdit,
   createPost,
-  deletePost,
   findPost,
   getPostDetail,
   getRevision,
   listRevisions,
   restoreRevision,
   listPosts,
+  listTrash,
+  purgePost,
+  restoreFromTrash,
+  trashPost,
   mineSummary,
   previewPost,
   publishPost,
@@ -223,6 +227,28 @@ async function queueChannelSend(postId: string): Promise<PublishChannelSendResul
 export const adminPostsRoute = new Hono()
   .use("*", requireRole("admin", "staff"))
   .get("/mine/summary", async (c) => c.json(await mineSummary(actorOf(c))))
+  // Chiqindi qutisi (faqat admin): `/trash` marshrutlari `/:id`dan OLDIN ro'yxatga olinadi.
+  .get("/trash", async (c) => {
+    const parsed = TrashListQuerySchema.safeParse({ page: c.req.query("page"), limit: c.req.query("limit") });
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov parametrlari" }, 400);
+    const result = await listTrash(actorOf(c), parsed.data);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .post("/trash/:id/restore", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    const result = await restoreFromTrash(actorOf(c), id);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .delete("/trash/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    const result = await purgePost(actorOf(c), id);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json({ ok: true });
+  })
   .get("/", async (c) => {
     const parsed = ListQuerySchema.safeParse({
       status: c.req.query("status") ?? undefined,
@@ -617,7 +643,8 @@ export const adminPostsRoute = new Hono()
     return c.json(result.data);
   })
   .delete("/:id", async (c) => {
-    const result = await deletePost(actorOf(c), c.req.param("id"));
+    // Eski nom saqlangan, lekin endi post chiqindi qutisiga ko'chadi (qaytarish mumkin).
+    const result = await trashPost(actorOf(c), c.req.param("id"));
     if (!result.ok) return errorResponse(c, result.error);
     return c.json({ ok: true });
   });

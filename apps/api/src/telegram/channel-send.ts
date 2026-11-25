@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { GrammyError, InputFile, InputMediaBuilder } from "grammy";
 import {
   isChannelComboValid,
@@ -103,7 +103,7 @@ export async function computeChannelPost(
 ): Promise<ComputeChannelPostResult> {
   if (!isChannelComboValid(mode, variant)) return { ok: false, reason: "invalid_combo" };
 
-  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  const [post] = await db.select().from(posts).where(and(eq(posts.id, postId), isNull(posts.deletedAt))).limit(1);
   if (!post) return { ok: false, reason: "not_found" };
   if (post.status !== "published" && !opts.allowUnpublished) return { ok: false, reason: "not_published" };
 
@@ -159,7 +159,7 @@ export async function computeChannelVersionPost(
   versionId: string,
   opts: { allowUnpublished?: boolean; allowEmptyMedia?: boolean } = {},
 ): Promise<ComputeChannelPostResult> {
-  const [post] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
+  const [post] = await db.select().from(posts).where(and(eq(posts.id, postId), isNull(posts.deletedAt))).limit(1);
   if (!post) return { ok: false, reason: "not_found" };
   if (post.status !== "published" && !opts.allowUnpublished) return { ok: false, reason: "not_published" };
 
