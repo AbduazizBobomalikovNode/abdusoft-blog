@@ -278,15 +278,26 @@ describe("token validation at /mcp", () => {
     expect(expired.www).toContain("resource_metadata=");
   });
 
-  it("rejects an access token minted without the MCP resource (it is opaque, not audience-bound)", async () => {
+  it("a client that never sends `resource` still gets an audience-bound token (the authorize hook adds it) and refreshes fine", async () => {
     const clientId = await registerClient(app);
     const a = await authorize(app, { clientId, ...creds, resource: null });
     const tok = await exchangeCode(app, a, null);
     expect(tok.status).toBe(200);
-    expect(tok.body.access_token.split(".")).not.toHaveLength(3);
-    const res = await mcpCall(app, tok.body.access_token, "tools/list");
-    expect(res.status).toBe(401);
-    expect(res.www).toContain("resource_metadata=");
+    expect([jwtPayload(tok.body.access_token).aud].flat()).toEqual([MCP_URL]);
+    expect((await mcpCall(app, tok.body.access_token, "tools/list")).status).toBe(200);
+
+    const refreshed = await tokenRequest(app, { grant_type: "refresh_token", refresh_token: tok.body.refresh_token, client_id: clientId });
+    expect(refreshed.status).toBe(200);
+    expect([jwtPayload(refreshed.body.access_token).aud].flat()).toEqual([MCP_URL]);
+    expect((await mcpCall(app, refreshed.body.access_token, "tools/list")).status).toBe(200);
+  });
+
+  it("refuses an authorization request for a different resource (invalid_target) and rejects opaque tokens at /mcp", async () => {
+    const clientId = await registerClient(app);
+    const refused = await authorize(app, { clientId, ...creds, resource: `${API}/other` });
+    expect(refused.code).toBe("");
+    expect(refused.error).toBe("invalid_target");
+    expect((await mcpCall(app, "opaque-token-value", "tools/list")).status).toBe(401);
   });
 
   it("works when the client sends only 'Accept: application/json'", async () => {

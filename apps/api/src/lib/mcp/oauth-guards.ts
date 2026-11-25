@@ -6,6 +6,7 @@ import { handleAuthRequest } from "../auth-handler.js";
 import { recordAuditSafe } from "../audit.js";
 import { clientIp } from "../device.js";
 import { consumeRateLimit } from "../rate-limit.js";
+import { MCP_RESOURCE_URL } from "./endpoints.js";
 import { isAllowedRedirectUri } from "./redirect-policy.js";
 
 const MAX_REGISTRATION_BODY = 16 * 1024;
@@ -62,17 +63,32 @@ export async function registrationGuard(c: Context, next: Next) {
 }
 
 /**
- * `GET /api/auth/oauth2/authorize`: klient `scope`da `offline_access`ni unutsa, qo'shamiz — aks holda refresh token
- * umuman berilmaydi va qisqa umrli (default 15 daqiqa) access token tugagach ulanish uziladi. `scope` umuman
- * yuborilmasa tegilmaydi (klientning ro'yxatdan o'tgan default scope'lari, ular `offline_access`ni o'z ichiga oladi,
- * ishlatiladi). `MCP_FORCE_OFFLINE_ACCESS=false` — o'chirish.
+ * `GET /api/auth/oauth2/authorize` — ikkita himoya tuzatish (faqat MCP yoqilganda):
+ *
+ * 1. Klient `scope`da `offline_access`ni unutsa, qo'shamiz — aks holda refresh token umuman berilmaydi va qisqa umrli
+ *    (default 15 daqiqa) access token tugagach ulanish uziladi. `scope` umuman yuborilmasa tegilmaydi (klientning
+ *    ro'yxatdan o'tgan default scope'lari ishlatiladi, ular `offline_access`ni o'z ichiga oladi).
+ *    `MCP_FORCE_OFFLINE_ACCESS=false` — o'chirish.
+ * 2. Klient `resource` (RFC 8707) yubormasa, `MCP_RESOURCE_URL`ni qo'shamiz: bu AS faqat bitta resurs serverga xizmat
+ *    qiladi, `resource`siz token esa shaffof (opaque) bo'lib `/mcp`da 401 bergan bo'lardi (cheksiz 401 sikli).
+ *    Aniq boshqa `resource` yuborilsa tegilmaydi (AS uni `invalid_target` bilan rad etadi).
  */
 export async function authorizeHook(c: Context, next: Next) {
-  if (c.req.method !== "GET" || !config.MCP_FORCE_OFFLINE_ACCESS) return next();
+  if (c.req.method !== "GET") return next();
   const url = new URL(c.req.url);
+  let changed = false;
+
   const scope = url.searchParams.get("scope");
-  if (scope === null || parseScopeString(scope).includes(MCP_OFFLINE_SCOPE)) return next();
-  url.searchParams.set("scope", `${scope} ${MCP_OFFLINE_SCOPE}`.trim());
+  if (config.MCP_FORCE_OFFLINE_ACCESS && scope !== null && !parseScopeString(scope).includes(MCP_OFFLINE_SCOPE)) {
+    url.searchParams.set("scope", `${scope} ${MCP_OFFLINE_SCOPE}`.trim());
+    changed = true;
+  }
+  if (!url.searchParams.has("resource")) {
+    url.searchParams.set("resource", MCP_RESOURCE_URL);
+    changed = true;
+  }
+
+  if (!changed) return next();
   return handleAuthRequest(c, new Request(url, c.req.raw));
 }
 
