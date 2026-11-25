@@ -3,7 +3,6 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { config, isProduction } from "../config.js";
 import { db, fullSchema } from "../db/index.js";
 import { buildAuthAdvanced, buildAuthRateLimit } from "./auth-options.js";
-import { buildMcpPlugins } from "./mcp/plugins.js";
 import { getSettings } from "./settings.js";
 
 // GitHub OAuth provider'ni betterAuth BOOT vaqtida ro'yxatga oladi (better-auth
@@ -21,6 +20,10 @@ export const bootedGithubConfig = {
 };
 
 const githubEnabled = bootSettings.github.providerEnabled;
+
+// Claude konnektori (MCP) plagin'lari faqat bayroq yoqilganda YUKLANADI (dinamik import) — o'chiq bo'lsa ularning
+// modullari ham import qilinmaydi va Better Auth avvalgidek plagin'siz ishlaydi.
+const mcpPlugins = config.MCP_ENABLED ? (await import("./mcp/plugins.js")).buildMcpPlugins() : [];
 
 export const auth = betterAuth({
   baseURL: config.API_ORIGIN,
@@ -55,7 +58,7 @@ export const auth = betterAuth({
   rateLimit: buildAuthRateLimit(),
   advanced: buildAuthAdvanced(isProduction),
   // Claude konnektori (MCP): faqat MCP_ENABLED=true bo'lganda. O'chiq bo'lsa plagin'lar ro'yxatga olinmaydi.
-  ...(config.MCP_ENABLED ? { plugins: buildMcpPlugins() } : {}),
+  ...(config.MCP_ENABLED ? { plugins: mcpPlugins } : {}),
 });
 
 export type Auth = typeof auth;

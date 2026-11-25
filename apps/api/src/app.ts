@@ -15,7 +15,6 @@ import { postsRoute } from "./routes/posts.js";
 import { siteRoute } from "./routes/site.js";
 import { staffInvitesRoute } from "./routes/staff-invites.js";
 import { tagsRoute } from "./routes/tags.js";
-import { mountMcp, mountMcpPreAuth } from "./lib/mcp/http.js";
 import { mountTelegramWebhook } from "./telegram/bot.js";
 
 export const app = new Hono();
@@ -42,7 +41,9 @@ app.use(
 );
 
 // Claude konnektori (MCP) qo'riqchilari — faqat MCP_ENABLED=true; o'chiq bo'lsa hech narsa ro'yxatga olinmaydi.
-if (config.MCP_ENABLED) mountMcpPreAuth(app);
+// (dinamik import: bayroq o'chiq bo'lsa MCP modullari umuman yuklanmaydi)
+const mcpHttp = config.MCP_ENABLED ? await import("./lib/mcp/http.js") : null;
+mcpHttp?.mountMcpPreAuth(app);
 
 app.on(["GET", "POST"], "/api/auth/*", (c) => handleAuthRequest(c));
 
@@ -82,6 +83,6 @@ app.route("/site", siteRoute);
 app.route("/staff/invites", staffInvitesRoute);
 app.route("/admin", adminRoute);
 mountTelegramWebhook(app);
-if (config.MCP_ENABLED) mountMcp(app);
+mcpHttp?.mountMcp(app);
 
 export type AppType = typeof app;

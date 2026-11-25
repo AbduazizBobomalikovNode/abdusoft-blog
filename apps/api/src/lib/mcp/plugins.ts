@@ -53,6 +53,10 @@ export function buildMcpPlugins(): BetterAuthPlugin[] {
         consentReferenceId: () => undefined,
         shouldRedirect: ({ user }) => (user as { role?: string }).role !== "admin",
       },
+      // Better Auth'ning o'zining (xotiradagi) chegarasi — qisqa muddatli portlash uchun; asosiy chegara soatlik va
+      // `oauth-guards.ts`dagi `registrationGuard`da (IP bo'yicha va umumiy). Standart 5/daqiqa o'rniga 10/daqiqa:
+      // egasi ulanishni bir necha marta qayta urinsa ham bloklanmasin. Faqat prod'da (yoki AUTH_RATE_LIMIT_ENABLED=true) faol.
+      rateLimit: { register: { window: 60, max: 10 } },
       advertisedMetadata: { scopes_supported: [...MCP_SCOPE_IDS, MCP_OFFLINE_SCOPE] },
       extensions: [{ metadata: () => ({ scope_descriptions: SCOPE_DESCRIPTIONS_EN }) }],
     }),
