@@ -11,6 +11,8 @@ export function conflictSummary(
 ): { who: string; by: string; own: boolean } {
   const own = !!meId && conflict.updatedBy?.id === meId && (!conflict.via || conflict.via === "web");
   if (own) return { who: "Siz boshqa oyna yoki qurilmada o'zgartirgansiz", by: "sizning boshqa oynangiz", own: true };
+  // Rejalashtiruvchi faqat rejalashtirilgan postni chop etadi — buni aniq aytamiz.
+  if (conflict.via === "scheduler") return { who: "Post rejalashtirilgan vaqtda avtomatik chop etildi", by: "rejalashtiruvchi (avtomatik chop etish)", own: false };
   if (!conflict.updatedBy && !conflict.via) return { who: "Kim o'zgartirgani noma'lum", by: "noma'lum", own: false };
   const by = changedByText(conflict.updatedBy, conflict.via);
   return { who: `O'zgartirgan: ${by}`, by, own: false };
