@@ -187,6 +187,12 @@ export async function mineSummary(actor: Actor) {
   };
 }
 
+/** Jonli (chiqindi qutisida EMAS) postning id'sini slug bo'yicha topadi — MCP `get_post` kabi slug bilan murojaat qiluvchilar uchun. */
+export async function findLivePostIdBySlug(slug: string): Promise<string | null> {
+  const [row] = await db.select({ id: posts.id }).from(posts).where(and(eq(posts.slug, slug), isNull(posts.deletedAt))).limit(1);
+  return row?.id ?? null;
+}
+
 /** `GET /admin/posts/:id`. */
 export async function getPostDetail(actor: Actor, id: string): Promise<ServiceResult<PostDetailView>> {
   const post = await loadPost(db, id);
