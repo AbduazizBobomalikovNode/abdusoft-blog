@@ -6,7 +6,7 @@ import { Archive, ArrowLeft, BarChart3, Eye, History, Keyboard, LayoutTemplate, 
 import type { AdminPostStatus, ResolvedChannelChoice } from "@blog/shared";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { formatTime } from "@/lib/format";
-import { hasBlockingIssue, type ChecklistItem, type FixTarget } from "@/lib/editor/checklist";
+import { hasBlockingIssue, type ChecklistItem, type FixTarget } from "@blog/shared";
 import { PublishChecklist } from "@/components/admin/editor/publish-checklist";
 import {
   AlertDialog,
