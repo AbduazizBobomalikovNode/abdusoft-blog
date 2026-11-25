@@ -10,6 +10,7 @@
 # Chiqish kodi 0 — hamma tekshiruv o'tdi.
 # shellcheck disable=SC2030,SC2031
 set -uo pipefail
+umask 022
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export COPYFILE_DISABLE=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
@@ -62,7 +63,15 @@ cat >"$SHIMS/systemctl" <<EOF
 #!/bin/bash
 case "\$1" in
   is-active) echo active ;;
+  show)
+    # show -p MainPID --value <svc>
+    cat "$SIM/pids/\${*: -1}" 2>/dev/null || echo 100 ;;
   restart)
+    mkdir -p "$SIM/pids"
+    if [ ! -e "$CTL/no_restart" ]; then
+      for svc in "\${@:2}"; do echo \$(( \$(cat "$SIM/pids/\$svc" 2>/dev/null || echo 100) + 1 )) >"$SIM/pids/\$svc"; done
+      rm -f "$CTL/down_until_restart"
+    fi
     echo "restart \${*:2} build=\$(cat "$LIVE/apps/web/.next/BUILD_ID" 2>/dev/null)" >>"$CALLS"
     [ -e "$CTL/kill_restart" ] && { "$SHIMS/killparent"; exit 137; }
     [ -e "$CTL/fail_restart" ] && exit 1
@@ -118,6 +127,7 @@ case "\$url" in
     echo "health \$url" >>"$CALLS"
     [ -e "$CTL/kill_health" ] && { "$SHIMS/killparent"; exit 137; }
     [ -e "$CTL/health_always_fail" ] && exit 22
+    [ -e "$CTL/down_until_restart" ] && exit 22
     [ "\$url" = "http://127.0.0.1:4000/tags" ] && [ -f "$CTL/db_down" ] && [ "\$(cat "$CTL/db_down")" = "\$live_bid" ] && exit 22
     if [ -f "$CTL/bad_build" ] && [ "\$(cat "$CTL/bad_build")" = "\$live_bid" ]; then exit 22; fi
     case "\$url" in
@@ -404,8 +414,10 @@ reset_calls
 forced "$(req "$C1")"
 check "no-op: kod 0" test "$RC" -eq 0
 check "no-op: xabar" contains "$OUT" "allaqachon deploy qilingan"
-check "no-op: restart/backup/migrate/install/download yo'q" test ! -s "$CALLS"
+check "no-op: restart/backup/migrate/install/download yo'q" test "$(calls_count '^restart\|^backup\|^migrate\|^pnpm\|^download')" -eq 0
+check "no-op: health tekshirildi" test "$(calls_count '^health')" -ge 1
 check "no-op: build o'sha" test "$(live_build)" = build-c1
+reset_calls
 forced "--force $(req "$C1")"
 check "SSH orqali --force rad etiladi (64)" test "$RC" -eq 64
 check "SSH --force: hech narsa bajarilmadi" test ! -s "$CALLS"
@@ -413,6 +425,27 @@ manual --force "$(req "$C1")"
 check "qo'lda --force: to'liq qayta deploy (kod 0)" test "$RC" -eq 0
 check "qo'lda --force: restart bo'ldi" test "$(calls_count '^restart')" -eq 1
 check "qo'lda --force: holat C1" test "$(state_get current_sha)" = "$C1"
+# xuddi shu commit, BOSHQA bundle hashi (qayta build) — haqiqiy deploy
+make_bundle "$C1" "build-c1"
+reset_calls
+forced "$(req "$C1")"
+check "shu commit, boshqa bundle hash: haqiqiy deploy (restart bo'ldi)" test "$RC" -eq 0 -a "$(calls_count '^restart')" -eq 1
+check "holat: bundle_sha256 yangilandi" test "$(state_get bundle_sha256)" = "$(bundle_hash "$C1")"
+reset_calls
+forced "$(req "$C1")"
+check "xuddi shu bundle qayta: no-op (restart yo'q)" test "$RC" -eq 0 -a "$(calls_count '^restart')" -eq 0
+# xizmatlar o'chiq: jim muvaffaqiyat EMAS
+touch "$CTL/down_until_restart"
+reset_calls
+forced "$(req "$C1")"
+check "xizmatlar o'chiq: restart + health, tiklandi (kod 0, ogohlantirish bilan)" bash -c "[ $RC -eq 0 ] && [[ \"\$1\" == *'qayta ishga tushirilib tiklandi'* ]] && [ \$(grep -c '^restart' '$CALLS') -eq 1 ]" _ "$OUT"
+check "xizmatlar o'chiq: download/backup/migrate yo'q" test "$(calls_count '^download\|^backup\|^migrate')" -eq 0
+touch "$CTL/health_always_fail"
+reset_calls
+forced "$(req "$C1")"
+check "xizmatlar tiklanmadi: kod 1, aniq xabar" bash -c "[ $RC -eq 1 ] && [[ \"\$1\" == *'ham sog'* ]]" _ "$OUT"
+check "xizmatlar tiklanmadi: bir marta restart, sikl yo'q" test "$(calls_count '^restart')" -eq 1
+reset_ctl
 # no-op faqat live build haqiqatan o'sha bo'lsa
 echo tampered >"$LIVE/apps/web/.next/BUILD_ID"
 reset_calls
@@ -815,12 +848,86 @@ check "(b): tugallangan-lekin-yozilmagan almashtirish ham qaytarildi" test "$RC"
 # (c) *.prev yo'q: avtomatik tiklab bo'lmaydi -> rad etadi (kod 2) va aniq ko'rsatma
 baseline "$C1"
 set_state phase restarting
-rm -rf "$LIVE/apps/web/.next.prev"
+rm -rf "$LIVE/apps/web/.next.prev" "$LIVE/apps/web/.next"
 set_state swap_done "apps/web/.next"
 forced "$(req "$C2")"
-check "(c): *.prev yo'q -> kod 2 va ko'rsatma" bash -c "[ $RC -eq 2 ] && [[ \"\$1\" == *'deploy-vds.sh'* ]]" _ "$OUT"
+check "(c): ham live, ham *.prev yo'q -> kod 2 va ko'rsatma" bash -c "[ $RC -eq 2 ] && [[ \"\$1\" == *'deploy-vds.sh'* ]]" _ "$OUT"
 set_state phase idle
 set_state swap_done ""
+# (d) rollback o'ldirilgan: web live bor/.prev yo'q; api live yo'q/.prev bor; shared live bor/.prev yo'q
+baseline "$C1"
+set_state phase restarting
+set_state swap_done "apps/web/.next apps/api/dist packages/shared/dist"
+rm -rf "$LIVE/apps/web/.next.prev" "$LIVE/packages/shared/dist.prev" "$LIVE/apps/api/dist.prev"
+mv "$LIVE/apps/api/dist" "$LIVE/apps/api/dist.prev"
+forced "$(req "$C2")"
+check "(d): o'ldirilgan rollback: tiklandi (kod 1, tiqilib qolmadi)" bash -c "[ $RC -eq 1 ] && [[ \"\$1\" == *'yarim qolgan'* ]]" _ "$OUT"
+check "(d): api dist joyiga qaytdi, web/shared saqlandi" test "$(cat "$LIVE/apps/api/dist/src/index.js")" = api-build-c1 -a "$(live_build)" = build-c1 -a "$(cat "$LIVE/packages/shared/dist/index.js")" = shared-build-c1
+check "(d): phase=idle" test "$(state_get phase)" = idle
+forced "$(req "$C2")"
+check "(d): keyin oddiy deploy ishlaydi" test "$RC" -eq 0 -a "$(live_build)" = build-c2
+# (e) holat faylidagi qiymatlar tekshiriladi: noma'lum yo'llar e'tiborsiz; tashqariga tegilmaydi
+baseline "$C1"
+mkdir -p "$SIM/canary.prev"
+echo precious >"$SIM/canary.prev/f"
+set_state phase swapping
+set_state swap_cur "../../canary"
+set_state swap_done "apps/web/.next ../../x * $LIVE/apps/api/dist"
+rm -rf "$LIVE/apps/web/.next.prev"
+cp -R "$LIVE/apps/web/.next" "$LIVE/apps/web/.next.prev"
+forced "$(req "$C2")"
+check "(e): noma'lum yo'llar e'tiborsiz (ogohlantirish), kod 1" bash -c "[ $RC -eq 1 ] && [[ \"\$1\" == *\"noma'lum yo'l\"* ]]" _ "$OUT"
+check "(e): tashqaridagi fayllarga tegilmadi" test -f "$SIM/canary.prev/f" -a ! -e "$SIM/canary"
+set_state phase idle
+set_state swap_cur ""
+set_state swap_done ""
+# (f) holat fayli bo'sh/buzilgan: sukut bilan o'tkazilmaydi
+baseline "$C1"
+: >"$STATE/state"
+forced "$(req "$C2")"
+check "(f): bo'sh holat fayli: aniq ogohlantirish, deploy davom etadi" bash -c "[ $RC -eq 0 ] && [[ \"\$1\" == *'Holat fayli'* ]]" _ "$OUT"
+baseline "$C1"
+echo "garbage ;; \$(touch $SIM/PWNED2)" >"$STATE/state"
+forced "$(req "$C2")"
+check "(f): buzilgan holat fayli: ogohlantirish, hech narsa bajarilmadi" bash -c "[ $RC -eq 0 ] && [[ \"\$1\" == *'Holat fayli'* ]] && [ ! -e '$SIM/PWNED2' ]" _ "$OUT"
+
+# ======================================================================
+section "19b. umask, kalit uzunligi, snapshot tozalash, MainPID"
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+baseline "$C1"
+umask 000
+reset_calls
+forced "$(req "$C2")"
+umask 022
+check "umask 000 bilan chaqirilsa ham deploy ishlaydi" test "$RC" -eq 0
+check "holat katalogi 700, holat fayli 600" test "$(mode "$STATE")" = 700 -a "$(mode "$STATE/state")" = 600
+check "snapshot (src.prev) 700" test "$(mode "$STATE/src.prev")" = 700
+check "live daraxt rejimlari o'zgarmagan: build fayli 644, manba 644, papka 755" test "$(mode "$LIVE/apps/web/.next/BUILD_ID")" = 644 -a "$(mode "$LIVE/package.json")" = 644 -a "$(mode "$LIVE/apps/web/.next")" = 755
+check "yuklama papkasi qolmadi" bash -c "! ls '$STATE' | grep -q '^download'"
+# kalit: bo'sh/probel/qisqa -> rad (hech narsa tegilmaydi)
+for kc in "   " "short" ""; do
+  printf '%s\n' "$kc" >"$KEY"
+  chmod 600 "$KEY"
+  reset_calls
+  forced "$(req "$C3")"
+  check "kalit '$kc' rad etildi (kod 1, qisqa/bo'sh)" bash -c "[ $RC -eq 1 ] && [[ \"\$1\" == *'juda qisqa'* ]] && [ ! -s '$CALLS' ]" _ "$OUT"
+done
+cp "$SIM/bundle.key" "$KEY"
+chmod 600 "$KEY"
+# eskirgan/yarim snapshot'lar keyingi deploy'da tozalanadi
+mkdir -p "$STATE/src.cur.tmp" "$STATE/src.cur"
+echo x >"$STATE/src.cur.tmp/stale"
+echo x >"$STATE/src.cur/stale"
+forced "$(req "$C3")"
+check "stale snapshot'lar bilan deploy ishladi" test "$RC" -eq 0
+check "src.cur.tmp va eski src.cur qoldig'i tozalandi" bash -c "[ ! -e '$STATE/src.cur.tmp' ] && [ ! -e '$STATE/src.prev/stale' ] && [ ! -e '$STATE/src.cur' ]"
+# restart haqiqatan bo'lmasa (MainPID o'zgarmaydi) -> health'ga qadar rollback yo'li
+baseline "$C1"
+touch "$CTL/no_restart"
+forced "$(req "$C2")"
+check "restart bo'lmadi (MainPID o'zgarmadi): rollback urinildi, kod 2" bash -c "[ $RC -eq 2 ] && [[ \"\$1\" == *'MainPID'* ]]" _ "$OUT"
+check "build eskisiga qaytdi, phase=idle" test "$(live_build)" = build-c1 -a "$(state_get phase)" = idle
+reset_ctl
 
 # ======================================================================
 section "20. Ochiq config farqi, log aylantirish, *.failed tozalash"
@@ -883,6 +990,10 @@ check "runner'da yig'ilgan bundle serverda deploy bo'ldi (kod 0)" test "$RC" -eq
 OUT="$(cd "$FR" && env -u BUNDLE_KEY_FILE bash scripts/make-deploy-bundle.sh "$C4" "$SIM/outc" 2>&1)"
 RC=$?
 check "BUNDLE_KEY_FILE yo'q: bundle yig'ilmaydi" test "$RC" -ne 0 -a ! -e "$SIM/outc"
+printf 'short\n' >"$SIM/short.key"
+OUT="$(cd "$FR" && BUNDLE_KEY_FILE="$SIM/short.key" bash scripts/make-deploy-bundle.sh "$C4" "$SIM/outs" 2>&1)"
+RC=$?
+check "qisqa kalit: bundle yig'ilmaydi" test "$RC" -ne 0 -a ! -e "$SIM/outs"
 # sir tekshiruvi ochiq matnda (shifrlashdan oldin)
 echo "SECRET=x" >"$FR/apps/api/dist/.env.production"
 OUT="$(cd "$FR" && BUNDLE_KEY_FILE="$SIM/bundle.key" bash scripts/make-deploy-bundle.sh "$C4" "$SIM/outd" 2>&1)"
