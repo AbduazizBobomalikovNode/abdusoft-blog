@@ -27,11 +27,23 @@ Qoidalar: AI model yo'q (matn deterministik shablon yoki chaqiruvchi bergan matn
 | `preflight` | `ChannelCheck[]` — Telegram preflight bilan AYNAN bir xil shakl (`ok`/`warn`/`error`, `value`, `limit`) |
 | `publish` / `remove` | `{externalId, url}` qaytaradi |
 
-Xatolar (`DistributionError.kind`): `auth_expired`, `permission_missing`, `rate_limited` (`retryAt`), `validation_rejected` (`platformMessage`), `duplicate_content`, `payment_required`, `transient`, **`outcome_unknown`**.
+Xatolar (`DistributionError.kind`): `auth_expired`, `permission_missing`, `rate_limited` (`retryAt`), `validation_rejected` (`platformMessage`), `duplicate_content`, `payment_required`, `transient`, **`outcome_unknown`**, `refresh_ambiguous`, `not_supported`. Ko'p bosqichli publish xatolarida ixtiyoriy `step` (`init`/`upload`/`media`/`container`/`poll`/`publish`) va `partial` (`imageUrn`, `mediaId`, `containerId` — faqat TAYYOR narsalar) bo'ladi.
 
-> **`outcome_unknown` qoidasi:** yaratish (create/publish) so'rovi timeout yoki uzilgan ulanish bilan tugasa, post platformada yaratilgan bo'lishi MUMKIN. Chaqiruvchi yaratishni ko'r-ko'rona **qayta urinmasligi** kerak (dublikat xavfi). Yaratish so'rovidagi 5xx ham shunday qabul qilinadi. Faqat `transient` va `rate_limited` (`retryAt`dan keyin) xavfsiz qayta uriniladi (`error.retryable`).
+> **`outcome_unknown` qoidasi:** yaratish (create/publish) so'rovi timeout, uzilgan ulanish, **javob tanasini o'qishdagi timeout**, 408 yoki istalgan 5xx bilan tugasa, post platformada yaratilgan bo'lishi MUMKIN. Bu qoida har qanday platforma xato xaritasidan USTUN (masalan Meta `{error:{code:2}}` HTTP 500 bilan kelsa ham `transient` emas, `outcome_unknown`). Chaqiruvchi yaratishni ko'r-ko'rona **qayta urinmasligi** kerak (dublikat xavfi). Faqat `transient` va `rate_limited` (`retryAt`dan keyin) xavfsiz qayta uriniladi (`error.retryable`). Yaratilmagan (konteyner, rasm yuklash) bosqichlardagi 5xx — `transient`.
+
+> **Davom ettirish (`PublishInput.resume`):** xato `partial` bilan kelsa (LinkedIn `imageUrn`, X `mediaId`, Threads/Instagram `containerId`), uni `resume` ga berib qayta chaqirsangiz, provider ikkinchi rasm/konteyner yaratmaydi. `outcome_unknown` dan keyin davom ettirishdan oldin platformani qo'lda tekshiring; konteyner allaqachon `PUBLISHED` bo'lsa provider yana `outcome_unknown` qaytaradi va qayta chop etmaydi.
+
+> **Token yangilash (X):** `auth.refresh` `{account, refreshTokenRotated}` qaytaradi. Chaqiruvchi qaytgan `account`ni YANGI access token'dan foydalanishdan OLDIN saqlashi shart (eski refresh token bekor bo'ladi). `refreshTokenRotated=false` — javobda yangi refresh token kelmadi, eskisi saqlandi (X hujjati rotatsiyani aniq aytmaydi — UNVERIFIED). Yangilash paytidagi timeout/uzilish/5xx — `refresh_ambiguous`: token almashtirilgan bo'lishi mumkin; keyingi yangilash ham xato bersa, akkauntni qayta ulang. Threads/Instagram yangilashi rotatsiyasiz (`refreshTokenRotated=false`).
+
+> **URL xavfsizligi:** `publish` ichida `post.url` (har bir provider), `imageUrl` (Threads/Instagram) va GitHub README havolalari qat'iy tekshiriladi (https, userinfo/port yo'q, localhost/ichki/link-local IP yo'q, bo'shliq va yangi qator yo'q) va tahlil qilingan `href` dan foydalaniladi; aks holda `validation_rejected` (so'rov yuborilmaydi). Preflight'ga bog'liq emas.
+
+> **OAuth state:** `oauth-state.ts` — `createOAuthState` (muddat bilan, ixtiyoriy PKCE verifier) va `verifyOAuthState` (doimiy vaqtli solishtirish, muddat, provider). Saqlash va bir martalik ishlatish (muvaffaqiyatli tekshiruvdan keyin yozuvni o'chirish) chaqiruvchining vazifasi.
+
+`remove` har doim mavjud; platforma o'chira olmasa (`capabilities.delete=false`, sabab `capabilities.notes.delete`da) `not_supported` tashlaydi (Instagram, GitHub).
 
 Telegram'ni ham shu shartnomada ifodalash mumkin: `preflight` — mavjud `ChannelCheck`, `text` — `captionHtml`, `externalId` — message id, `remove` — `deleteMessage`.
+
+**LinkedIn matni:** hashtag'lar oddiy `#Teg` shaklida yuboriladi (Posts API sahifasi: `"commentary": "Follow best practices #coding"`; `{hashtag|\#|coding}` shabloni faqat GET javobida ko'rinadi), qolgan matndagi ajratilgan belgilar (`\ | { } @ [ ] ( ) < > # * _ ~`) backslash bilan escape qilinadi. Oddiy matndagi URL ham escape qilinadi (`_`, `~`, `(` oldidan `\`) — hujjat "barcha ajratilgan belgilar escape qilinsin" deydi; escape qilingan URL bosiladigan holda qolishi UNVERIFIED (birinchi jonli sinovda tekshiring; article varianti URL'ni `content.article.source`da escape'siz yuboradi).
 
 ### 3. Har bir kanal nima qiladi
 
@@ -43,7 +55,7 @@ Telegram'ni ham shu shartnomada ifodalash mumkin: `preflight` — mavjud `Channe
 | Instagram | 1 ta rasm + caption (havola bosilmaydi) | yo'q (API qo'llamaydi) | OAuth (kod) | 60 kun, 24 soatdan keyin yangilanadi |
 | GitHub | Profil README'dagi ikki marker orasini yangilaydi | — | yopishtirilgan token | siz tanlagan muddat |
 
-GitHub: faqat `<!-- BLOG-POSTS:START -->` va `<!-- BLOG-POSTS:END -->` orasi almashtiriladi (Buffer darajasida — qolgan baytlar o'zgarmaydi). Markerlar yo'q bo'lsa, faqat so'ralsa (`createMarkersAt`) yaratiladi. `sha` ziddiyatida (409/422) fayl bir marta qayta o'qiladi.
+GitHub: faqat `<!-- BLOG-POSTS:START -->` va `<!-- BLOG-POSTS:END -->` orasi almashtiriladi. Ish Buffer darajasida: **markerlardan tashqaridagi baytlar o'zgarmaydi**; markerlar ichidagi blok faylning o'z qator oxiri (LF yoki CRLF) bilan yoziladi; ro'yxat o'zgarmagan bo'lsa PUT yuborilmaydi. Markerlar yo'q bo'lsa, faqat so'ralsa (`createMarkersAt`) yaratiladi — bunda markerli blok qo'shiladi (mavjud baytlar o'zgarmaydi, lekin fayl uzayadi). `latestPosts` majburiy (bo'sh bo'lmagan ro'yxat), havolalar tahlil qilingan `href`dan quriladi. `sha` ziddiyatida (409/422) fayl bir marta qayta o'qiladi.
 
 ### 4. Egasi nimani tayyorlaydi (qadamma-qadam)
 
@@ -131,6 +143,10 @@ LinkedIn API Terms of Use §3.1 (oxirgi tahrir 2022-12-13) taqiqlar ro'yxatida: 
 | 20 | GitHub | `github-authentication-token-expiration` sarlavhasi; xato tanasi `{message}` shakli | `parseExpiry` |
 | 21 | GitHub | sha ziddiyatida 409 yoki 422 (ikkalasi ham qayta o'qishni boshlaydi); base64 `\n` | `publish` |
 | 22 | GitHub | `GET /user` fine-grained token uchun; Workflows ruxsati kerak emasligi | `connectWithToken` |
+| 23 | LinkedIn | Hashtag'lar oddiy `#Teg` sifatida havolaga aylanishi; escape qilingan URL bosiladigan qolishi | `escapeCommentary` |
+| 24 | LinkedIn | Yuklash URL'i `https://www.linkedin.com/dms-uploads/...` (hujjat misoli); haqiqiy URL boshqa bo'lsa PUT rad etiladi | `LINKEDIN_UPLOAD_*` |
+| 25 | X | Yangilash javobida refresh token bo'lmasa eskisini saqlash to'g'rimi (hujjat aytmaydi) | `refresh` |
+| 26 | Barchasi | Javob hajmi chegarasi 4 MiB (GitHub README ≤ 1 MB base64 bilan sig'adi) | `DEFAULT_MAX_RESPONSE_BYTES` |
 
 ---
 
@@ -151,6 +167,10 @@ Errors are a small taxonomy: `auth_expired`, `permission_missing`, `rate_limited
 ### 3. Per channel
 
 LinkedIn: article post with an uploaded thumbnail (Images API) or text + link; delete; 60-day token, no programmatic refresh, reconnect every 60 days (reminder 10 days before, `expiring` at 7). X: text + link, optional single image (`POST /2/media/upload`), delete, refresh-token rotation (always store the new refresh token), URL posts cost far more. Threads: container then publish with `link_attachment`, optional image, delete, 60-day token refreshable after 24 h. Instagram: single public HTTPS JPEG plus caption, container status polling with a bounded wait, links are not clickable, no delete via API. GitHub: replace only the block between two HTML-comment markers (byte-exact elsewhere), re-read once on a sha conflict, markers created only when asked.
+
+Hardening notes: a 5xx, 408, timeout or body-read timeout on a create call is always `outcome_unknown` and takes precedence over any provider-specific mapping (e.g. a Meta `{error:{code:2}}` returned with HTTP 500). Multi-step failures carry `step` and `partial` (`imageUrn`, `mediaId`, `containerId`) and `PublishInput.resume` lets the caller continue without creating a second image/container. X refresh returns `{account, refreshTokenRotated}`; persist the returned account BEFORE using the new access token; a timeout/5xx during refresh is `refresh_ambiguous` (the token may already have rotated; if the next refresh fails, reconnect). `remove` throws `not_supported` where the platform cannot delete (Instagram, GitHub). All URLs are validated inside `publish` (https, no userinfo/port, no private/loopback/link-local hosts, no whitespace or newlines). LinkedIn hashtags are sent as plain `#Tag`; other reserved characters are escaped (live behaviour UNVERIFIED). GitHub's README block is replaced at the byte level: bytes outside the markers are unchanged, the block uses the file's own line endings, and `latestPosts` is required.
+
+Limits: LinkedIn 150 requests/member/day (UTC; UNVERIFIED for `/rest/posts`); Threads 250 posts/24 h; Instagram 100 API posts/24 h, although the docs contradict themselves (the carousel section says 50), so treat 50 as the safe figure until the first live check; X is pay-per-use with a much higher price for posts containing a URL; text limits: LinkedIn 3000 (UNVERIFIED), X 280 weighted units, Threads 500 (emoji count as UTF-8 bytes), Instagram 2200 characters and at most 30 hashtags; GitHub README up to 1 MB plus secondary limits (80 content-creating requests/min).
 
 ### 4. Owner checklist
 
