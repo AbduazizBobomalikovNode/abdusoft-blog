@@ -1,4 +1,5 @@
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import type { TrashListQuery } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { posts } from "../../db/schema.js";
@@ -13,14 +14,36 @@ import {
   requireAdminActor,
   toAuthorRef,
   type ConcurrencyOptions,
+  type Executor,
   toLifecycleSummary,
   type LifecycleSummary,
 } from "./shared.js";
+import { RESERVED_SLUGS } from "@blog/shared";
 import { fail, ok, type Actor, type ServiceResult } from "./types.js";
+
+/** Chiqindidagi postning ichki slug'i. `slugify` faqat `[a-z0-9-]` beradi, shu sabab "_" bilan boshlangan slug haqiqiy slug bilan to'qnashmaydi va tasodifan ham yaratib bo'lmaydi. */
+export function trashSlugFor(id: string): string {
+  return `_trash_${id}`;
+}
+
+/** Asl slug band bo'lsa — bo'sh variant (`slug-2`, `slug-3`, ...), oxirida tasodifiy qo'shimcha. */
+async function findFreeSlug(executor: Executor, wanted: string): Promise<string> {
+  const isFree = async (candidate: string) => {
+    if ((RESERVED_SLUGS as readonly string[]).includes(candidate)) return false;
+    const [row] = await executor.select({ id: posts.id }).from(posts).where(eq(posts.slug, candidate)).limit(1);
+    return !row;
+  };
+  if (await isFree(wanted)) return wanted;
+  for (let n = 2; n <= 50; n++) {
+    if (await isFree(`${wanted}-${n}`)) return `${wanted}-${n}`;
+  }
+  return `${wanted}-${nanoid(6).toLowerCase()}`;
+}
 
 /**
  * `DELETE /admin/posts/:id` — endi chiqindi qutisiga ko'chiradi (hech narsa cascade bo'lmaydi). Shartlar eskicha:
- * faqat admin, faqat `draft`/`archived`. Slug chiqindi qutisida ham band qoladi.
+ * faqat admin, faqat `draft`/`archived`. Slug BO'SHATILADI: qator `_trash_<id>` ichki slug'iga o'tadi, asl slug `original_slug`da saqlanadi
+ * (yangi post shu slug'ni olishi mumkin — avvalgi qattiq o'chirishdagi kabi).
  */
 export async function trashPost(actor: Actor, id: string, opts: ConcurrencyOptions = {}): Promise<ServiceResult<null>> {
   const denied = requireAdminActor(actor);
@@ -44,7 +67,15 @@ export async function trashPost(actor: Actor, id: string, opts: ConcurrencyOptio
     const now = new Date();
     await tx
       .update(posts)
-      .set({ deletedAt: now, deletedBy: actor.userId, updatedAt: now, updatedBy: actor.userId, updatedVia: actor.via })
+      .set({
+        deletedAt: now,
+        deletedBy: actor.userId,
+        originalSlug: post.slug,
+        slug: trashSlugFor(post.id),
+        updatedAt: now,
+        updatedBy: actor.userId,
+        updatedVia: actor.via,
+      })
       .where(eq(posts.id, id));
     await recordAudit(tx, actor, {
       action: "post.trash",
@@ -66,7 +97,7 @@ export async function listTrash(actor: Actor, input: TrashListQuery) {
   const offset = (page - 1) * limit;
   const [rows, countRows] = await Promise.all([
     db
-      .select({ ...adminPostSelectColumns, deletedAt: posts.deletedAt, deletedBy: posts.deletedBy })
+      .select({ ...adminPostSelectColumns, originalSlug: posts.originalSlug, deletedAt: posts.deletedAt, deletedBy: posts.deletedBy })
       .from(posts)
       .where(isNotNull(posts.deletedAt))
       .orderBy(desc(posts.deletedAt), desc(posts.id))
@@ -82,6 +113,8 @@ export async function listTrash(actor: Actor, input: TrashListQuery) {
   return ok({
     items: rows.map((row) => ({
       ...toAdminListItem(row, tagMap, authorMap),
+      // Ichki `_trash_` slug emas, asl slug ko'rsatiladi.
+      slug: row.originalSlug ?? row.slug,
       deletedAt: (row.deletedAt as Date).toISOString(),
       deletedBy: toAuthorRef(row.deletedBy, authorMap),
     })),
@@ -93,15 +126,22 @@ export async function listTrash(actor: Actor, input: TrashListQuery) {
 }
 
 /** `POST /admin/posts/trash/:id/restore` — postni chiqindi qutisidan avvalgi holatida (status o'zgarmagan) qaytaradi. */
+export type RestoreFromTrashResult = LifecycleSummary & {
+  /** `true` — asl slug qaytarildi; `false` — u band bo'lgani uchun `slug` bo'sh variantga o'tdi. */
+  slugRestored: boolean;
+  /** Postning trashga tushgan paytdagi slug'i. */
+  originalSlug: string;
+};
+
 export async function restoreFromTrash(
   actor: Actor,
   id: string,
   opts: ConcurrencyOptions = {},
-): Promise<ServiceResult<LifecycleSummary>> {
+): Promise<ServiceResult<RestoreFromTrashResult>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
 
-  return db.transaction(async (tx): Promise<ServiceResult<LifecycleSummary>> => {
+  return db.transaction(async (tx): Promise<ServiceResult<RestoreFromTrashResult>> => {
     const [post] = await tx
       .select()
       .from(posts)
@@ -112,10 +152,14 @@ export async function restoreFromTrash(
     const conflict = await checkExpectedUpdatedAt(tx, post, opts.expectedUpdatedAt);
     if (conflict) return conflict;
 
+    const originalSlug = post.originalSlug ?? post.slug;
+    const slug = await findFreeSlug(tx, originalSlug);
+    const slugRestored = slug === originalSlug;
+
     const now = new Date();
     const [after] = await tx
       .update(posts)
-      .set({ deletedAt: null, deletedBy: null, updatedAt: now, updatedBy: actor.userId, updatedVia: actor.via })
+      .set({ deletedAt: null, deletedBy: null, originalSlug: null, slug, updatedAt: now, updatedBy: actor.userId, updatedVia: actor.via })
       .where(eq(posts.id, id))
       .returning();
     if (!after) return fail("not_found", "Topilmadi");
@@ -124,10 +168,10 @@ export async function restoreFromTrash(
       action: "post.restore_trash",
       entityType: "post",
       entityId: id,
-      summary: `Post chiqindi qutisidan qaytarildi: ${postLabel(after)}`,
-      meta: { status: after.status, slug: after.slug },
+      summary: `Post chiqindi qutisidan qaytarildi: ${postLabel(after)}${slugRestored ? "" : ` (slug band edi, yangi slug: ${slug})`}`,
+      meta: { status: after.status, slug: after.slug, originalSlug, slugRestored },
     });
-    return ok(toLifecycleSummary(after));
+    return ok({ ...toLifecycleSummary(after), slugRestored, originalSlug });
   });
 }
 
@@ -156,7 +200,7 @@ export async function purgePost(actor: Actor, id: string, opts: ConcurrencyOptio
       entityType: "post",
       entityId: id,
       summary: `Post butunlay o'chirildi: ${postLabel(post)}`,
-      meta: { status: post.status, slug: post.slug },
+      meta: { status: post.status, slug: post.originalSlug ?? post.slug },
     });
     return ok(null);
   });

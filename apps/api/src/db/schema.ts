@@ -88,10 +88,12 @@ export const posts = pgTable(
     updatedVia: text("updated_via"),
     /**
      * Chiqindi qutisi: `null` — post jonli; qiymat bor — post chiqindi qutisida (status O'ZGARMAYDI, shu sabab "qaytarish"
-     * avvalgi holatga qaytaradi). Slug chiqindi qutisida ham band qoladi (unique). Hamma o'qish so'rovlari `deleted_at is null`ni tekshiradi.
+     * avvalgi holatga qaytaradi). Chiqindiga tushganda slug bo'shatiladi (`original_slug`da saqlanadi). Hamma o'qish so'rovlari `deleted_at is null`ni tekshiradi.
      */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     deletedBy: text("deleted_by").references(() => user.id, { onDelete: "set null" }),
+    /** Chiqindiga tushganda asl slug shu yerga ko'chadi (`slug` esa `_trash_<id>`ga o'zgaradi va boshqa postga bo'shaydi). */
+    originalSlug: text("original_slug"),
     /** Admin "Qaytarish" (`changes_requested`) bosganda qoldirgan izohi — xodimga ko'rinadi. */
     reviewNote: text("review_note"),
     /** Xodim "Ko'rib chiqishga yuborish" bosgan payt (`in_review`ga o'tganda). */

@@ -51,6 +51,11 @@ async function createPublished(opts: { tag?: string; text?: string } = {}) {
   return { id: created.id, slug: `trash-test-${counter}`, word: uniqueWord };
 }
 
+async function row(id: string) {
+  const [r] = await db.select().from(schema.posts).where(eq(schema.posts.id, id));
+  return r!;
+}
+
 async function setDeleted(id: string, deleted: boolean) {
   await db.execute(sql`update posts set deleted_at = ${deleted ? sql`now()` : sql`null`} where id = ${id}`);
 }
@@ -184,19 +189,86 @@ describe("trash endpoints", () => {
   });
 });
 
-describe("slug of a trashed post stays reserved", () => {
-  it("another post cannot take it until the trashed post is permanently deleted", async () => {
-    const created = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "Slug saqlanadi" }));
-    await patch(`/admin/posts/${created.id}`, admin.cookie, { slug: "saqlangan-slug" });
-    await del(`/admin/posts/${created.id}`, admin.cookie);
+describe("slug of a trashed post is freed", () => {
+  async function trashedWithSlug(slug: string) {
+    const created = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "Slug bo'shaydi" }));
+    expect((await patch(`/admin/posts/${created.id}`, admin.cookie, { slug })).status).toBe(200);
+    expect((await del(`/admin/posts/${created.id}`, admin.cookie)).status).toBe(200);
+    return created.id;
+  }
 
+  it("a new post can take the slug right after trashing; the row moves to an internal slug and remembers the original", async () => {
+    const id = await trashedWithSlug("bosh-slug");
+    const [trashed] = await db.select().from(schema.posts).where(eq(schema.posts.id, id));
+    expect(trashed?.slug).toBe(`_trash_${id}`);
+    expect(trashed?.originalSlug).toBe("bosh-slug");
+
+    const other = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "Yangi" }));
+    expect((await patch(`/admin/posts/${other.id}`, admin.cookie, { slug: "bosh-slug" })).status).toBe(200);
+
+    // Trash ro'yxati asl slug'ni ko'rsatadi, ichki slug'ni emas.
+    const list = TrashListResponseSchema.parse(await (await get("/admin/posts/trash?limit=100", admin.cookie)).json());
+    expect(list.items.find((i) => i.id === id)?.slug).toBe("bosh-slug");
+    expect(JSON.stringify(list)).not.toContain("_trash_");
+  });
+
+  it("the revision snapshot taken at trash time keeps the original slug", async () => {
+    const id = await trashedWithSlug("snapshot-slug");
+    const rows = await db.select().from(schema.postRevisions).where(eq(schema.postRevisions.postId, id));
+    expect(rows.find((r) => r.reason === "trash")?.slug).toBe("snapshot-slug");
+  });
+
+  it("the internal slug cannot be resolved publicly, cannot be chosen, and 'trash' is reserved", async () => {
+    const id = await trashedWithSlug("ichki-slug");
+    expect((await get(`/posts/_trash_${id}`)).status).toBe(404);
+    expect((await get("/posts/ichki-slug")).status).toBe(404);
     const other = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "Boshqa" }));
-    const taken = await patch(`/admin/posts/${other.id}`, admin.cookie, { slug: "saqlangan-slug" });
-    expect(taken.status).toBe(400);
-    expect(await taken.json()).toEqual({ error: '"saqlangan-slug" slug allaqachon band' });
+    const reserved = await patch(`/admin/posts/${other.id}`, admin.cookie, { slug: "trash" });
+    expect(reserved.status).toBe(400);
+    // `slugify` "_" belgisini olib tashlaydi — ichki slug'ni tanlab bo'lmaydi.
+    expect((await patch(`/admin/posts/${other.id}`, admin.cookie, { slug: `_trash_${id}` })).status).toBe(200);
+    expect((await row(other.id)).slug).not.toBe(`_trash_${id}`);
+  });
 
-    await del(`/admin/posts/trash/${created.id}`, admin.cookie);
-    expect((await patch(`/admin/posts/${other.id}`, admin.cookie, { slug: "saqlangan-slug" })).status).toBe(200);
+  it("restore gives the original slug back when it is still free", async () => {
+    const id = await trashedWithSlug("qaytadigan-slug");
+    const res = await post(`/admin/posts/trash/${id}/restore`, admin.cookie);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ slug: "qaytadigan-slug", slugRestored: true, originalSlug: "qaytadigan-slug" });
+    expect((await row(id)).originalSlug).toBeNull();
+  });
+
+  it("restore uses a free variant when another post took the slug, and says so (response and audit)", async () => {
+    const id = await trashedWithSlug("band-bolgan-slug");
+    const other = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "Egallovchi" }));
+    await patch(`/admin/posts/${other.id}`, admin.cookie, { slug: "band-bolgan-slug" });
+
+    const res = await post(`/admin/posts/trash/${id}/restore`, admin.cookie);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ slug: "band-bolgan-slug-2", slugRestored: false, originalSlug: "band-bolgan-slug" });
+    expect((await row(other.id)).slug).toBe("band-bolgan-slug");
+    const audit = await db.select().from(schema.auditLog).where(eq(schema.auditLog.entityId, id));
+    const entry = audit.find((a) => a.action === "post.restore_trash");
+    expect(entry?.meta).toMatchObject({ slugRestored: false, originalSlug: "band-bolgan-slug", slug: "band-bolgan-slug-2" });
+    expect(entry?.summary).toContain("band-bolgan-slug-2");
+  });
+
+  it("permanent delete leaves the slug free and the audit keeps the original slug", async () => {
+    const id = await trashedWithSlug("doimiy-slug");
+    expect((await del(`/admin/posts/trash/${id}`, admin.cookie)).status).toBe(200);
+    const other = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "X" }));
+    expect((await patch(`/admin/posts/${other.id}`, admin.cookie, { slug: "doimiy-slug" })).status).toBe(200);
+    const audit = await db.select().from(schema.auditLog).where(eq(schema.auditLog.entityId, id));
+    expect(audit.find((a) => a.action === "post.purge")?.meta).toMatchObject({ slug: "doimiy-slug" });
+  });
+
+  it("a genuinely taken slug still gets the unchanged error", async () => {
+    const a = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "A" }));
+    await patch(`/admin/posts/${a.id}`, admin.cookie, { slug: "haqiqiy-band" });
+    const b = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "B" }));
+    const res = await patch(`/admin/posts/${b.id}`, admin.cookie, { slug: "haqiqiy-band" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: '"haqiqiy-band" slug allaqachon band' });
   });
 });
 
