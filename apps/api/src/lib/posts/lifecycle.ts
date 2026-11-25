@@ -10,9 +10,11 @@ import { preparePlan } from "./plan.js";
 import { snapshotPost, type RevisionReason } from "./revisions.js";
 import {
   loadPost,
+  checkExpectedUpdatedAt,
   postLabel,
   requireAdminActor,
   toLifecycleSummary,
+  type ConcurrencyOptions,
   type LifecycleSummary,
   type PostRow,
 } from "./shared.js";
@@ -45,6 +47,7 @@ async function transition(
   actor: Actor,
   id: string,
   spec: TransitionSpec,
+  opts: ConcurrencyOptions = {},
 ): Promise<ServiceResult<TransitionData>> {
   return db.transaction(async (tx): Promise<ServiceResult<TransitionData>> => {
     const [before] = await tx
@@ -57,6 +60,9 @@ async function transition(
 
     const guarded = spec.guard?.(before);
     if (guarded) return guarded;
+
+    const conflict = await checkExpectedUpdatedAt(tx, before, opts.expectedUpdatedAt);
+    if (conflict) return conflict;
 
     if (spec.revision) await snapshotPost(tx, before, actor, spec.revision);
 
@@ -110,7 +116,7 @@ export async function findPost(id: string): Promise<PostRow | null> {
 
 export type PublishKind = "manual" | "approve" | "scheduled";
 
-interface PublishArgs {
+interface PublishArgs extends ConcurrencyOptions {
   kind: PublishKind;
   /** `approve` uchun: tasdiqlovchi foydalanuvchi. */
   reviewerId?: string | null;
@@ -168,7 +174,7 @@ async function executePublish(
           };
       }
     },
-  });
+  }, { expectedUpdatedAt: args.expectedUpdatedAt });
   if (!result.ok) return result;
 
   await announcePublished(result.data.after);
@@ -176,18 +182,26 @@ async function executePublish(
 }
 
 /** `POST /admin/posts/:id/publish` — holatidan qat'i nazar chop etadi (eski xatti-harakat saqlangan). */
-export async function publishPost(actor: Actor, id: string): Promise<ServiceResult<LifecycleSummary>> {
+export async function publishPost(
+  actor: Actor,
+  id: string,
+  opts: ConcurrencyOptions = {},
+): Promise<ServiceResult<LifecycleSummary>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
-  const result = await executePublish(actor, id, { kind: "manual" });
+  const result = await executePublish(actor, id, { kind: "manual", ...opts });
   return result.ok ? ok(toLifecycleSummary(result.data)) : result;
 }
 
 /** `in_review -> published` — HTTP va Telegram (`pr:ok:<id>`) ikkalasi ham shu funksiyani chaqiradi. */
-export async function approvePost(actor: Actor, id: string): Promise<ServiceResult<PostRow>> {
+export async function approvePost(
+  actor: Actor,
+  id: string,
+  opts: ConcurrencyOptions = {},
+): Promise<ServiceResult<PostRow>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
-  return executePublish(actor, id, { kind: "approve", reviewerId: actor.userId }, (post) =>
+  return executePublish(actor, id, { kind: "approve", reviewerId: actor.userId, ...opts }, (post) =>
     post.status !== "in_review" ? fail("conflict", "Post ko'rib chiqishda emas") : null,
   );
 }
@@ -217,36 +231,39 @@ async function leavePublished(
   buildPatch: TransitionSpec["buildPatch"],
   audit: TransitionSpec["audit"],
   revision: RevisionReason,
+  opts: ConcurrencyOptions,
 ): Promise<ServiceResult<LifecycleSummary>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
-  const result = await transition(actor, id, { buildPatch, audit, revision });
+  const result = await transition(actor, id, { buildPatch, audit, revision }, opts);
   if (!result.ok) return result;
   if (result.data.before.status === "published") await announceUnpublished(result.data.after);
   return ok(toLifecycleSummary(result.data.after));
 }
 
-export function unpublishPost(actor: Actor, id: string) {
+export function unpublishPost(actor: Actor, id: string, opts: ConcurrencyOptions = {}) {
   return leavePublished(
     actor,
     id,
     () => ({ status: "draft", channelPlan: null, channelSendAt: null }),
     statusChange("post.unpublish", "qoralamaga qaytarildi"),
     "unpublish",
+    opts,
   );
 }
 
-export function archivePost(actor: Actor, id: string) {
+export function archivePost(actor: Actor, id: string, opts: ConcurrencyOptions = {}) {
   return leavePublished(
     actor,
     id,
     () => ({ status: "archived", channelPlan: null, channelSendAt: null }),
     statusChange("post.archive", "arxivlandi"),
     "archive",
+    opts,
   );
 }
 
-export interface ScheduleInput {
+export interface ScheduleInput extends ConcurrencyOptions {
   scheduledAt: string;
   channelPlan?: ChannelPlan | null;
 }
@@ -278,7 +295,7 @@ export async function schedulePost(
       hasChannelPlan: storedPlan !== null,
     }),
     buildPatch: () => ({ status: "scheduled", scheduledAt, channelPlan: storedPlan, channelSendAt: null }),
-  });
+  }, { expectedUpdatedAt: input.expectedUpdatedAt });
   if (!result.ok) return result;
   if (result.data.before.status === "published") await announceUnpublished(result.data.after);
   return ok(toLifecycleSummary(result.data.after));
@@ -296,6 +313,7 @@ export async function schedulePost(
 export async function submitPostForReview(
   actor: Actor,
   id: string,
+  opts: ConcurrencyOptions = {},
 ): Promise<ServiceResult<{ id: string; status: PostRow["status"]; submittedAt: Date | null }>> {
   const result = await transition(actor, id, {
     guard: (post) => {
@@ -309,7 +327,7 @@ export async function submitPostForReview(
     },
     audit: statusChange("post.submit", "ko'rib chiqishga yuborildi"),
     buildPatch: (_post, now) => ({ status: "in_review", submittedAt: now, reviewNote: null }),
-  });
+  }, opts);
   if (!result.ok) return result;
   const fresh = result.data.after;
 
@@ -334,6 +352,7 @@ export async function requestPostChanges(
   actor: Actor,
   id: string,
   note: string,
+  opts: ConcurrencyOptions = {},
 ): Promise<ServiceResult<LifecycleSummary>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
@@ -346,6 +365,6 @@ export async function requestPostChanges(
       reviewedBy: actor.userId,
       reviewedAt: now,
     }),
-  });
+  }, opts);
   return result.ok ? ok(toLifecycleSummary(result.data.after)) : (result);
 }

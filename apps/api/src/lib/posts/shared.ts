@@ -15,6 +15,46 @@ import { fail, isAdminActor, type Actor, type ServiceFailure } from "./types.js"
 
 export type { Executor };
 
+/** Ixtiyoriy optimistic concurrency parametri (HTTP: `expectedUpdatedAt`). Berilmasa — eski xatti-harakat. */
+export interface ConcurrencyOptions {
+  expectedUpdatedAt?: string;
+}
+
+export const CONFLICT_MESSAGE = "Post boshqa joyda o'zgartirilgan — sahifani yangilang";
+
+/**
+ * `expectedUpdatedAt` berilgan bo'lsa va postning joriy `updatedAt`iga MILLISEKUND aniqligida teng bo'lmasa —
+ * `409` (joriy `updatedAt`, oxirgi o'zgartirgan foydalanuvchi va kanal bilan). Solishtirish JS `Date` orqali:
+ * server mijozga qaytargan qiymat ham, shu yerda yuklangan qiymat ham BIR XIL drayver yo'lidan o'tadi, shu sabab
+ * Postgres mikrosekund qiymatlari (`default now()`) mijoz qaytargan ms qiymatiga nisbatan soxta konflikt bermaydi.
+ * `executor` — chaqiruvchining tranzaksiyasi (PGlite'da tranzaksiya ichida `db`ga murojaat qilib bo'lmaydi).
+ */
+export async function checkExpectedUpdatedAt(
+  executor: Executor,
+  post: PostRow,
+  expected: string | undefined,
+): Promise<ServiceFailure | null> {
+  if (expected === undefined) return null;
+  const expectedMs = Date.parse(expected);
+  if (Number.isNaN(expectedMs)) return fail("bad_request", "Noto'g'ri so'rov tanasi");
+  if (post.updatedAt.getTime() === expectedMs) return null;
+
+  let updatedBy: PostAuthorRef | null = null;
+  if (post.updatedBy) {
+    const [row] = await executor
+      .select({ name: user.name, email: user.email })
+      .from(user)
+      .where(eq(user.id, post.updatedBy))
+      .limit(1);
+    updatedBy = { id: post.updatedBy, name: row ? row.name || row.email : null };
+  }
+  return fail("conflict", CONFLICT_MESSAGE, {
+    updatedAt: post.updatedAt.toISOString(),
+    updatedBy,
+    via: post.updatedVia ?? null,
+  });
+}
+
 /** Jurnal xulosalarida post nomi (qisqartirilgan). */
 export function postLabel(post: { title: string }): string {
   const title = post.title.trim() || "Nomsiz";

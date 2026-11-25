@@ -6,6 +6,7 @@ import {
   ChannelSendRequestSchema,
   CreateChannelVersionBodySchema,
   CreatePostBodySchema,
+  ExpectedUpdatedAtSchema,
   PublishPostBodySchema,
   RequestChangesBodySchema,
   SchedulePostBodySchema,
@@ -77,6 +78,23 @@ const MAX_LIMIT = 100;
 
 function actorOf(c: Context): Actor {
   return actorFromAdminUser(c.get("adminUser"), "web");
+}
+
+/**
+ * Holat o'tishlarining ixtiyoriy `expectedUpdatedAt`i (tana yoki — DELETE uchun — query). Tana yo'q/boshqa shaklda
+ * bo'lsa e'tiborsiz qoldiriladi (eski mijozlar o'zgarmaydi); faqat BERILGAN lekin noto'g'ri qiymat `400`.
+ */
+async function readExpectedUpdatedAt(c: Context): Promise<{ expectedUpdatedAt?: string } | { response: Response }> {
+  const raw = await c.req.json().catch(() => null);
+  const fromBody =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).expectedUpdatedAt
+      : undefined;
+  const candidate = fromBody ?? c.req.query("expectedUpdatedAt");
+  if (candidate === undefined || candidate === null) return {};
+  const parsed = ExpectedUpdatedAtSchema.safeParse(candidate);
+  if (!parsed.success) return { response: c.json({ error: "Noto'g'ri so'rov tanasi" }, 400) };
+  return { expectedUpdatedAt: parsed.data };
 }
 
 /** Kanal endpoint'lari uchun post qidiruvi (404 tekshiruvi chaqiruvchida). */
@@ -185,16 +203,17 @@ const CHANNEL_SEND_WAIT_MS = 20_000;
 async function parsePublishBody(
   c: Context,
   postId: string,
-): Promise<{ sendToChannel: boolean } | { response: Response }> {
+): Promise<{ sendToChannel: boolean; expectedUpdatedAt?: string } | { response: Response }> {
   const raw = await c.req.json().catch(() => ({}));
   const parsed = PublishPostBodySchema.safeParse(raw ?? {});
   if (!parsed.success) return { response: c.json({ error: "Noto'g'ri so'rov tanasi" }, 400) };
-  if (!parsed.data.sendToChannel) return { sendToChannel: false };
+  const expectedUpdatedAt = parsed.data.expectedUpdatedAt;
+  if (!parsed.data.sendToChannel) return { sendToChannel: false, expectedUpdatedAt };
   const post = await loadPostOr404(postId);
   if (post && !parseStoredChoice(post.channelChoice)) {
     return { response: c.json({ error: "Postda belgilangan kanal versiyasi yo'q" }, 400) };
   }
-  return { sendToChannel: true };
+  return { sendToChannel: true, expectedUpdatedAt };
 }
 
 /** Rejani (kechikishsiz) qo'yib, Telegraph'dan keyin yuboradi; natija HTTP javobiga (toast) qo'shiladi. Uzoq cho'zilsa — fonda davom etadi (admin chatga xabar boradi). */
@@ -238,14 +257,24 @@ export const adminPostsRoute = new Hono()
   .post("/trash/:id/restore", async (c) => {
     const id = c.req.param("id");
     if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
-    const result = await restoreFromTrash(actorOf(c), id);
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await restoreFromTrash(actor, id, expected);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })
   .delete("/trash/:id", async (c) => {
     const id = c.req.param("id");
     if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
-    const result = await purgePost(actorOf(c), id);
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await purgePost(actor, id, expected);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json({ ok: true });
   })
@@ -537,7 +566,9 @@ export const adminPostsRoute = new Hono()
     const rid = c.req.param("rid");
     if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
     if (!UUID_RE.test(rid)) return c.json({ error: "Revision topilmadi" }, 404);
-    const result = await restoreRevision(actorOf(c), id, rid);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await restoreRevision(actorOf(c), id, rid, expected);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })
@@ -560,7 +591,9 @@ export const adminPostsRoute = new Hono()
     return c.json(result.data);
   })
   .post("/:id/submit", async (c) => {
-    const result = await submitPostForReview(actorOf(c), c.req.param("id"));
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await submitPostForReview(actorOf(c), c.req.param("id"), expected);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json({
       id: result.data.id,
@@ -575,7 +608,7 @@ export const adminPostsRoute = new Hono()
     const id = c.req.param("id");
     const wants = await parsePublishBody(c, id);
     if ("response" in wants) return wants.response;
-    const result = await approvePost(actor, id);
+    const result = await approvePost(actor, id, { expectedUpdatedAt: wants.expectedUpdatedAt });
     if (!result.ok) return errorResponse(c, result.error);
 
     const channelSend = wants.sendToChannel ? await queueChannelSend(id) : undefined;
@@ -589,7 +622,9 @@ export const adminPostsRoute = new Hono()
     const parsed = RequestChangesBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Izoh (note) majburiy" }, 400);
 
-    const result = await requestPostChanges(actor, c.req.param("id"), parsed.data.note);
+    const result = await requestPostChanges(actor, c.req.param("id"), parsed.data.note, {
+      expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+    });
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })
@@ -603,7 +638,7 @@ export const adminPostsRoute = new Hono()
     const wants = await parsePublishBody(c, id);
     if ("response" in wants) return wants.response;
 
-    const result = await publishPost(actor, id);
+    const result = await publishPost(actor, id, { expectedUpdatedAt: wants.expectedUpdatedAt });
     if (!result.ok) return errorResponse(c, result.error);
 
     // Belgilangan versiyani Telegraph ko'zgusidan KEYIN yuborish (ixtiyoriy; standart — qo'lda yuborish).
@@ -611,12 +646,22 @@ export const adminPostsRoute = new Hono()
     return c.json({ ...result.data, ...(channelSend ? { channelSend } : {}) });
   })
   .post("/:id/unpublish", async (c) => {
-    const result = await unpublishPost(actorOf(c), c.req.param("id"));
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await unpublishPost(actor, c.req.param("id"), expected);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })
   .post("/:id/archive", async (c) => {
-    const result = await archivePost(actorOf(c), c.req.param("id"));
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await archivePost(actor, c.req.param("id"), expected);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })
@@ -644,7 +689,12 @@ export const adminPostsRoute = new Hono()
   })
   .delete("/:id", async (c) => {
     // Eski nom saqlangan, lekin endi post chiqindi qutisiga ko'chadi (qaytarish mumkin).
-    const result = await trashPost(actorOf(c), c.req.param("id"));
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await trashPost(actor, c.req.param("id"), expected);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json({ ok: true });
   });

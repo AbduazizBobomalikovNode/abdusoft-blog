@@ -14,7 +14,7 @@ import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { announceUpdated } from "./effects.js";
 import { preparePlan } from "./plan.js";
 import { shouldSnapshotForUpdate, snapshotPost, type RevisionReason } from "./revisions.js";
-import { checkCanEdit, loadPost, postLabel, resolveSettings, type PostRow } from "./shared.js";
+import { checkCanEdit, checkExpectedUpdatedAt, loadPost, postLabel, resolveSettings, type PostRow } from "./shared.js";
 import { fail, ok, type Actor, type ServiceResult } from "./types.js";
 
 const SLUG_ID_LENGTH = 6;
@@ -66,6 +66,7 @@ export async function createPost(
   // ko'rinadi. Bitta bo'sh paragraf — minimal to'g'ri hujjat.
   const emptyDoc = { type: "doc", content: [{ type: "paragraph" }] };
   const rendered = await renderPost(emptyDoc);
+  const now = new Date();
 
   const created = await db.transaction(async (tx) => {
     const [row] = await tx
@@ -83,6 +84,9 @@ export async function createPost(
         createdBy: actor.userId,
         updatedBy: actor.userId,
         updatedVia: actor.via,
+        // Aniq millisekund: mijoz qaytargan `updatedAt` Postgres'dagi mikrosekund qiymatidan farq qilib qolmasin.
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
     if (row) {
@@ -128,9 +132,11 @@ export interface UpdateInternalOptions {
 export async function updatePost(
   actor: Actor,
   id: string,
-  data: UpdatePostFields,
+  input: UpdatePostFields,
   internal: UpdateInternalOptions = {},
 ): Promise<ServiceResult<{ updatedAt: string }>> {
+  // `expectedUpdatedAt` — maydon EMAS, parametr: xodim cheklovi va jurnal "maydonlar" ro'yxatiga kirmaydi.
+  const { expectedUpdatedAt, ...data } = input;
   const authorized = await authorizeEdit(actor, id);
   if (!authorized.ok) return authorized;
   const post = authorized.data;
@@ -202,6 +208,9 @@ export async function updatePost(
       .for("update")
       .limit(1);
     if (!locked) return fail("not_found", "Topilmadi");
+
+    const conflict = await checkExpectedUpdatedAt(tx, locked, expectedUpdatedAt);
+    if (conflict) return conflict;
 
     if (data.settings !== undefined) {
       update.settings = resolveSettings(locked.settings, data.settings);
