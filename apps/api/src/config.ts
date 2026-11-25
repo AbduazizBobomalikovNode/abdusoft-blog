@@ -89,6 +89,11 @@ const EnvSchema = z.object({
   // Default: 300 so'rov / 60 soniya (avtosaqlash va ommaviy amallarga yetarli).
   ADMIN_WRITE_RATE_LIMIT_MAX: intEnv(300, 0),
   ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS: intEnv(60, 1),
+  // Post tarixi (revision): oddiy tahrirlar (avtosaqlash) shu oraliqdan (daqiqa) tez-tez suratga olinmaydi —
+  // faqat oraliq o'tganda yoki aktyor/kanal almashganda. 0 — har bir tahrirdan oldin surat.
+  POST_REVISION_INTERVAL_MINUTES: intEnv(10, 0),
+  // Bitta postda saqlanadigan revision'lar soni (eng eskilari o'chiriladi, eng yangisi hech qachon).
+  POST_REVISION_MAX_PER_POST: intEnv(100, 1),
   NODE_ENV: z
     .union([z.literal("development"), z.literal("production"), z.literal("test")])
     .default("development"),

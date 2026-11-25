@@ -13,6 +13,7 @@ import { renderPost } from "../content/render.js";
 import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { announceUpdated } from "./effects.js";
 import { preparePlan } from "./plan.js";
+import { shouldSnapshotForUpdate, snapshotPost, type RevisionReason } from "./revisions.js";
 import { checkCanEdit, loadPost, postLabel, resolveSettings, type PostRow } from "./shared.js";
 import { fail, ok, type Actor, type ServiceResult } from "./types.js";
 
@@ -114,11 +115,21 @@ export async function authorizeEdit(actor: Actor, id: string): Promise<ServiceRe
 
 export type UpdatePostFields = UpdatePostBody;
 
+/** Ichki parametrlar (revision tiklash kabi xizmat ichidagi chaqiruvlar uchun) — HTTP tanasidan KELMAYDI. */
+export interface UpdateInternalOptions {
+  /** Oraliq/aktyor qoidasidan qat'i nazar, yozishdan oldin surat olish. */
+  forceSnapshot?: boolean;
+  revisionReason?: RevisionReason;
+  /** Berilsa, `post.update` o'rniga shu jurnal yozuvi (birlashtirilmasdan) yoziladi. */
+  audit?: { action: string; summary: string; meta?: Record<string, unknown> };
+}
+
 /** `PATCH /admin/posts/:id` — qisman yangilash. Xodim cheklovlari shu yerda majburlanadi. */
 export async function updatePost(
   actor: Actor,
   id: string,
   data: UpdatePostFields,
+  internal: UpdateInternalOptions = {},
 ): Promise<ServiceResult<{ updatedAt: string }>> {
   const authorized = await authorizeEdit(actor, id);
   if (!authorized.ok) return authorized;
@@ -205,6 +216,13 @@ export async function updatePost(
     }
 
     const hasColumnChanges = Object.keys(update).length > 0;
+    const now = new Date();
+    if (
+      (hasColumnChanges || tagRows) &&
+      (internal.forceSnapshot || (await shouldSnapshotForUpdate(tx, id, actor, now)))
+    ) {
+      await snapshotPost(tx, locked, actor, internal.revisionReason ?? "update");
+    }
     if (hasColumnChanges) {
       update.updatedAt = new Date();
       update.updatedBy = actor.userId;
@@ -227,7 +245,15 @@ export async function updatePost(
 
     const [fresh] = await tx.select().from(posts).where(eq(posts.id, id)).limit(1);
 
-    if (fresh && (hasColumnChanges || tagRows)) {
+    if (fresh && (hasColumnChanges || tagRows) && internal.audit) {
+      await recordAudit(tx, actor, {
+        action: internal.audit.action,
+        entityType: "post",
+        entityId: id,
+        summary: `${internal.audit.summary}: ${postLabel(fresh)}`,
+        meta: { status: fresh.status, fields: Object.keys(data), ...(internal.audit.meta ?? {}) },
+      });
+    } else if (fresh && (hasColumnChanges || tagRows)) {
       const fields = Object.keys(data);
       await recordAuditCoalesced(
         tx,

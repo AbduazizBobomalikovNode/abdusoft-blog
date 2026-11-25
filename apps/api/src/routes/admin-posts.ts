@@ -24,6 +24,9 @@ import {
   deletePost,
   findPost,
   getPostDetail,
+  getRevision,
+  listRevisions,
+  restoreRevision,
   listPosts,
   mineSummary,
   previewPost,
@@ -484,6 +487,31 @@ export const adminPostsRoute = new Hono()
   })
   .get("/:id/preview", async (c) => {
     const result = await previewPost(actorOf(c), c.req.param("id"));
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .get("/:id/revisions", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    const result = await listRevisions(actorOf(c), id);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .get("/:id/revisions/:rid", async (c) => {
+    const id = c.req.param("id");
+    const rid = c.req.param("rid");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    if (!UUID_RE.test(rid)) return c.json({ error: "Revision topilmadi" }, 404);
+    const result = await getRevision(actorOf(c), id, rid);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .post("/:id/revisions/:rid/restore", async (c) => {
+    const id = c.req.param("id");
+    const rid = c.req.param("rid");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    if (!UUID_RE.test(rid)) return c.json({ error: "Revision topilmadi" }, 404);
+    const result = await restoreRevision(actorOf(c), id, rid);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })

@@ -7,6 +7,7 @@ import { events } from "../events.js";
 import { recordAudit, type AuditEntry } from "../audit.js";
 import { announcePublished, announceUnpublished } from "./effects.js";
 import { preparePlan } from "./plan.js";
+import { snapshotPost, type RevisionReason } from "./revisions.js";
 import {
   loadPost,
   postLabel,
@@ -26,6 +27,8 @@ interface TransitionSpec {
   buildPatch: (post: PostRow, now: Date) => PostPatch;
   /** Jurnal yozuvi — o'zgarish bilan BIR tranzaksiyada yoziladi. */
   audit: (before: PostRow, after: PostRow) => AuditEntry;
+  /** Berilsa — yozishdan OLDIN joriy holat revision sifatida saqlanadi. */
+  revision?: RevisionReason;
 }
 
 interface TransitionData {
@@ -49,6 +52,8 @@ async function transition(
 
     const guarded = spec.guard?.(before);
     if (guarded) return guarded;
+
+    if (spec.revision) await snapshotPost(tx, before, actor, spec.revision);
 
     const now = new Date();
     const [after] = await tx
@@ -119,6 +124,7 @@ async function executePublish(
 ): Promise<ServiceResult<PostRow>> {
   const result = await transition(actor, id, {
     guard,
+    revision: "publish",
     audit: statusChange(
       args.kind === "approve" ? "post.approve" : args.kind === "scheduled" ? "post.publish_scheduled" : "post.publish",
       args.kind === "approve" ? "tasdiqlandi va chop etildi" : "chop etildi",
@@ -205,10 +211,11 @@ async function leavePublished(
   id: string,
   buildPatch: TransitionSpec["buildPatch"],
   audit: TransitionSpec["audit"],
+  revision: RevisionReason,
 ): Promise<ServiceResult<LifecycleSummary>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
-  const result = await transition(actor, id, { buildPatch, audit });
+  const result = await transition(actor, id, { buildPatch, audit, revision });
   if (!result.ok) return result;
   if (result.data.before.status === "published") await announceUnpublished(result.data.after);
   return ok(toLifecycleSummary(result.data.after));
@@ -220,6 +227,7 @@ export function unpublishPost(actor: Actor, id: string) {
     id,
     () => ({ status: "draft", channelPlan: null, channelSendAt: null }),
     statusChange("post.unpublish", "qoralamaga qaytarildi"),
+    "unpublish",
   );
 }
 
@@ -229,6 +237,7 @@ export function archivePost(actor: Actor, id: string) {
     id,
     () => ({ status: "archived", channelPlan: null, channelSendAt: null }),
     statusChange("post.archive", "arxivlandi"),
+    "archive",
   );
 }
 
@@ -258,6 +267,7 @@ export async function schedulePost(
   }
 
   const result = await transition(actor, id, {
+    revision: "schedule",
     audit: statusChange("post.schedule", "rejalashtirildi", {
       scheduledAt: scheduledAt.toISOString(),
       hasChannelPlan: storedPlan !== null,
