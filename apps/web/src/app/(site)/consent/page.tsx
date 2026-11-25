@@ -2,18 +2,22 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, KeyRound, ShieldAlert, ShieldCheck } from "lucide-react";
-import { MCP_SCOPE_GROUP_LABELS, type McpScopeGroup } from "@blog/shared";
+import { ArrowLeft, KeyRound, ShieldAlert, ShieldCheck } from "lucide-react";
+import { MCP_REQUIRED_SCOPE_ID, MCP_SCOPE_GROUP_LABELS, type McpScopeGroup } from "@blog/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { authClient } from "@/lib/auth-client";
 import {
   consentRedirectUrl,
   consentViewState,
+  defaultScopeSelection,
   displayClientName,
-  isReadOnlyRequest,
+  hasDangerSelected,
+  isReadOnlySelection,
   rawOAuthQuery,
   registeredAgo,
+  serializeScopeSelection,
+  toggleScope,
   type ConsentViewState,
 } from "@/lib/oauth-flow";
 import { site } from "@/lib/site";
@@ -61,6 +65,7 @@ export default function ConsentPage() {
   const [view, setView] = useState<ConsentViewState | null>(null);
   const [busy, setBusy] = useState<"accept" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
 
   useEffect(() => {
     const search = window.location.search;
@@ -78,7 +83,10 @@ export default function ConsentPage() {
       } catch {
         response = null;
       }
-      if (!cancelled) setView(consentViewState(search, response));
+      if (cancelled) return;
+      const next = consentViewState(search, response);
+      setView(next);
+      if (next.kind === "ready") setSelected(defaultScopeSelection(next.info.scopes));
     }
 
     void load();
@@ -87,12 +95,16 @@ export default function ConsentPage() {
     };
   }, []);
 
-  async function respond(accept: boolean) {
+  async function respond(accept: boolean, requested?: readonly string[]) {
     setBusy(accept ? "accept" : "deny");
     setError(null);
     const { data, error: requestError } = await authClient.$fetch<{ url?: string }>("/oauth2/consent", {
       method: "POST",
-      body: { accept, oauth_query: rawOAuthQuery(window.location.search) },
+      body: {
+        accept,
+        oauth_query: rawOAuthQuery(window.location.search),
+        ...(accept && requested ? { scope: serializeScopeSelection(selected, requested) } : {}),
+      },
     });
     const url = consentRedirectUrl(data);
     if (requestError || !url) {
@@ -161,7 +173,7 @@ export default function ConsentPage() {
           <Message
             text="Blogni Claude'ga faqat blog egasi (admin) ulay oladi. Xodimlar va oddiy foydalanuvchilar bu amalni bajara olmaydi. Agar siz egasi bo'lsangiz — admin hisobingiz bilan kirib, ulanishni qaytadan boshlang."
             action={
-              <Button type="button" variant="outline" disabled={busy !== null} onClick={() => void respond(false)}>
+              <Button type="button" variant="outline" className="max-sm:min-h-11" disabled={busy !== null} onClick={() => void respond(false)}>
                 {busy ? "Yuborilmoqda…" : "Ulanishni bekor qilish"}
               </Button>
             }
@@ -178,7 +190,8 @@ export default function ConsentPage() {
       const host = view.info.client?.redirectHost;
       const kind = view.info.client?.redirectKind ?? "other";
       const ago = registeredAgo(view.info.client?.registeredAt);
-      const readOnly = isReadOnlyRequest(view.groups);
+      const readOnly = isReadOnlySelection(selected);
+      const dangerOn = hasDangerSelected(selected);
       return (
         <Shell {...key(<ShieldCheck className="size-5" aria-hidden="true" />, "Ilovani blogingizga ulash")}>
           <Card>
@@ -214,28 +227,45 @@ export default function ConsentPage() {
               </p>
 
               <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{view.info.user.email}</span> sifatida ruxsat berasiz. Ilova quyidagilarni qila oladi:
+                <span className="font-medium text-foreground">{view.info.user.email}</span> sifatida ruxsat berasiz. Kerakli ruxsatlarni tanlang — belgilanmaganini ilova qila olmaydi:
               </p>
 
               <div className="flex flex-col gap-3">
                 {view.groups.map((group) => (
-                  <section key={group.group} aria-label={group.label} className={cn("rounded-lg border p-3", GROUP_TONE[group.group])}>
-                    <h2 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <fieldset key={group.group} className={cn("rounded-lg border p-3", GROUP_TONE[group.group])}>
+                    <legend className="flex items-center gap-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       {group.group === "danger" ? <ShieldAlert className="size-3.5 text-destructive" aria-hidden="true" /> : null}
                       {MCP_SCOPE_GROUP_LABELS[group.group]}
-                    </h2>
-                    <ul className="flex flex-col gap-2">
-                      {group.scopes.map((scope) => (
-                        <li key={scope.id} className="flex gap-2 text-sm">
-                          <Check className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                          <span>
-                            <span className="font-medium">{scope.label}</span>
-                            <span className="block text-xs text-muted-foreground">{scope.description}</span>
-                          </span>
-                        </li>
-                      ))}
+                    </legend>
+                    <ul className="flex flex-col">
+                      {group.scopes.map((scope) => {
+                        const required = scope.id === MCP_REQUIRED_SCOPE_ID;
+                        const inputId = `scope-${scope.id.replace(/[^a-z0-9]/gi, "-")}`;
+                        return (
+                          <li key={scope.id}>
+                            <label htmlFor={inputId} className={cn("flex min-h-11 items-start gap-3 rounded-md py-2 text-sm", required ? "cursor-default" : "cursor-pointer")}>
+                              <input
+                                id={inputId}
+                                type="checkbox"
+                                className={cn("mt-0.5 size-5 shrink-0 rounded border-border", group.group === "danger" ? "accent-red-600" : "accent-primary")}
+                                checked={selected.includes(scope.id)}
+                                disabled={required || busy !== null}
+                                aria-describedby={`${inputId}-desc`}
+                                onChange={() => setSelected((current) => toggleScope(current, scope.id, view.info.scopes))}
+                              />
+                              <span>
+                                <span className="font-medium">{scope.label}</span>
+                                {required ? <span className="ml-2 text-xs text-muted-foreground">(doim yoqilgan)</span> : null}
+                                <span id={`${inputId}-desc`} className="block text-xs text-muted-foreground">
+                                  {scope.description}
+                                </span>
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
                     </ul>
-                  </section>
+                  </fieldset>
                 ))}
               </div>
 
@@ -254,7 +284,7 @@ export default function ConsentPage() {
                   Noma&apos;lum ruxsatlar so&apos;ralgan: {view.unknown.join(", ")}. Ular berilmaydi.
                 </p>
               ) : null}
-              {view.hasDanger ? (
+              {dangerOn ? (
                 <p className="text-xs text-destructive">
                   Diqqat: bu ilova postlarni o&apos;chira olishi yoki izohlarni boshqarishi mumkin. Faqat ishonchli ilovaga ruxsat bering.
                 </p>
@@ -266,10 +296,10 @@ export default function ConsentPage() {
               ) : null}
 
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <Button type="button" variant="outline" disabled={busy !== null} onClick={() => void respond(false)}>
+                <Button type="button" variant="outline" className="max-sm:min-h-11" disabled={busy !== null} onClick={() => void respond(false)}>
                   {busy === "deny" ? "Yuborilmoqda…" : "Rad etish"}
                 </Button>
-                <Button type="button" disabled={busy !== null} onClick={() => void respond(true)}>
+                <Button type="button" className="max-sm:min-h-11" disabled={busy !== null} onClick={() => void respond(true, view.info.scopes)}>
                   {busy === "accept" ? "Ulanmoqda…" : "Ruxsat berish"}
                 </Button>
               </div>

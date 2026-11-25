@@ -2,8 +2,8 @@ import { z } from "zod";
 
 /**
  * Claude konnektori (MCP) ruxsatlari. Bu ro'yxat API (metadata, vositalar uchun talab qilingan scope) va web
- * (rozilik sahifasi, "Ulangan ilovalar") uchun YAGONA manba. Yozuv vositalari keyingi PR'da qo'shiladi, lekin
- * ruxsatlar hozirdan belgilangan — keyin foydalanuvchi qayta rozilik berishi shart bo'lmasligi uchun.
+ * (rozilik sahifasi, "Ulangan ilovalar") uchun YAGONA manba. Yozuv ruxsatlari `MCP_WRITE_TOOLS_ENABLED=true` bo'lgandagina
+ * beriladi (`grantableScopeIds`); o'chiq bo'lsa faqat o'qish beriladi.
  */
 export const MCP_SCOPE_GROUPS = ["read", "write", "publish", "danger"] as const;
 export type McpScopeGroup = (typeof MCP_SCOPE_GROUPS)[number];
@@ -39,22 +39,22 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     id: "posts:write",
     group: "write",
     label: "Qoralama yozish va tahrirlash",
-    description: "Yangi qoralama yaratish va mavjud postlarni tahrirlash (chop etmasdan).",
-    english: "Create drafts and edit existing posts without publishing them.",
+    description: "Yangi qoralama yaratish, postlarni tahrirlash va teglarni boshqarish (chop etmasdan), chiqindi qutisidan qaytarish.",
+    english: "Create drafts, edit posts, manage tags (create, rename) and restore posts from the trash, without publishing anything.",
   },
   {
     id: "media:upload",
     group: "write",
     label: "Media yuklash",
-    description: "Rasmlarni media kutubxonasiga yuklash va ularning tavsifini o'zgartirish.",
+    description: "Rasmlarni media kutubxonasiga yuklash va ularning alt matnini o'zgartirish.",
     english: "Upload images to the media library and edit their alt text.",
   },
   {
     id: "posts:publish",
     group: "publish",
     label: "Chop etish va rejalashtirish",
-    description: "Postni saytda chop etish, rejalashtirish yoki chop etishdan olish.",
-    english: "Publish, schedule or unpublish posts on the site.",
+    description: "Postni saytda chop etish, rejalashtirish, chop etishdan olish, arxivlash va ko'rib chiqishdagi postlarni tasdiqlash.",
+    english: "Publish, schedule, unpublish and archive posts on the site, and approve or send back posts that staff submitted for review.",
   },
   {
     id: "channels:send",
@@ -67,15 +67,15 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     id: "comments:moderate",
     group: "danger",
     label: "Izohlarni boshqarish",
-    description: "Izohlarni tasdiqlash, yashirish, o'chirish, ularga javob berish va foydalanuvchilarni bloklash.",
-    english: "Approve, hide, delete and reply to comments, and ban commenters.",
+    description: "Izohlarni tasdiqlash, yashirish, spam deb belgilash, o'chirish, admin sifatida javob yozish va mualliflarni bloklash.",
+    english: "Approve, hide, mark as spam, delete and reply to comments (as the admin), and ban commenters.",
   },
   {
     id: "posts:delete",
     group: "danger",
     label: "O'chirish",
-    description: "Postlarni chiqindi qutisiga olish va butunlay o'chirish.",
-    english: "Move posts to the trash and delete them permanently.",
+    description: "Postlarni chiqindi qutisiga olish (va alohida yoqilgan bo'lsa butunlay o'chirish), teglar va media fayllarni o'chirish.",
+    english: "Move posts to the trash (and permanently delete them when that extra switch is on), and delete tags and media files.",
   },
 ];
 
@@ -85,18 +85,30 @@ export const MCP_OPENID_SCOPE = "openid";
 
 export const MCP_SCOPE_IDS: readonly string[] = MCP_SCOPES.map((scope) => scope.id);
 
-/**
- * HOZIR berilishi mumkin bo'lgan ruxsatlar: faqat o'qish (+ `offline_access`). Qolgan ruxsatlar modelda saqlanadi, lekin
- * ularning vositalari yo'q — shu sabab e'lon qilinmaydi, ro'yxatdan o'tishda/authorize'da/rozilikda qabul qilinmaydi.
- * Yozuv vositalari qo'shilganda ruxsat shu ro'yxatga kiritiladi; mavjud (faqat o'qish) rozilik o'z-o'zidan kengaymaydi:
- * yangi ruxsat so'ralsa server yangi rozilik talab qiladi.
- */
+/** Faqat o'qish ruxsati — `MCP_WRITE_TOOLS_ENABLED` o'chiq bo'lganda berilishi mumkin bo'lgan yagona ruxsat (+ `offline_access`). */
 export const MCP_GRANTABLE_SCOPE_IDS: readonly string[] = ["blog:read"];
 export const MCP_GRANTABLE_OAUTH_SCOPES: readonly string[] = [...MCP_GRANTABLE_SCOPE_IDS, MCP_OFFLINE_SCOPE];
 
+/** Ruxsat har doim yoqilgan va rozilik sahifasida o'chirib bo'lmaydi: barcha vositalar o'qishga tayanadi (postning `updatedAt` belgisi). */
+export const MCP_REQUIRED_SCOPE_ID = "blog:read";
+
+/**
+ * Hozir berilishi mumkin bo'lgan ruxsatlar. `writeEnabled=false` (standart) — faqat o'qish (PR #11 xatti-harakati);
+ * `true` — barcha yozuv ruxsatlari ham. Mavjud (faqat o'qish) rozilik o'z-o'zidan kengaymaydi: yangi ruxsat so'ralsa
+ * server yangi rozilik talab qiladi.
+ */
+export function grantableScopeIds(writeEnabled = false): readonly string[] {
+  return writeEnabled ? MCP_SCOPE_IDS : MCP_GRANTABLE_SCOPE_IDS;
+}
+
+export function grantableOAuthScopes(writeEnabled = false): readonly string[] {
+  return [...grantableScopeIds(writeEnabled), MCP_OFFLINE_SCOPE];
+}
+
 /** `scope` ro'yxatini berilishi mumkin bo'lganlarga qisqartiradi (takrorlarsiz, tartib saqlanadi). */
-export function clampToGrantable(scopes: readonly string[]): string[] {
-  return [...new Set(scopes.filter((scope) => MCP_GRANTABLE_OAUTH_SCOPES.includes(scope)))];
+export function clampToGrantable(scopes: readonly string[], writeEnabled = false): string[] {
+  const allowed = grantableOAuthScopes(writeEnabled);
+  return [...new Set(scopes.filter((scope) => allowed.includes(scope)))];
 }
 
 export function findMcpScope(id: string): McpScopeInfo | undefined {
@@ -177,5 +189,7 @@ export type McpConnection = z.infer<typeof McpConnectionSchema>;
 
 export const McpConnectionsResponseSchema = z.object({
   items: z.array(McpConnectionSchema),
+  /** Serverda yozuv vositalari (`MCP_WRITE_TOOLS_ENABLED`) hozir yoqilganmi. `false` bo'lsa berilgan yozuv ruxsatlari FAOL EMAS. */
+  writeToolsEnabled: z.boolean().optional(),
 });
 export type McpConnectionsResponse = z.infer<typeof McpConnectionsResponseSchema>;

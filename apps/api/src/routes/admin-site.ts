@@ -3,6 +3,7 @@ import { SocialLinksSchema, PostSettingsSchema, TelegramSettingsSchema, UpdateSi
 import { requireAdmin } from "../lib/require-admin.js";
 import { recordAuditSafe } from "../lib/audit.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
+import { validatePanelDocument } from "../lib/content/validate.js";
 import { renderPost } from "../lib/content/render.js";
 import {
   ABOUT_KEY,
@@ -29,6 +30,8 @@ export const adminSiteRoute = new Hono()
     const revalidatePaths = new Set<string>();
 
     if (parsed.data.about !== undefined) {
+      const docCheck = validatePanelDocument(parsed.data.about.json);
+      if (!docCheck.ok) return c.json({ error: `Hujjat qabul qilinmadi: ${docCheck.message}` }, 400);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tiptap JSONContent
       const rendered = await renderPost(parsed.data.about.json as any);
       await upsertSiteSetting(ABOUT_KEY, { json: parsed.data.about.json, html: rendered.html });

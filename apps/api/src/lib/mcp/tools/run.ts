@@ -1,6 +1,7 @@
 import { z, type ZodError } from "zod";
 import { config } from "../../../config.js";
 import { auditMcpDenied, auditMcpRead } from "../audit.js";
+import { enforceWriteLimit } from "../write-limits.js";
 import { errorResult, fitResult, okResult, type McpToolResult } from "./result.js";
 import { ToolError, type McpToolContext, type McpToolDef } from "./types.js";
 
@@ -43,7 +44,14 @@ export async function runTool<Shape extends z.ZodRawShape>(
       throw new ToolError("invalid_input", `Invalid arguments: ${describeZodError(parsed.error)}`, "Fix the arguments and call the tool again.");
     }
 
-    const output = await def.handler(parsed.data as z.infer<z.ZodObject<Shape>>, ctx);
+    // Yozuv vositasi: amal jurnalga "qaysi ilova, qaysi vosita" bilan yoziladi (xizmat funksiyalari `actor.mcp`ni jurnalga qo'shadi).
+    const toolCtx: McpToolContext =
+      def.kind === "write" ? { ...ctx, actor: { ...ctx.actor, mcp: { clientId: ctx.client.id, clientName: ctx.client.name, tool: def.name, channelsSend: ctx.scopes.has("channels:send") } } } : ctx;
+    if (def.kind === "write" && def.limit && (parsed.data as { dry_run?: unknown }).dry_run !== true) {
+      await enforceWriteLimit(toolCtx, def.limit);
+    }
+
+    const output = await def.handler(parsed.data as z.infer<z.ZodObject<Shape>>, toolCtx);
     if (def.kind === "read") await auditMcpRead(ctx, def.name);
 
     const fitted = fitResult(output, ctx.limits.resultMaxChars);

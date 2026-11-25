@@ -16,15 +16,58 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
-import { describeConnectionScopes, displayClientName } from "@/lib/oauth-flow";
+import { describeConnectionPermissions, displayClientName, inactiveConnectionScopes } from "@/lib/oauth-flow";
+import { MCP_SCOPES, MCP_SCOPE_GROUP_LABELS, type McpScopeGroup } from "@blog/shared";
+import { cn } from "@/lib/utils";
 
-function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; onRevoked: (clientId: string) => void }) {
+const GROUP_CHIP: Record<McpScopeGroup, string> = {
+  read: "border-border",
+  write: "border-sky-500/40 bg-sky-500/10",
+  publish: "border-amber-500/40 bg-amber-500/10",
+  danger: "border-destructive/40 bg-destructive/10 text-destructive",
+};
+
+function PermissionList({ perms, inactive }: { perms: ReturnType<typeof describeConnectionPermissions>; inactive: string[] }) {
+  const inactiveLabels = new Set(MCP_SCOPES.filter((s) => inactive.includes(s.id)).map((s) => s.label));
+  return (
+    <div className="flex flex-col gap-1.5">
+      {perms.readOnly ? (
+        <span className="w-fit rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">Faqat o&apos;qiydi</span>
+      ) : null}
+      {perms.groups
+        .filter((g) => !(perms.readOnly && g.group === "read"))
+        .map((g) => (
+          <div key={g.group} className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3">
+            <span className="shrink-0 pt-0.5 text-xs sm:w-32 font-semibold uppercase tracking-wide text-muted-foreground">{MCP_SCOPE_GROUP_LABELS[g.group]}</span>
+            <div className="flex min-w-0 flex-wrap gap-1.5">
+            {g.labels.map((label) => (
+              <span
+                key={label}
+                className={cn("rounded-full border px-2 py-0.5 text-xs", GROUP_CHIP[g.group], inactiveLabels.has(label) && "opacity-60 line-through decoration-1")}
+                title={inactiveLabels.has(label) ? "Hozir ishlamaydi: serverda yozuv vositalari o'chirilgan" : undefined}
+              >
+                {g.group === "danger" ? <ShieldAlert className="mr-1 inline size-3" aria-hidden="true" /> : null}
+                {label}
+              </span>
+            ))}
+            </div>
+          </div>
+        ))}
+      {inactive.length > 0 ? (
+        <p role="note" className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-200">
+          Serverda yozuv vositalari o&apos;chirilgan: bu ruxsatlar hozir ishlamaydi.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ConnectionRow({ connection, writeToolsEnabled, onRevoked }: { connection: McpConnection; writeToolsEnabled?: boolean; onRevoked: (clientId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const scopes = describeConnectionScopes(connection.scopes);
+  const perms = describeConnectionPermissions(connection.scopes);
   const name = displayClientName(connection.name);
 
   async function handleRevoke() {
@@ -42,35 +85,27 @@ function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; o
   }
 
   return (
-    <TableRow>
-      <TableCell className="max-w-[16rem] align-top whitespace-normal">
-        <div className="font-medium break-words">{name}</div>
-        {connection.redirectHost ? <div className="text-xs text-muted-foreground">{connection.redirectHost}</div> : null}
-      </TableCell>
-      <TableCell className="align-top">
-        <ul className="flex flex-wrap gap-1.5">
-          {scopes.labels.map((label) => (
-            <li key={label} className="rounded-full border border-border px-2 py-0.5 text-xs">
-              {label}
-            </li>
-          ))}
-          {scopes.hasDanger ? (
-            <li className="flex items-center gap-1 rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
-              <ShieldAlert className="size-3" aria-hidden="true" />
-              Xavfli amallar
-            </li>
-          ) : null}
-        </ul>
-      </TableCell>
-      <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(connection.connectedAt)}</TableCell>
-      <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">
-        {connection.lastUsedAt ? formatRelativeTime(connection.lastUsedAt) : "hali ishlatilmagan"}
-      </TableCell>
-      <TableCell className="align-top">
-        <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+    <li className="flex flex-col gap-3 rounded-lg border border-border p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-medium [overflow-wrap:anywhere]">{name}</div>
+          {connection.redirectHost ? <div className="text-xs text-muted-foreground">{connection.redirectHost}</div> : null}
+        </div>
+        <Button variant="outline" size="sm" className="shrink-0 max-md:min-h-11" onClick={() => setOpen(true)}>
           Uzish
         </Button>
-      </TableCell>
+      </div>
+      <PermissionList perms={perms} inactive={inactiveConnectionScopes(connection.scopes, writeToolsEnabled)} />
+      <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+        <div className="flex gap-1.5">
+          <dt>Ulangan:</dt>
+          <dd>{formatDateTime(connection.connectedAt)}</dd>
+        </div>
+        <div className="flex gap-1.5">
+          <dt>So&apos;nggi faollik:</dt>
+          <dd>{connection.lastUsedAt ? formatRelativeTime(connection.lastUsedAt) : "hali ishlatilmagan"}</dd>
+        </div>
+      </dl>
 
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
@@ -89,7 +124,7 @@ function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; o
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </TableRow>
+    </li>
   );
 }
 
@@ -139,7 +174,7 @@ function RevokeAllButton({ count, onDone }: { count: number; onDone: () => void 
 }
 
 /** `initial === null` — konnektor serverda o'chiq (yoki API javob bermadi). */
-export function ConnectionsClient({ initial }: { initial: McpConnection[] | null }) {
+export function ConnectionsClient({ initial, writeToolsEnabled }: { initial: McpConnection[] | null; writeToolsEnabled?: boolean }) {
   const [items, setItems] = useState<McpConnection[]>(initial ?? []);
 
   if (initial === null) {
@@ -160,28 +195,16 @@ export function ConnectionsClient({ initial }: { initial: McpConnection[] | null
       <div className="flex justify-end">
         <RevokeAllButton count={items.length} onDone={() => setItems([])} />
       </div>
-    <div className="overflow-x-auto rounded-lg border border-border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Ilova</TableHead>
-            <TableHead>Ruxsatlar</TableHead>
-            <TableHead>Ulangan</TableHead>
-            <TableHead>So&apos;nggi faollik</TableHead>
-            <TableHead className="w-24" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((connection) => (
-            <ConnectionRow
-              key={connection.clientId}
-              connection={connection}
-              onRevoked={(clientId) => setItems((current) => current.filter((item) => item.clientId !== clientId))}
-            />
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+      <ul className="flex flex-col gap-3">
+        {items.map((connection) => (
+          <ConnectionRow
+            key={connection.clientId}
+            connection={connection}
+            writeToolsEnabled={writeToolsEnabled}
+            onRevoked={(clientId) => setItems((current) => current.filter((item) => item.clientId !== clientId))}
+          />
+        ))}
+      </ul>
     </div>
   );
 }

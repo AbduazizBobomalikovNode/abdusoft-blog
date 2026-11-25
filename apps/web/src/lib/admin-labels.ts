@@ -68,6 +68,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "post.restore_revision": "Eski versiyaga qaytarildi",
   "post.channel_send": "Kanalga yuborildi",
   "post.channel_replace": "Kanaldagi post almashtirildi",
+  "post.channel_send_failed": "Kanalga yuborish muvaffaqiyatsiz",
   "post.channel_resync": "Kanal sarlavhasi yangilandi",
   "post.channel_choice_set": "Kanal versiyasi belgilandi",
   "post.channel_choice_clear": "Kanal versiyasi belgisi olindi",

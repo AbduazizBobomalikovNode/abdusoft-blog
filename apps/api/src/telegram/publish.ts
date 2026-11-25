@@ -18,7 +18,7 @@ import { createOrUpdateTelegraphPage, resolveTelegraphAuthorName, tiptapToTelegr
  * avtomatik yuborilmaydi. HTTP so'rov yo'liga hech qachon tashlamaydi —
  * barcha xatolar shu yerda log qilinadi.
  */
-async function syncPostToTelegram(postId: string): Promise<void> {
+async function syncPostToTelegram(postId: string, opts: { skipChannel?: boolean } = {}): Promise<void> {
   const [post] = await db
     .select()
     .from(posts)
@@ -56,6 +56,7 @@ async function syncPostToTelegram(postId: string): Promise<void> {
   // Post allaqachon kanalga (qo'lda) yuborilgan bo'lsa — caption'ni yangi
   // kontent bilan qayta quramiz. Hali yuborilmagan bo'lsa — HECH NARSA
   // qilinmaydi (avtomatik yuborish YO'Q).
+  if (opts.skipChannel) return;
   try {
     await editChannelCaptionForPost(post.id);
   } catch (error: unknown) {
@@ -75,7 +76,7 @@ export async function awaitPostSync(postId: string): Promise<void> {
 }
 
 function handlePublishedOrUpdated(payload: PostEventPayload): void {
-  const run = syncPostToTelegram(payload.id).finally(() => {
+  const run = syncPostToTelegram(payload.id, { skipChannel: payload.skipChannel === true }).finally(() => {
     if (pendingSyncs.get(payload.id) === run) pendingSyncs.delete(payload.id);
   });
   pendingSyncs.set(payload.id, run);
@@ -83,6 +84,8 @@ function handlePublishedOrUpdated(payload: PostEventPayload): void {
 }
 
 function handleUnpublished(payload: PostEventPayload): void {
+  // Kanalga yuborish ruxsati yo'q aktyor kanal xabarini o'chira olmaydi (servis darajasida avval rad etiladi; bu — poyga holati uchun).
+  if (payload.skipChannel) return;
   void deleteChannelMessages(payload.id).catch((error: unknown) => {
     console.error(`Telegram kanal xabarini o'chirishda xatolik (post ${payload.id}):`, error);
   });

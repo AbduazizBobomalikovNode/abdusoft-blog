@@ -14,7 +14,6 @@ import {
   TrashListQuerySchema,
   UpdateChannelVersionBodySchema,
   UpdatePostBodySchema,
-  type PublishChannelSendResult,
 } from "@blog/shared";
 import { requireRole } from "../lib/require-admin.js";
 import {
@@ -46,23 +45,17 @@ import {
   type PostRow,
 } from "../lib/posts/index.js";
 import {
-  computeChannelVersionPost,
-  computeChannelPost,
   editChannelCaptionForPost,
-  getChannelAlreadySent,
-  sendPostToChannel,
-  sendVersionToChannel,
   type SendChannelPostResult,
 } from "../telegram/channel-send.js";
 import { computeChannelPreflight, summarizePreflightErrors } from "../telegram/channel-preflight.js";
-import { getChannelInfo } from "../telegram/channel-info.js";
 import {
   clearChannelChoice,
   parseStoredChoice,
   resolveChannelChoice,
   setChannelChoice,
 } from "../telegram/channel-choice.js";
-import { sendMarkedChoiceNow } from "../telegram/channel-plan.js";
+import { previewChannelPost, queueChannelSend, sendToChannelAudited } from "../telegram/channel-actions.js";
 import {
   createChannelVersion,
   deleteChannelVersion,
@@ -197,8 +190,6 @@ function sendFailureResponse(c: Context, result: Extract<SendChannelPostResult, 
 }
 
 
-const CHANNEL_SEND_WAIT_MS = 20_000;
-
 /** `publish`/`approve` ixtiyoriy tanasi: `sendToChannel: true` bo'lsa postda belgilangan versiya bo'lishi shart (aks holda 400). */
 async function parsePublishBody(
   c: Context,
@@ -215,33 +206,6 @@ async function parsePublishBody(
   }
   return { sendToChannel: true, expectedUpdatedAt };
 }
-
-/** Rejani (kechikishsiz) qo'yib, Telegraph'dan keyin yuboradi; natija HTTP javobiga (toast) qo'shiladi. Uzoq cho'zilsa — fonda davom etadi (admin chatga xabar boradi). */
-async function queueChannelSend(postId: string): Promise<PublishChannelSendResult> {
-  const work = sendMarkedChoiceNow(postId).then(
-    (outcome): PublishChannelSendResult => {
-      if (outcome.state === "sent") return { state: "sent", messageUrl: outcome.messageUrl, error: null };
-      if (outcome.state === "failed") {
-        return {
-          state: "failed",
-          messageUrl: null,
-          error: outcome.willRetry ? `${outcome.reason} (keyinroq qayta uriniladi)` : outcome.reason,
-        };
-      }
-      return { state: "failed", messageUrl: null, error: "Kanalga yuborilmadi (allaqachon yuborilgan bo'lishi mumkin)" };
-    },
-    (error: unknown): PublishChannelSendResult => ({
-      state: "failed",
-      messageUrl: null,
-      error: error instanceof Error ? error.message : "Noma'lum xato",
-    }),
-  );
-  const timeout = new Promise<PublishChannelSendResult>((resolve) => {
-    setTimeout(() => resolve({ state: "pending", messageUrl: null, error: null }), CHANNEL_SEND_WAIT_MS).unref?.();
-  });
-  return Promise.race([work, timeout]);
-}
-
 
 export const adminPostsRoute = new Hono()
   .use("*", requireRole("admin", "staff"))
@@ -333,37 +297,31 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "mode va variant (yoki versionId) majburiy (mode: media|text)" }, 400);
 
     // Rejalashtirish paytida post hali chop etilmagan bo'ladi — ko'rinish baribir quriladi.
-    const computed =
-      "versionId" in parsed.data
-        ? // Maxsus versiyada rasmlar olib tashlangan bo'lishi mumkin (tahrirlash jarayoni) — ko'rinish quriladi, preflight o'zi xato ko'rsatadi.
-          await computeChannelVersionPost(id, parsed.data.versionId, { allowUnpublished: true, allowEmptyMedia: true })
-        : await computeChannelPost(id, parsed.data.mode, parsed.data.variant, { allowUnpublished: true });
-    if (!computed.ok) {
-      if (computed.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
-      if (computed.reason === "version_not_found") return c.json({ error: "Versiya topilmadi" }, 404);
-      if (computed.reason === "not_published") {
+    const preview = await previewChannelPost(id, parsed.data);
+    if (!preview.ok) {
+      if (preview.reason === "not_found") return c.json({ error: "Topilmadi" }, 404);
+      if (preview.reason === "version_not_found") return c.json({ error: "Versiya topilmadi" }, 404);
+      if (preview.reason === "not_published") {
         return c.json({ error: "Faqat chop etilgan post uchun kanal ko'rinishi tayyorlanadi" }, 409);
       }
-      if (computed.reason === "invalid_combo") {
+      if (preview.reason === "invalid_combo") {
         return c.json({ error: "Bu uzunlik ushbu rejim uchun mos emas" }, 400);
       }
       // no_media
       return c.json({ error: "🖼 Rasmli rejim uchun postda kover yoki band ichida rasm bo'lishi kerak" }, 400);
     }
 
-    const [alreadySent, channel] = await Promise.all([getChannelAlreadySent(id), getChannelInfo()]);
-
     return c.json({
-      mode: computed.data.mode,
-      variant: computed.data.variant,
-      versionId: computed.data.versionId,
-      captionHtml: computed.data.captionHtml,
-      visibleLength: computed.data.visibleLength,
-      limit: computed.data.limit,
-      truncated: computed.data.truncated,
-      media: computed.data.media,
-      alreadySent,
-      channel,
+      mode: preview.computed.mode,
+      variant: preview.computed.variant,
+      versionId: preview.computed.versionId,
+      captionHtml: preview.computed.captionHtml,
+      visibleLength: preview.computed.visibleLength,
+      limit: preview.computed.limit,
+      truncated: preview.computed.truncated,
+      media: preview.computed.media,
+      alreadySent: preview.alreadySent,
+      channel: preview.channel,
     });
   })
   .post("/:id/channel/preflight", async (c) => {
@@ -501,24 +459,9 @@ export const adminPostsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "mode va variant (yoki versionId) majburiy (mode: media|text)" }, 400);
 
     // Preflight `sendPostToChannel`/`sendVersionToChannel` ichida server tomonida ishlaydi — o'tmasa 422 va HECH NARSA yuborilmaydi.
-    const result =
-      "versionId" in parsed.data
-        ? await sendVersionToChannel(id, parsed.data.versionId, { replaceExisting: parsed.data.replaceExisting })
-        : await sendPostToChannel(id, parsed.data.mode, parsed.data.variant, {
-            replaceExisting: parsed.data.replaceExisting,
-          });
+    const result = await sendToChannelAudited(actorOf(c), id, parsed.data);
 
     if (!result.ok) return sendFailureResponse(c, result);
-    await recordAuditSafe(actorOf(c), {
-      action: parsed.data.replaceExisting ? "post.channel_replace" : "post.channel_send",
-      entityType: "post",
-      entityId: id,
-      summary: parsed.data.replaceExisting ? "Post kanalga qayta yuborildi (almashtirildi)" : "Post kanalga yuborildi",
-      meta:
-        "versionId" in parsed.data
-          ? { versionId: parsed.data.versionId, replaceExisting: Boolean(parsed.data.replaceExisting) }
-          : { mode: parsed.data.mode, variant: parsed.data.variant, replaceExisting: Boolean(parsed.data.replaceExisting) },
-    });
     return c.json(result);
   })
   .post("/:id/channel/resync-caption", async (c) => {

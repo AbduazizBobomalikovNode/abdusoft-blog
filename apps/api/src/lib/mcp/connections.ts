@@ -1,13 +1,14 @@
 import { and, desc, eq, inArray, isNull, lt, notExists, or, sql } from "drizzle-orm";
 import type { Executor } from "../executor.js";
 import type { McpConnection, McpConsentInfo } from "@blog/shared";
-import { MCP_GRANTABLE_OAUTH_SCOPES, clampToGrantable, parseScopeString, type McpRedirectKind } from "@blog/shared";
+import { MCP_OFFLINE_SCOPE, MCP_SCOPE_IDS, parseScopeString, type McpRedirectKind } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { oauthAccessToken, oauthClient, oauthConsent, oauthRefreshToken } from "../../db/auth-schema.js";
 import { auditLog } from "../../db/schema.js";
 import { verification } from "../../db/auth-schema.js";
 import { recordAudit } from "../audit.js";
 import type { Actor } from "../posts/types.js";
+import { ALL_OAUTH_SCOPES, clampNow } from "./scopes.js";
 
 function hostOf(uri: string | undefined): string | null {
   if (!uri) return null;
@@ -64,7 +65,8 @@ export async function listConnections(userId: string): Promise<McpConnection[]> 
     clientId: row.clientId,
     name: row.name,
     redirectHost: hostOf(row.redirectUris?.[0]),
-    scopes: row.scopes.filter((scope) => MCP_GRANTABLE_OAUTH_SCOPES.includes(scope)),
+    // Saqlangan (berilgan) barcha ma'lum ruxsatlar ko'rsatiladi — yozuv kaliti o'chiq bo'lsa ham (ular faol emas, lekin yashirilmaydi).
+    scopes: row.scopes.filter((scope) => MCP_SCOPE_IDS.includes(scope) || scope === MCP_OFFLINE_SCOPE),
     connectedAt: row.connectedAt.toISOString(),
     lastUsedAt: lastUsed.has(row.clientId) ? new Date(lastUsed.get(row.clientId)!).toISOString() : null,
   }));
@@ -185,7 +187,7 @@ export async function buildConsentInfo(input: {
   clientId: string | null;
   scope: string | null;
 }): Promise<McpConsentInfo> {
-  const base = { user: input.user, scopes: clampToGrantable(parseScopeString(input.scope)) };
+  const base = { user: input.user, scopes: clampNow(parseScopeString(input.scope)) };
   if (!input.clientId) return { ...base, allowed: false, reason: "unknown_client", client: null };
 
   const [client] = await db
@@ -230,4 +232,30 @@ export async function cleanupMcpData(ttlHours: number, now: Date = new Date()): 
   const deletedTokens = await db.delete(oauthRefreshToken).where(lt(oauthRefreshToken.expiresAt, tokenCutoff)).returning();
 
   return { clients: deletedClients.length, refreshTokens: deletedTokens.length };
+}
+
+/**
+ * Klientning ro'yxatdan o'tgan ruxsatlar SHIFTINI kengaytiradi (faqat shift: rozilik o'zgarmaydi). Yozuv kaliti keyin
+ * yoqilganda, avval faqat o'qish bilan ro'yxatdan o'tgan klient yozuv ruxsatlarini so'ray olishi uchun (Better Auth
+ * so'ralgan ruxsat klientning ro'yxatdagisidan tashqarida bo'lsa `invalid_scope` beradi). Kengaytma faqat HOZIR berilishi
+ * mumkin ruxsatlar bilan cheklanadi va foydalanuvchi baribir yangi rozilik berishi shart.
+ */
+export async function widenClientScopes(clientId: string, requested: readonly string[]): Promise<void> {
+  const wanted = requested.filter((scope) => ALL_OAUTH_SCOPES.includes(scope));
+  if (wanted.length === 0) return;
+  const [client] = await db.select({ id: oauthClient.id, scopes: oauthClient.scopes }).from(oauthClient).where(eq(oauthClient.clientId, clientId)).limit(1);
+  if (!client) return;
+  const current = client.scopes ?? [];
+  const missing = wanted.filter((scope) => !current.includes(scope));
+  if (missing.length === 0) return;
+  await db
+    .update(oauthClient)
+    .set({ scopes: [...new Set([...current, ...missing])] })
+    .where(eq(oauthClient.id, client.id));
+}
+
+/** Rozilik POST'ida klient hali mavjudmi (o'chirilgan/yo'q klient uchun toza `invalid_client`). */
+export async function clientExists(clientId: string): Promise<boolean> {
+  const [client] = await db.select({ disabled: oauthClient.disabled }).from(oauthClient).where(eq(oauthClient.clientId, clientId)).limit(1);
+  return Boolean(client) && !client?.disabled;
 }

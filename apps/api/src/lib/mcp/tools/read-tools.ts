@@ -3,6 +3,7 @@ import {
   AuditListQuerySchema,
   MCP_SCOPES,
   StatsRangeSchema,
+  analyzeDocMarkdown,
   type ContentNode,
 } from "@blog/shared";
 import { listAuditEntries } from "../../admin-reads/audit.js";
@@ -42,16 +43,54 @@ async function resolvePostId(args: { id?: string | undefined; slug?: string | un
 
 const NOT_FOUND_POST = "Use list_posts to find a valid post id. Trashed posts are only visible through list_trash.";
 
+type IncludeMode = "markdown" | "text" | "document" | "both" | "markdown+document";
+
+/**
+ * Yozuv kaliti O'CHIQ bo'lsa vositaning sxemasi `main`dagi bilan bir xil ("both" standart ko'rinib turadi, Markdown shakllari yo'q);
+ * yoqilganda Markdown shakllari qo'shiladi va standart Markdown bo'ladi.
+ */
+const INCLUDE_FIELD = config.MCP_WRITE_TOOLS_ENABLED
+  ? z
+      .enum(["markdown", "text", "document", "both", "markdown+document"])
+      .optional()
+      .describe(
+        "Which content form to return. 'markdown': the body as Markdown (the form update_post accepts) - the default when write tools are enabled. 'text': readable plain text. 'document': the exact structured Tiptap JSON. " +
+          "'both': plain text + document. 'markdown+document': Markdown + document.",
+      )
+  : z.enum(["both", "text", "document"]).default("both").describe("Which content form to return (default both).");
+
+/** `get_post_revision` uchun: `main`da bu maydonda tavsif yo'q edi — yozuv kaliti o'chiq bo'lsa shuni saqlaymiz. */
+const INCLUDE_FIELD_REVISION = config.MCP_WRITE_TOOLS_ENABLED ? INCLUDE_FIELD : z.enum(["both", "text", "document"]).default("both");
+
+/** Yozuv vositalari yoqilgan bo'lsa standart — Markdown; o'chiq bo'lsa PR #11 xatti-harakati ("both"). */
+function resolveInclude(include: IncludeMode | undefined): IncludeMode {
+  return include ?? (config.MCP_WRITE_TOOLS_ENABLED ? "markdown" : "both");
+}
+
 function contentFor(
   json: unknown,
-  include: "text" | "document" | "both",
-): { content?: string; document?: unknown; contentFormat: string; contentNote: string } {
+  include: IncludeMode,
+): { content?: string; document?: unknown; contentFormat: string; contentNote: string; [key: string]: unknown } {
   const doc = (json ?? null) as ContentNode | null;
+  if (include === "markdown" || include === "markdown+document") {
+    const report = analyzeDocMarkdown(doc);
+    return {
+      contentFormat: include === "markdown" ? "markdown" : "markdown+tiptap_json",
+      contentNote:
+        "'content' is the post body as Markdown (## and ### headings, lists, quotes, ``` code fences with language, tables, links, images). The post title is NOT part of it. " +
+        "If 'truncated' appears in this result the Markdown is incomplete: never send it back as a replacement body." +
+        (report.lossless ? "" : " Some blocks cannot be written as Markdown exactly (see lossyBlocks): a Markdown overwrite of this post is refused unless acknowledged; use content_document for structural edits."),
+      content: report.markdown,
+      markdownLossless: report.lossless,
+      ...(report.lossless ? {} : { lossyBlocks: report.lossyBlocks }),
+      ...(include === "markdown+document" ? { document: json ?? null } : {}),
+    };
+  }
   return {
     contentFormat: "plain_text+tiptap_json",
     contentNote:
       "'content' is readable plain text (headings prefixed with #, lists with -). It is NOT Markdown and drops inline formatting; " +
-      "'document' is the authoritative Tiptap JSON that the editor stores. No Markdown serializer exists on the server yet.",
+      "'document' is the authoritative Tiptap JSON that the editor stores. Use include='markdown' to get the body as Markdown.",
     ...(include !== "document" ? { content: docToReadableText(doc) } : {}),
     ...(include !== "text" ? { document: json ?? null } : {}),
   };
@@ -77,7 +116,8 @@ export const whoami = defineTool({
   kind: "read",
   async handler(_args, ctx) {
     const settings = await getSettings();
-    const { TOOLS } = await import("./index.js");
+    const { getTools } = await import("./index.js");
+    const TOOLS = getTools();
     return {
       data: {
         site: { name: settings.general.siteName, description: settings.general.siteDescription || null },
@@ -96,7 +136,23 @@ export const whoami = defineTool({
           accessTokenTtlSeconds: config.MCP_ACCESS_TOKEN_TTL_SECONDS,
           requestsPerMinutePerIp: config.MCP_RATE_LIMIT_MAX || null,
         },
-        server: { mode: "read-only", note: "This version only exposes read tools. Writing, publishing and moderation are not available yet." },
+        server: config.MCP_WRITE_TOOLS_ENABLED
+          ? {
+              mode: "read-write",
+              note: "Write tools are enabled. A write tool needs the matching permission (see grantedScopes) and, for existing posts, the post's current updatedAt as expected_updated_at. Every change is logged and undoable: in the web panel use Tarix (post editor), Savat (Postlar) and Jurnal first; the history, trash and audit-log tools and restore tools do the same.",
+              permanentDeleteEnabled: config.MCP_PURGE_ENABLED,
+              writeLimits: {
+                createsPerHour: config.MCP_WRITE_LIMIT_CREATES_PER_HOUR || null,
+                editsPerHour: config.MCP_WRITE_LIMIT_EDITS_PER_HOUR || null,
+                uploadsPerHour: config.MCP_WRITE_LIMIT_UPLOADS_PER_HOUR || null,
+                publishesPerDay: config.MCP_WRITE_LIMIT_PUBLISHES_PER_DAY || null,
+                channelSendsPerDay: config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY || null,
+                moderationPerHour: config.MCP_WRITE_LIMIT_MODERATION_PER_HOUR || null,
+                destructivePerDay: config.MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY || null,
+              },
+              maxImageBytes: config.MCP_MEDIA_MAX_BYTES,
+            }
+          : { mode: "read-only", note: "This version only exposes read tools. Writing, publishing and moderation are not available yet." },
       },
     } satisfies ToolOutput;
   },
@@ -128,12 +184,16 @@ export const getPost = defineTool({
   title: "Get a post",
   description:
     U + "Read one post in full: metadata, settings, tags, review state, Telegram channel status and its content. " +
-    "'updatedBy' and 'updatedVia' (web panel, telegram, scheduler, assistant...) say who/what changed it last. 'updatedAt' is the concurrency token that future edit tools require - pass it back unchanged. " +
-    "Content comes as readable plain text ('content') and as the exact Tiptap JSON ('document'); use include to receive only one of them.",
+    "'updatedBy' and 'updatedVia' (web panel, telegram, scheduler, assistant...) say who/what changed it last. " +
+    (config.MCP_WRITE_TOOLS_ENABLED
+      ? "'updatedAt' is the concurrency token that every edit tool requires (expected_updated_at) - pass it back unchanged. " +
+        "Content comes as Markdown ('content', include='markdown') by default; use include to choose plain text, the exact Tiptap JSON ('document') or both."
+      : "'updatedAt' is the concurrency token that future edit tools require - pass it back unchanged. " +
+        "Content comes as readable plain text ('content') and as the exact Tiptap JSON ('document'); use include to receive only one of them."),
   scope: "blog:read",
   inputSchema: {
     ...idOrSlug,
-    include: z.enum(["both", "text", "document"]).default("both").describe("Which content form to return (default both)."),
+    include: INCLUDE_FIELD,
   },
   annotations: READ_ONLY,
   kind: "read",
@@ -148,7 +208,7 @@ export const getPost = defineTool({
           review: { note: reviewNote, submittedAt, reviewedBy, reviewedAt },
           channel: { plan: channelPlan, sendAt: channelSendAt, choice: channelChoice, telegram },
         },
-        ...contentFor(contentJson, args.include),
+        ...contentFor(contentJson, resolveInclude(args.include)),
         ...untrusted(["content", "document", "post.title", "post.excerpt", "post.review.note"]),
       },
       shrink: [
@@ -289,12 +349,14 @@ export const listPostRevisions = defineTool({
 export const getPostRevision = defineTool({
   name: "get_post_revision",
   title: "Get a post revision",
-  description: U + "Read one saved revision of a post with its content (readable text and/or the Tiptap JSON). Read-only; restoring is not available yet.",
+  description: config.MCP_WRITE_TOOLS_ENABLED
+    ? U + "Read one saved revision of a post with its content (Markdown, readable text and/or the Tiptap JSON; see include). Read-only; restoring is done with restore_post_revision."
+    : U + "Read one saved revision of a post with its content (readable text and/or the Tiptap JSON). Read-only; restoring is not available yet.",
   scope: "blog:read",
   inputSchema: {
     ...idOrSlug,
     revision_id: uuidField("revision id from list_post_revisions").describe("Revision id from list_post_revisions."),
-    include: z.enum(["both", "text", "document"]).default("both"),
+    include: INCLUDE_FIELD_REVISION,
   },
   annotations: READ_ONLY,
   kind: "read",
@@ -305,7 +367,7 @@ export const getPostRevision = defineTool({
     });
     const { contentJson, ...meta } = revision;
     return {
-      data: { revision: meta, ...contentFor(contentJson, args.include), ...untrusted(["content", "document", "revision.title", "revision.excerpt"]) },
+      data: { revision: meta, ...contentFor(contentJson, resolveInclude(args.include)), ...untrusted(["content", "document", "revision.title", "revision.excerpt"]) },
       shrink: [
         { key: "document", mode: "drop", note: "The structured 'document' was omitted because it is very large; call again with include='text'." },
         { key: "content", mode: "truncate", note: "'content' was truncated because the revision is very large." },

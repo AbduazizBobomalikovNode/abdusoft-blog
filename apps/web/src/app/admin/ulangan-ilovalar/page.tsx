@@ -22,7 +22,7 @@ export default async function AdminConnectionsPage() {
         </p>
       </div>
 
-      <ConnectionsClient initial={data?.items ?? null} />
+      <ConnectionsClient initial={data?.items ?? null} writeToolsEnabled={data?.writeToolsEnabled} />
     </div>
   );
 }

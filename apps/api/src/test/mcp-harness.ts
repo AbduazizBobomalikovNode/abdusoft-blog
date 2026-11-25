@@ -108,6 +108,8 @@ export async function authorize(
     stopAtConsent?: boolean;
     /** Tayyor authorization URL (masalan MCP SDK klienti yasagan) — berilsa u ishlatiladi, boshqa parametrlar e'tiborsiz. */
     url?: string;
+    /** Rozilik sahifasida tanlangan ruxsatlar (qisman rozilik): `scope` sifatida consent POST'ga qo'shiladi. Berilmasa — hammasi. */
+    consentScope?: string;
   },
 ): Promise<AuthorizeResult> {
   const b = p.browser ?? new Browser(app);
@@ -162,7 +164,7 @@ export async function authorize(
         method: "POST",
         origin: WEB,
         headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ accept: p.approve ?? true, oauth_query: u.search.slice(1) }),
+        body: JSON.stringify({ accept: p.approve ?? true, oauth_query: u.search.slice(1), ...(p.consentScope !== undefined ? { scope: p.consentScope } : {}) }),
       });
       const cj = (await c.json()) as { url?: string; error?: string };
       if (!cj.url) throw new Error(`consent: ${c.status} ${JSON.stringify(cj)}`);
@@ -199,10 +201,10 @@ export async function exchangeCode(app: Hono, a: AuthorizeResult, resource: stri
 export async function connect(
   app: Hono,
   user: { email: string; password: string },
-  opts: { scope?: string; clientId?: string; redirectUri?: string; name?: string } = {},
+  opts: { scope?: string; clientId?: string; redirectUri?: string; name?: string; consentScope?: string } = {},
 ) {
   const clientId = opts.clientId ?? (await registerClient(app, opts.redirectUri, opts.name));
-  const a = await authorize(app, { clientId, ...user, scope: opts.scope, redirectUri: opts.redirectUri });
+  const a = await authorize(app, { clientId, ...user, scope: opts.scope, redirectUri: opts.redirectUri, consentScope: opts.consentScope });
   const tok = await exchangeCode(app, a);
   if (tok.status !== 200) throw new Error(`token exchange failed: ${tok.status} ${JSON.stringify(tok.body)}`);
   return { clientId, authorize: a, tokens: tok.body as { access_token: string; refresh_token?: string; scope: string; expires_in: number } };

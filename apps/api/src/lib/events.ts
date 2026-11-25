@@ -3,6 +3,11 @@ import { EventEmitter } from "node:events";
 export interface PostEventPayload {
   id: string;
   slug: string;
+  /**
+   * `true` — hodisa Telegram KANAL xabariga tegmasligi kerak (kanalga yuborish ruxsati yo'q aktyor, masalan ulangan yordamchi).
+   * Sayt, revalidate va Telegraph ko'zgusi odatdagidek ishlaydi.
+   */
+  skipChannel?: boolean;
 }
 
 export interface PostSubmittedEventPayload {

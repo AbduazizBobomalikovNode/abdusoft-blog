@@ -391,3 +391,21 @@ export const postRevisions = pgTable(
   },
   (table) => [index("post_revisions_post_seq_idx").on(table.postId, table.seq)],
 );
+
+/**
+ * Claude konnektori: yaratuvchi vositalar uchun idempotentlik kalitlari. Bir xil (klient, kalit) bilan takroriy chaqiruv
+ * ikkinchi nusxa YARATMAYDI, birinchi natijani qaytaradi. `response` NULL — hali bajarilmoqda. 7 kundan keyin tozalanadi.
+ */
+export const mcpIdempotency = pgTable(
+  "mcp_idempotency",
+  {
+    clientId: text("client_id").notNull(),
+    key: text("key").notNull(),
+    tool: text("tool").notNull(),
+    /** Kirish argumentlarining SHA-256 xeshi: shu kalit boshqa argumentlar bilan ishlatilsa rad etiladi. */
+    argsHash: text("args_hash").notNull(),
+    response: jsonb("response"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.clientId, table.key] }), index("mcp_idempotency_created_idx").on(table.createdAt)],
+);

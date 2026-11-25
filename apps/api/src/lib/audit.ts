@@ -62,7 +62,7 @@ function toRow(actor: Actor, entry: AuditEntry) {
     entityType: entry.entityType,
     entityId: entry.entityId ?? null,
     summary: clipSummary(entry.summary),
-    meta: sanitizeAuditMeta(entry.meta),
+    meta: sanitizeAuditMeta(actor.mcp ? { ...(entry.meta ?? {}), client: actor.mcp.clientId, clientName: actor.mcp.clientName, tool: actor.mcp.tool } : entry.meta),
   };
 }
 

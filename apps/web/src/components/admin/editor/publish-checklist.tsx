@@ -1,7 +1,7 @@
 "use client";
 
 import { CheckCircle2, Circle, TriangleAlert, XCircle } from "lucide-react";
-import type { ChecklistItem, FixTarget } from "@/lib/editor/checklist";
+import type { ChecklistItem, FixTarget } from "@blog/shared";
 import { cn } from "@/lib/utils";
 
 /** Chop etishdan oldingi qisqa tekshiruv ro'yxati (to'sib qo'yadiganlar + ogohlantirishlar). */

@@ -1,4 +1,12 @@
-import { groupRequestedScopes, type McpConsentInfo, type McpScopeGroupView } from "@blog/shared";
+import {
+  MCP_OFFLINE_SCOPE,
+  MCP_REQUIRED_SCOPE_ID,
+  MCP_SCOPES,
+  groupRequestedScopes,
+  type McpConsentInfo,
+  type McpScopeGroup,
+  type McpScopeGroupView,
+} from "@blog/shared";
 
 /**
  * Claude konnektori (OAuth) uchun veb tomon mantiqi — toza funksiyalar (testlanadi). Sahifalar (`/login`, `/consent`)
@@ -108,4 +116,87 @@ export function registeredAgo(iso: string | null | undefined, now: number = Date
 /** Faqat o'qish ruxsati so'ralganmi (yozish/chop etish/xavfli guruhlarsiz). */
 export function isReadOnlyRequest(groups: readonly { group: string }[]): boolean {
   return groups.every((group) => group.group === "read");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ruxsatlarni alohida tanlash (rozilik sahifasi)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Standart tanlov: o'qish (majburiy) va qoralama yozish + rasm yuklash — oldindan belgilangan. Chop etish guruhi (chop etish,
+ * kanalga yuborish) va xavfli guruh BELGILANMAGAN: ularni egasi ongli ravishda yoqadi. Faqat so'ralgan ruxsatlar.
+ */
+export function defaultScopeSelection(requested: readonly string[]): string[] {
+  const asked = new Set(requested);
+  return MCP_SCOPES.filter((scope) => asked.has(scope.id) && (scope.id === MCP_REQUIRED_SCOPE_ID || scope.group === "write")).map((scope) => scope.id);
+}
+
+/** Bitta ruxsatni almashtiradi. Majburiy ruxsat o'chirilmaydi, so'ralmagan ruxsat qo'shilmaydi. Yangi massiv qaytaradi. */
+export function toggleScope(selected: readonly string[], scopeId: string, requested: readonly string[]): string[] {
+  if (scopeId === MCP_REQUIRED_SCOPE_ID || !requested.includes(scopeId) || !MCP_SCOPES.some((s) => s.id === scopeId)) return [...selected];
+  const next = selected.includes(scopeId) ? selected.filter((id) => id !== scopeId) : [...selected, scopeId];
+  return MCP_SCOPES.filter((s) => next.includes(s.id) || (s.id === MCP_REQUIRED_SCOPE_ID && requested.includes(s.id))).map((s) => s.id);
+}
+
+/** `POST /oauth2/consent` `scope` qatori: `MCP_SCOPES` tartibida tanlanganlar, so'ralgan bo'lsa oxirida `offline_access`. */
+export function serializeScopeSelection(selected: readonly string[], requested: readonly string[]): string {
+  const ids = MCP_SCOPES.filter((s) => selected.includes(s.id) && requested.includes(s.id)).map((s) => s.id);
+  if (requested.includes(MCP_REQUIRED_SCOPE_ID) && !ids.includes(MCP_REQUIRED_SCOPE_ID)) ids.unshift(MCP_REQUIRED_SCOPE_ID);
+  if (requested.includes(MCP_OFFLINE_SCOPE)) ids.push(MCP_OFFLINE_SCOPE);
+  return ids.join(" ");
+}
+
+/** O'qishdan boshqa hech narsa tanlanmagan. */
+export function isReadOnlySelection(selected: readonly string[]): boolean {
+  return selected.every((id) => id === MCP_REQUIRED_SCOPE_ID);
+}
+
+function groupOf(id: string): McpScopeGroup | null {
+  return MCP_SCOPES.find((s) => s.id === id)?.group ?? null;
+}
+
+/** Tanlanganlar orasida xavfli ruxsat bormi. */
+export function hasDangerSelected(selected: readonly string[]): boolean {
+  return selected.some((id) => groupOf(id) === "danger");
+}
+
+/** Har bir guruh uchun: so'ralgan va tanlangan ruxsatlar soni. */
+export function selectionSummary(selected: readonly string[], requested: readonly string[]): Record<McpScopeGroup, { selected: number; total: number }> {
+  const out: Record<McpScopeGroup, { selected: number; total: number }> = {
+    read: { selected: 0, total: 0 },
+    write: { selected: 0, total: 0 },
+    publish: { selected: 0, total: 0 },
+    danger: { selected: 0, total: 0 },
+  };
+  for (const scope of MCP_SCOPES) {
+    if (!requested.includes(scope.id)) continue;
+    out[scope.group].total += 1;
+    if (selected.includes(scope.id)) out[scope.group].selected += 1;
+  }
+  return out;
+}
+
+/** "Ulangan ilovalar": berilgan ruxsatlar guruhlar bo'yicha (nomlari bilan) + faqat-o'qish belgisi. */
+export function describeConnectionPermissions(scopes: readonly string[]): {
+  groups: Array<{ group: McpScopeGroup; labels: string[] }>;
+  readOnly: boolean;
+  hasDanger: boolean;
+  offline: boolean;
+} {
+  const { groups, offline } = groupRequestedScopes(scopes);
+  return {
+    groups: groups.map((g) => ({ group: g.group, labels: g.scopes.map((s) => s.label) })),
+    readOnly: groups.every((g) => g.group === "read"),
+    hasDanger: groups.some((g) => g.group === "danger"),
+    offline,
+  };
+}
+
+/**
+ * Serverda yozuv vositalari o'chiq (`writeToolsEnabled === false`) bo'lsa, ulanishdagi yozish/chop etish/xavfli ruxsatlar
+ * hozir ishlamaydi (ular saqlanadi, lekin vositalar yo'q). `undefined` (eski API) — o'chiq deb hisoblanmaydi.
+ */
+export function inactiveConnectionScopes(scopes: readonly string[], writeToolsEnabled: boolean | undefined): string[] {
+  if (writeToolsEnabled !== false) return [];
+  return MCP_SCOPES.filter((s) => s.group !== "read" && scopes.includes(s.id)).map((s) => s.id);
 }

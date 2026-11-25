@@ -4,7 +4,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { config } from "../../config.js";
 import type { McpPrincipal } from "./principal.js";
 import { runTool } from "./tools/run.js";
-import { TOOLS } from "./tools/index.js";
+import { UPLOAD_TOOL_NAME, getTools } from "./tools/index.js";
 import type { McpToolContext } from "./tools/types.js";
 
 export const MCP_SERVER_INFO = { name: "abdusoft-blog", version: "1.0.0" } as const;
@@ -22,12 +22,12 @@ export function buildContext(principal: McpPrincipal): McpToolContext {
 /** Har bir so'rov uchun yangi server (stateless): vositalar reyestrdan ro'yxatga olinadi, ijro `runTool` orqali. */
 export function buildMcpServer(ctx: McpToolContext): McpServer {
   const server = new McpServer(MCP_SERVER_INFO);
-  for (const def of TOOLS) {
+  for (const def of getTools()) {
     server.registerTool(
       def.name,
       {
         title: def.title,
-        description: def.description,
+        description: config.MCP_WRITE_TOOLS_ENABLED ? def.description.replace(/ ?Read-only;? [^.]*not available yet\./, " Read-only.") : def.description,
         // Qat'iy: noma'lum argumentlar rad etiladi (JSON sxemada additionalProperties:false).
         inputSchema: z.object(def.inputSchema).strict(),
         annotations: { title: def.title, ...def.annotations },
@@ -39,7 +39,31 @@ export function buildMcpServer(ctx: McpToolContext): McpServer {
 }
 
 /** Streamable HTTP, holatsiz, JSON javoblar (SSE yo'q). */
-export async function handleMcpRequest(req: Request, principal: McpPrincipal): Promise<Response> {
+const STANDARD_BODY_LIMIT = 1024 * 1024;
+
+/** 1 MB dan katta tana FAQAT bitta `tools/call upload_image` chaqiruviga ruxsat etiladi (base64 rasm). */
+function isUploadCall(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as { method?: unknown; params?: { name?: unknown } };
+    return parsed.method === "tools/call" && parsed.params?.name === UPLOAD_TOOL_NAME;
+  } catch {
+    return false;
+  }
+}
+
+export async function handleMcpRequest(original: Request, principal: McpPrincipal): Promise<Response> {
+  let req = original;
+  const declared = Number(original.headers.get("content-length") ?? "0");
+  if (declared > STANDARD_BODY_LIMIT || !original.headers.has("content-length")) {
+    const text = await original.text();
+    if (text.length > STANDARD_BODY_LIMIT && !isUploadCall(text)) {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Request too large" }, id: null }), {
+        status: 413,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    req = new Request(original, { body: text });
+  }
   const ctx = buildContext(principal);
   const server = buildMcpServer(ctx);
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });

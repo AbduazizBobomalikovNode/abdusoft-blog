@@ -48,7 +48,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { lastChangeText } from "@/lib/admin-labels";
 import { isConflictFailure, PostSync } from "@/lib/editor/post-sync";
-import { buildPublishChecklist, hasBlockingIssue, type ChecklistItem, type FixTarget } from "@/lib/editor/checklist";
+import { buildPublishChecklist, hasBlockingIssue, type ChecklistItem, type FixTarget } from "@blog/shared";
 import { backupDiffKeys, backupFieldKeys, backupFieldLabels, backupValue, browserStorage, clearBackup, loadBackup, serverChangedSinceBackup, type DraftBackup } from "@/lib/editor/draft-backup";
 import { PendingNotSavedError } from "@/lib/editor/autosave-engine";
 import { extractOutline, type OutlineItem } from "@blog/shared";
