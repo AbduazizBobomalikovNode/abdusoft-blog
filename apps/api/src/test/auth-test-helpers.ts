@@ -25,6 +25,9 @@ const testAuth = betterAuth({
   },
 });
 
+/** `createTestUser` yaratgan foydalanuvchilarning paroli (haqiqiy sign-in testlari uchun). */
+export const TEST_USER_PASSWORD = "test-password-123456";
+
 let counter = 0;
 
 export interface TestUser {
@@ -40,7 +43,7 @@ export async function createTestUser(
 ): Promise<TestUser> {
   counter += 1;
   const email = `test-user-${counter}-${Date.now()}@example.test`;
-  const password = "test-password-123456";
+  const password = TEST_USER_PASSWORD;
   const name = opts.name ?? `Test User ${counter}`;
 
   const signUp = await testAuth.api.signUpEmail({ body: { email, password, name } });
