@@ -85,7 +85,15 @@ export default function LoginPage() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Parol</Label>
+              <div className="flex items-baseline justify-between gap-2">
+                <Label htmlFor="password">Parol</Label>
+                <Link
+                  href="/parolni-unutdim"
+                  className="rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  Parolni unutdingizmi?
+                </Link>
+              </div>
               <Input
                 id="password"
                 type="password"
