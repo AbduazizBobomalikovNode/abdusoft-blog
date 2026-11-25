@@ -40,6 +40,11 @@ app.use(
   }),
 );
 
+// Claude konnektori (MCP) qo'riqchilari — faqat MCP_ENABLED=true; o'chiq bo'lsa hech narsa ro'yxatga olinmaydi.
+// (dinamik import: bayroq o'chiq bo'lsa MCP modullari umuman yuklanmaydi)
+const mcpHttp = config.MCP_ENABLED ? await import("./lib/mcp/http.js") : null;
+mcpHttp?.mountMcpPreAuth(app);
+
 app.on(["GET", "POST"], "/api/auth/*", (c) => handleAuthRequest(c));
 
 app.use("/uploads/*", async (c, next) => {
@@ -78,5 +83,6 @@ app.route("/site", siteRoute);
 app.route("/staff/invites", staffInvitesRoute);
 app.route("/admin", adminRoute);
 mountTelegramWebhook(app);
+mcpHttp?.mountMcp(app);
 
 export type AppType = typeof app;

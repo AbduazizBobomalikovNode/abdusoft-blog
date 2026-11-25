@@ -94,6 +94,39 @@ const EnvSchema = z.object({
   POST_REVISION_INTERVAL_MINUTES: intEnv(10, 0),
   // Bitta postda saqlanadigan revision'lar soni (eng eskilari o'chiriladi, eng yangisi hech qachon).
   POST_REVISION_MAX_PER_POST: intEnv(100, 1),
+  // --- Claude konnektori (MCP) — default o'chiq; o'chiq bo'lsa API avvalgidek ishlaydi (hech qanday yangi marshrut/plagin yo'q) ---
+  MCP_ENABLED: z
+    .string()
+    .optional()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  // Access token (JWT) umri, soniya. Qisqa — chunki JWT holatsiz; bekor qilish /mcp'da DB tekshiruvi bilan ham darhol ishlaydi.
+  MCP_ACCESS_TOKEN_TTL_SECONDS: intEnv(900, 60),
+  // Refresh token umri, kun (har yangilashda rotatsiya qilinadi).
+  MCP_REFRESH_TOKEN_TTL_DAYS: intEnv(30, 1),
+  // Claude'ning rasmiy callback'i va loopback'dan tashqari, ruxsat etiladigan qo'shimcha redirect URI'lar (vergul bilan, aniq `https://...`).
+  MCP_ALLOWED_REDIRECT_URIS: z.string().optional().default(""),
+  // `POST /api/auth/oauth2/register` (autentifikatsiyasiz): bitta IP uchun oynada ko'pi bilan MAX; bundan tashqari barcha IP'lar uchun umumiy GLOBAL_MAX.
+  MCP_REGISTRATION_RATE_LIMIT_MAX: intEnv(20, 1),
+  MCP_REGISTRATION_RATE_LIMIT_GLOBAL_MAX: intEnv(1000, 1),
+  // Rozilik olmagan klientlar soni shu chegaradan oshsa, eng eskilari o'chiriladi (yangi ro'yxatdan o'tish RAD ETILMAYDI — egasi bloklanmasin).
+  MCP_MAX_UNCONSENTED_CLIENTS: intEnv(2000, 10),
+  // `/mcp`ga brauzer `Origin` bilan kelganda ruxsat etiladigan qo'shimcha originlar (vergul bilan); `WEB_ORIGIN` doim ruxsat. `Origin`siz so'rovlar (Claude serveri, Claude Code) o'tadi.
+  MCP_ALLOWED_ORIGINS: z.string().optional().default(""),
+  MCP_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS: intEnv(3600, 1),
+  // `/mcp` so'rovlari: IP bo'yicha oynada ko'pi bilan MAX (0 — o'chirilgan).
+  MCP_RATE_LIMIT_MAX: intEnv(300, 0),
+  MCP_RATE_LIMIT_WINDOW_SECONDS: intEnv(60, 1),
+  // Klient `offline_access`ni so'ramasa ham refresh token berilishi uchun /oauth2/authorize'ga uni qo'shadi (default true).
+  MCP_FORCE_OFFLINE_ACCESS: z
+    .string()
+    .optional()
+    .default("true")
+    .transform((v) => !(v === "false" || v === "0")),
+  // Hech qachon rozilik berilmagan ro'yxatdan o'tgan klientlar shu soatdan keyin tozalanadi.
+  MCP_UNUSED_CLIENT_TTL_HOURS: intEnv(24, 1),
+  // Bitta vosita javobining maksimal uzunligi (belgi). Claude ~150 000 belgigacha qabul qiladi.
+  MCP_RESULT_MAX_CHARS: intEnv(100_000, 2_000),
   NODE_ENV: z
     .union([z.literal("development"), z.literal("production"), z.literal("test")])
     .default("development"),

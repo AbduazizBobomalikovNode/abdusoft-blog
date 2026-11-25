@@ -5,6 +5,8 @@ import { postViewDedupe } from "../db/schema.js";
 import { publishDuePosts } from "./posts/index.js";
 import { recoverInterruptedChannelSends, runDueChannelSends } from "../telegram/channel-plan.js";
 import { sendDigestNow } from "../telegram/digest.js";
+import { config } from "../config.js";
+import { cleanupMcpData } from "./mcp/connections.js";
 import { getSettings } from "./settings.js";
 import { loadSiteSettings } from "./site-settings.js";
 
@@ -61,7 +63,26 @@ export function startScheduler(): Cron[] {
     }
   });
 
-  return [publishJob, cleanupJob, digestJob];
+  const jobs = [publishJob, cleanupJob, digestJob];
+
+  // Claude konnektori (MCP): rozilik olmagan ro'yxatdan o'tgan klientlar va eski refresh token'larni tozalash.
+  // Faqat MCP_ENABLED=true bo'lganda ro'yxatga olinadi — o'chiq bo'lsa jadval umuman o'zgarmaydi.
+  if (config.MCP_ENABLED) {
+    jobs.push(
+      new Cron("17 * * * *", async () => {
+        try {
+          const removed = await cleanupMcpData(config.MCP_UNUSED_CLIENT_TTL_HOURS);
+          if (removed.clients > 0 || removed.refreshTokens > 0) {
+            console.log(`MCP tozalash: ${removed.clients} ta ishlatilmagan klient, ${removed.refreshTokens} ta eski refresh token.`);
+          }
+        } catch (error: unknown) {
+          console.error("MCP tozalash xatosi:", error);
+        }
+      }),
+    );
+  }
+
+  return jobs;
 }
 
 /** Rejalashtirilgan postlarni chop etish — `lib/posts` xizmatidagi YAGONA chop etish yo'li orqali (scheduler tizim aktyori). */

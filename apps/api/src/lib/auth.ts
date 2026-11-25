@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { config, isProduction } from "../config.js";
 import { db, fullSchema } from "../db/index.js";
-import { AUTH_CLIENT_IP_HEADER, buildAuthRateLimit } from "./auth-options.js";
+import { buildAuthAdvanced, buildAuthRateLimit } from "./auth-options.js";
 import { getSettings } from "./settings.js";
 
 // GitHub OAuth provider'ni betterAuth BOOT vaqtida ro'yxatga oladi (better-auth
@@ -20,6 +20,10 @@ export const bootedGithubConfig = {
 };
 
 const githubEnabled = bootSettings.github.providerEnabled;
+
+// Claude konnektori (MCP) plagin'lari faqat bayroq yoqilganda YUKLANADI (dinamik import) — o'chiq bo'lsa ularning
+// modullari ham import qilinmaydi va Better Auth avvalgidek plagin'siz ishlaydi.
+const mcpPlugins = config.MCP_ENABLED ? (await import("./mcp/plugins.js")).buildMcpPlugins() : [];
 
 export const auth = betterAuth({
   baseURL: config.API_ORIGIN,
@@ -52,21 +56,9 @@ export const auth = betterAuth({
   },
   // Rate limit: IP faqat `lib/auth-handler.ts` qo'yadigan header'dan olinadi (TRUST_PROXY hisobga olinadi).
   rateLimit: buildAuthRateLimit(),
-  advanced: {
-    ipAddress: { ipAddressHeaders: [AUTH_CLIENT_IP_HEADER] },
-    ...(isProduction
-      ? {
-          crossSubDomainCookies: {
-            enabled: true,
-            domain: config.COOKIE_DOMAIN || ".abdusoft.uz",
-          },
-          defaultCookieAttributes: {
-            secure: true,
-            sameSite: "lax" as const,
-          },
-        }
-      : {}),
-  },
+  advanced: buildAuthAdvanced(isProduction),
+  // Claude konnektori (MCP): faqat MCP_ENABLED=true bo'lganda. O'chiq bo'lsa plagin'lar ro'yxatga olinmaydi.
+  ...(config.MCP_ENABLED ? { plugins: mcpPlugins } : {}),
 });
 
 export type Auth = typeof auth;

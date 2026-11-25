@@ -444,6 +444,13 @@ export const adminApi = {
   revokeStaffInvite: (id: string) =>
     adminJson<{ ok: true }>(`/admin/staff/invites/${id}/revoke`, { method: "POST" }),
 
+  /** BARCHA ulangan ilovalarni bir yo'la uzadi (token'lar, rozilik, kutilayotgan kodlar). */
+  revokeAllConnections: () => adminJson<{ revoked: number }>("/admin/connections", { method: "DELETE" }),
+
+  /** Ulangan ilovani to'liq uzadi (token'lar va rozilik) — qaytarib bo'lmaydi. */
+  revokeConnection: (clientId: string) =>
+    adminJson<{ revoked: true }>(`/admin/connections/${encodeURIComponent(clientId)}`, { method: "DELETE" }),
+
   removeStaffMember: (userId: string) => adminJson<{ ok: true }>(`/admin/staff/${userId}`, { method: "DELETE" }),
 
   acceptStaffInvite: (token: string) =>

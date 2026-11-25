@@ -12,3 +12,4 @@ export * from "./content-stats.js";
 export * from "./editor-markdown.js";
 export * from "./editor-templates.js";
 export * from "./editor-outline.js";
+export * from "./mcp.js";

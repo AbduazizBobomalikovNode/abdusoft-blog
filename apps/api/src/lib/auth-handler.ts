@@ -9,14 +9,17 @@ import { clientIp } from "./device.js";
  * HAR DOIM `clientIp(c)` (ya'ni `TRUST_PROXY` hisobga olingan, soxtalashtirib
  * bo'lmaydigan qiymat) bilan qayta yozamiz — mijoz yuborgan qiymat ishlatilmaydi.
  *
+ * `request` (ixtiyoriy) — MCP yoqilganda so'rovni (masalan `scope`ga `offline_access` qo'shib) o'zgartirib uzatish uchun;
+ * berilmasa avvalgidek `c.req.raw`.
+ *
  * Better Auth 429 javobida `X-Retry-After` beradi; standart `Retry-After`
  * header'i ham qo'shiladi.
  */
-export async function handleAuthRequest(c: Context): Promise<Response> {
-  const headers = new Headers(c.req.raw.headers);
+export async function handleAuthRequest(c: Context, request: Request = c.req.raw): Promise<Response> {
+  const headers = new Headers(request.headers);
   headers.set(AUTH_CLIENT_IP_HEADER, clientIp(c));
 
-  const res = await auth.handler(new Request(c.req.raw, { headers }));
+  const res = await auth.handler(new Request(request, { headers }));
 
   if (res.status === 429 && !res.headers.has("Retry-After")) {
     const retryAfter = res.headers.get("X-Retry-After");

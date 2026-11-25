@@ -1,6 +1,7 @@
 import type { BetterAuthOptions } from "better-auth";
 import { config } from "../config.js";
 
+
 /** `lib/auth-handler.ts` mijoz IP'sini Better Auth'ga shu header orqali beradi. */
 export const AUTH_CLIENT_IP_HEADER = "x-blog-client-ip";
 
@@ -34,5 +35,27 @@ export function buildAuthRateLimit(): NonNullable<BetterAuthOptions["rateLimit"]
     enabled: config.AUTH_RATE_LIMIT_ENABLED,
     storage: "memory",
     customRules: Object.fromEntries(AUTH_RATE_LIMITED_PATHS.map((path) => [path, { ...rule }])),
+  };
+}
+
+/**
+ * Better Auth `advanced` bo'limi: IP header + (production'da) subdomenlararo cookie'lar. `lib/auth.ts` va
+ * moslik testi (`production: true` varianti) bir xil funksiyadan foydalanadi.
+ */
+export function buildAuthAdvanced(production: boolean): NonNullable<BetterAuthOptions["advanced"]> {
+  return {
+    ipAddress: { ipAddressHeaders: [AUTH_CLIENT_IP_HEADER] },
+    ...(production
+      ? {
+          crossSubDomainCookies: {
+            enabled: true,
+            domain: config.COOKIE_DOMAIN || ".abdusoft.uz",
+          },
+          defaultCookieAttributes: {
+            secure: true,
+            sameSite: "lax" as const,
+          },
+        }
+      : {}),
   };
 }

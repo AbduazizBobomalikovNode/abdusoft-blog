@@ -1,69 +1,31 @@
 import { Hono } from "hono";
-import { desc, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { media } from "../db/schema.js";
+import { MediaListQuerySchema, listMedia, toMediaDto } from "../lib/admin-reads/media.js";
 import { requireRole } from "../lib/require-admin.js";
 import { recordAuditSafe } from "../lib/audit.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
 import { deleteStoredFile, processImage, storeProcessedFile } from "../lib/media/store.js";
 
 const MAX_SIZE = 10 * 1024 * 1024;
-const DEFAULT_LIMIT = 30;
-const MAX_LIMIT = 100;
-
-const ListQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(MAX_LIMIT).default(DEFAULT_LIMIT),
-});
 
 const UpdateMediaBodySchema = z.object({
   alt: z.string().nullable(),
 });
 
-function toMediaDto(row: typeof media.$inferSelect) {
-  return {
-    id: row.id,
-    key: row.key,
-    url: row.url,
-    mime: row.mime,
-    size: row.size,
-    width: row.width,
-    height: row.height,
-    alt: row.alt,
-    createdAt: row.createdAt.toISOString(),
-  };
-}
-
 export const adminMediaRoute = new Hono()
   .use("*", requireRole("admin", "staff"))
   .get("/", async (c) => {
     const adminUser = c.get("adminUser");
-    const parsed = ListQuerySchema.safeParse({
+    const parsed = MediaListQuerySchema.safeParse({
       page: c.req.query("page"),
       limit: c.req.query("limit"),
     });
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov parametrlari" }, 400);
 
-    const { page, limit } = parsed.data;
-    const offset = (page - 1) * limit;
-    // Xodim (staff) faqat o'zi yuklagan media fayllarni ko'radi/tanlaydi.
-    const whereClause = adminUser.role === "staff" ? eq(media.createdBy, adminUser.id) : undefined;
-
-    const [rows, countRows] = await Promise.all([
-      db.select().from(media).where(whereClause).orderBy(desc(media.createdAt)).limit(limit).offset(offset),
-      db.select({ count: sql<number>`count(*)::int` }).from(media).where(whereClause),
-    ]);
-
-    const total = countRows[0]?.count ?? 0;
-
-    return c.json({
-      items: rows.map(toMediaDto),
-      page,
-      limit,
-      total,
-      hasMore: page * limit < total,
-    });
+    return c.json(await listMedia(adminUser, parsed.data));
   })
   .post("/", async (c) => {
     const adminUser = c.get("adminUser");

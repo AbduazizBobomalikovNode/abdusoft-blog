@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, useSyncExternalStore, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn } from "@/lib/auth-client";
+import { hasSignedOAuthQuery, oauthContinuationUrl } from "@/lib/oauth-flow";
 import { site } from "@/lib/site";
 import { useSiteConfig } from "@/lib/site-config";
 
@@ -20,6 +21,12 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
+  // Claude konnektori: avtorizatsiya so'rovi (imzolangan `oauth_query`) bilan kelgan bo'lsa — kirgandan keyin shu oqim davom etadi.
+  const connecting = useSyncExternalStore(
+    () => () => undefined,
+    () => hasSignedOAuthQuery(window.location.search),
+    () => false,
+  );
 
   async function handleGithubLogin() {
     setGithubLoading(true);
@@ -31,15 +38,22 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
 
-    const { error: signInError } = await signIn.email({ email, password });
-
-    setLoading(false);
+    const { data, error: signInError } = await signIn.email({ email, password });
 
     if (signInError) {
+      setLoading(false);
       setError(signInError.message ?? "Kirishda xatolik yuz berdi.");
       return;
     }
 
+    // Claude konnektori oqimi: server `url` qaytaradi (avtorizatsiyani davom ettirish) — oddiy kirishda `null`.
+    const continuation = oauthContinuationUrl(window.location.search, data);
+    if (continuation) {
+      window.location.href = continuation;
+      return;
+    }
+
+    setLoading(false);
     router.push("/admin");
     router.refresh();
   }
@@ -51,7 +65,7 @@ export default function LoginPage() {
           <ShieldCheck className="size-5" aria-hidden="true" />
         </span>
         <h1 className="text-lg font-semibold tracking-tight">{site.name}</h1>
-        <p className="text-sm text-muted-foreground">Admin panelga kirish</p>
+        <p className="text-sm text-muted-foreground">{connecting ? "Claude'ni blogga ulash uchun kiring" : "Admin panelga kirish"}</p>
       </div>
 
       <Card>
@@ -94,7 +108,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {config.githubConfigured ? (
+          {config.githubConfigured && !connecting ? (
             <>
               <div className="my-4 flex items-center gap-2 text-xs text-muted-foreground">
                 <span className="h-px flex-1 bg-border" />
