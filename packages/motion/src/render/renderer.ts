@@ -5,9 +5,10 @@ import { COMPOSITION_ID } from "../props.ts";
 import type { Storyboard } from "../schema/storyboard.ts";
 import type { Timeline } from "../timeline.ts";
 import { FPS } from "../timing.ts";
+import { resolveScene, sceneFrameRange, sceneReviewFrames } from "../scene-ref.ts";
 import { assertStoryboard } from "../validate.ts";
 import { ensureBundle, type BundleResult } from "./bundle.ts";
-import { type ProgressCallback, RenderCancelledError } from "./errors.ts";
+import { GifLimitError, type ProgressCallback, RenderCancelledError } from "./errors.ts";
 import { checkGifRange } from "./gif-limits.ts";
 import { withPrivateTmp } from "./private-tmp.ts";
 import { DEFAULT_CACHE_DIR } from "./paths.ts";
@@ -29,6 +30,8 @@ export interface MotionRendererOptions {
   concurrency?: number;
   /** Override the theme of the storyboard (fixtures are rendered in both modes). */
   themeOverride?: "light" | "dark";
+  /** Override the style preset of the storyboard. */
+  presetOverride?: (typeof import("../theme/tokens.ts"))["PRESETS"][number];
 }
 
 export interface StillRequest {
@@ -38,6 +41,11 @@ export interface StillRequest {
   at?: number[];
   /** JPEG quality 1-100 (default 80). */
   quality?: number;
+  /**
+   * Only this scene (id or 1-based position). Without `at`, four review frames are written: the start,
+   * early, middle and settled end of the scene (names end in -start, -early, -middle, -end).
+   */
+  scene?: string;
   /** Output width in px (default 960 = half of 1920). */
   width?: number;
 }
@@ -64,6 +72,15 @@ export interface GifRequest {
   /** Clip start/end in seconds within the storyboard (default: whole storyboard). */
   from?: number;
   to?: number;
+  /** Only this scene (id or 1-based position); overrides from/to. */
+  scene?: string;
+  /** With `scene` on a closing scene: only the final hold period, which loops seamlessly. */
+  loop?: boolean;
+}
+
+export interface VideoRequest {
+  /** Only this scene (id or 1-based position), including the overlap of its entering transition. */
+  scene?: string;
 }
 
 interface Session {
@@ -157,7 +174,12 @@ export class MotionRenderer {
   }
 
   #withTheme(input: unknown): unknown {
-    return this.#opts.themeOverride && input && typeof input === "object" ? { ...(input as object), theme: this.#opts.themeOverride } : input;
+    if (!input || typeof input !== "object") return input;
+    return {
+      ...(input as object),
+      ...(this.#opts.themeOverride ? { theme: this.#opts.themeOverride } : {}),
+      ...(this.#opts.presetOverride ? { preset: this.#opts.presetOverride } : {}),
+    };
   }
 
   async #session(input: unknown): Promise<Session> {
@@ -195,6 +217,9 @@ export class MotionRenderer {
         const scene = s.timeline.scenes.findLast((t) => frame >= t.startFrame + t.leadFrames)?.index ?? 0;
         targets.push({ frame, scene, name: `at-${(frame / FPS).toFixed(2).padStart(6, "0")}s` });
       }
+    } else if (req.scene !== undefined) {
+      const t = resolveScene(s.timeline, req.scene);
+      for (const f of sceneReviewFrames(t)) targets.push({ frame: f.frame, scene: t.index, name: `scene-${pad(t.index + 1)}-${t.id ?? t.type}-${f.label}` });
     } else {
       for (const t of s.timeline.scenes) targets.push({ frame: t.previewFrame, scene: t.index, name: `scene-${pad(t.index + 1)}-${t.id ?? t.type}` });
     }
@@ -229,9 +254,13 @@ export class MotionRenderer {
   }
 
   /** Silent H.264 MP4: yuv420p, constant 30 fps, faststart (moov first), no audio track. */
-  async video(input: unknown, outFile: string): Promise<VideoResult> {
+  async video(input: unknown, outFile: string, req: VideoRequest = {}): Promise<VideoResult> {
     this.#check();
     const s = await this.#session(input);
+    if (req.scene !== undefined) {
+      const range = sceneFrameRange(resolveScene(s.timeline, req.scene));
+      return this.#encode(s, outFile, { codec: "h264" }, range.startFrame, range.endFrame);
+    }
     return this.#encode(s, outFile, { codec: "h264" }, 0, s.timeline.totalFrames - 1);
   }
 
@@ -239,7 +268,16 @@ export class MotionRenderer {
   async gif(input: unknown, outFile: string, req: GifRequest = {}): Promise<VideoResult> {
     this.#check();
     // Limits are checked on the pure timeline, before any bundling or browser work.
-    const range = checkGifRange(assertStoryboard(this.#withTheme(input)).timeline, req);
+    const tl = assertStoryboard(this.#withTheme(input)).timeline;
+    let window: { from?: number; to?: number } = req;
+    if (req.scene !== undefined) {
+      const t = resolveScene(tl, req.scene);
+      if (req.loop) {
+        if (!t.loop) throw new GifLimitError(`scene ${t.index + 1} (${t.type}) has no seamless loop: only a closing scene that holds long enough after its animation does`);
+        window = { from: t.loop.startFrame / FPS, to: (t.loop.startFrame + t.loop.frames) / FPS };
+      } else window = { from: t.startFrame / FPS, to: t.endFrame / FPS };
+    } else if (req.loop) throw new GifLimitError("--loop needs --scene <closing scene>");
+    const range = checkGifRange(tl, window);
     const s = await this.#session(input);
     return this.#encode(s, outFile, { codec: "gif" }, range.startFrame, range.endFrame);
   }

@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { GIF_LIMITS, LIMITS } from "./limits.ts";
 import { storyboardJsonSchema } from "./json-schema.ts";
 import { formatIssues } from "./schema/issues.ts";
+import { PRESETS } from "./theme/tokens.ts";
 import { FPS } from "./timing.ts";
 import { validateStoryboardJson } from "./validate.ts";
 
@@ -22,6 +23,9 @@ Commands
                                         GIF for short clips only (<= ${GIF_LIMITS.maxSeconds} s, ${GIF_LIMITS.maxWidth} px wide, ${GIF_LIMITS.fps} fps)
 
 Options
+  --scene <id|n>       stills/render/gif of one scene only (its id, or 1-based position); stills write start/early/middle/end frames
+  --loop               gif only, with --scene <closing scene>: just the final hold, which loops seamlessly
+  --preset <name>      override the storyboard's style preset (default|vivid|blueprint|neon)
   --theme light|dark   override the storyboard's theme
   --json               machine-readable output (validate, timeline, stills, render, gif)
   --cache-dir <dir>    bundle cache directory (default packages/motion/.cache or BLOG_MOTION_CACHE_DIR)
@@ -39,6 +43,9 @@ const { values, positionals } = parseArgs({
     from: { type: "string" },
     to: { type: "string" },
     theme: { type: "string" },
+    scene: { type: "string" },
+    loop: { type: "boolean", default: false },
+    preset: { type: "string" },
     json: { type: "boolean", default: false },
     "cache-dir": { type: "string" },
     browser: { type: "string" },
@@ -65,9 +72,12 @@ function readStoryboard(): { text: string; value: unknown } {
 }
 
 function withTheme(value: unknown): unknown {
-  if (values.theme === undefined) return value;
-  if (values.theme !== "light" && values.theme !== "dark") return usage("--theme must be light or dark");
-  return value && typeof value === "object" ? { ...(value as object), theme: values.theme } : value;
+  if (values.theme === undefined && values.preset === undefined) return value;
+  if (values.theme !== undefined && values.theme !== "light" && values.theme !== "dark") return usage("--theme must be light or dark");
+  if (values.preset !== undefined && !(PRESETS as readonly string[]).includes(values.preset)) return usage(`--preset must be one of: ${PRESETS.join(", ")}`);
+  return value && typeof value === "object"
+    ? { ...(value as object), ...(values.theme !== undefined ? { theme: values.theme } : {}), ...(values.preset !== undefined ? { preset: values.preset } : {}) }
+    : value;
 }
 
 async function main(): Promise<number> {
@@ -92,7 +102,7 @@ async function main(): Promise<number> {
     log(`error: cannot read storyboard: ${(err as Error).message.replace(/^Unexpected/, "invalid JSON, unexpected")}`);
     return 1;
   }
-  const parsed = validateStoryboardJson(values.theme ? JSON.stringify(withTheme(JSON.parse(text))) : text);
+  const parsed = validateStoryboardJson(values.theme !== undefined || values.preset !== undefined ? JSON.stringify(withTheme(JSON.parse(text))) : text);
   if (!parsed.ok) {
     if (json) print({ ok: false, issues: parsed.issues });
     else log(`Storyboard is invalid (${parsed.issues.length} problem${parsed.issues.length === 1 ? "" : "s"}):\n${formatIssues(parsed.issues)}`);
@@ -128,6 +138,7 @@ async function main(): Promise<number> {
     ...(values.browser ? { browserExecutable: values.browser } : {}),
     ...(values.concurrency ? { concurrency: Number(values.concurrency) } : {}),
     ...(values.theme === "light" || values.theme === "dark" ? { themeOverride: values.theme } : {}),
+    ...(values.preset !== undefined ? { presetOverride: values.preset as (typeof PRESETS)[number] } : {}),
     onProgress: (p) => {
       if (json) return;
       const line = `[${p.phase}] ${p.message}${p.fraction !== null ? ` ${Math.round(p.fraction * 100)}%` : ""}`;
@@ -144,16 +155,18 @@ async function main(): Promise<number> {
     if (command === "stills") {
       const at = values.at ? values.at.split(",").map((v) => Number(v.trim())) : undefined;
       if (at?.some((v) => !Number.isFinite(v) || v < 0)) usage("--at must be a comma-separated list of seconds, e.g. 1.5,4,9");
-      const res = await renderer.stills(input, { outDir: path.resolve(values.out as string), ...(at ? { at } : {}) });
+      const res = await renderer.stills(input, { outDir: path.resolve(values.out as string), ...(at ? { at } : {}), ...(values.scene !== undefined ? { scene: values.scene } : {}) });
       if (json) print(res);
       else for (const r of res) print(`${r.file}  scene ${r.scene + 1} (${r.sceneType}) @ ${r.seconds.toFixed(2)} s  ${(r.bytes / 1024).toFixed(0)} KiB`);
     } else if (command === "render") {
-      const res = await renderer.video(input, path.resolve(values.out as string));
+      const res = await renderer.video(input, path.resolve(values.out as string), values.scene !== undefined ? { scene: values.scene } : {});
       print(json ? res : `${res.file}  ${res.seconds.toFixed(1)} s  ${(res.bytes / 1024 / 1024).toFixed(2)} MiB  rendered in ${(res.renderMs / 1000).toFixed(1)} s`);
     } else {
       const res = await renderer.gif(input, path.resolve(values.out as string), {
         ...(values.from !== undefined ? { from: Number(values.from) } : {}),
         ...(values.to !== undefined ? { to: Number(values.to) } : {}),
+        ...(values.scene !== undefined ? { scene: values.scene } : {}),
+        ...(values.loop ? { loop: true } : {}),
       });
       print(json ? res : `${res.file}  ${res.seconds.toFixed(1)} s  ${(res.bytes / 1024 / 1024).toFixed(2)} MiB  rendered in ${(res.renderMs / 1000).toFixed(1)} s`);
     }
@@ -163,8 +176,8 @@ async function main(): Promise<number> {
       log("cancelled");
       return 130;
     }
-    if (err instanceof GifLimitError) {
-      log(`error: ${err.message}`);
+    if (err instanceof GifLimitError || (values.scene !== undefined && /^(no scene|scene \d+ does not)/.test((err as Error)?.message ?? ""))) {
+      log(`error: ${(err as Error).message}`);
       return 1;
     }
     throw err;
