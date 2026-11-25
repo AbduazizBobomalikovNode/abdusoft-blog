@@ -520,7 +520,12 @@ export interface DocMarkdownAnalysis {
   /** `true` — Markdown orqali to'liq yo'qotishsiz tahrirlash mumkin. */
   lossless: boolean;
   lossyBlocks: LossyBlock[];
+  /** `true` — vaqt byudjeti tugadi: qolgan bloklar tekshirilmadi va ehtiyotkorlik bilan "yo'qotishli" deb hisoblandi. */
+  incomplete?: boolean;
 }
+
+/** Tahlil uchun devor-soat byudjeti (ms): juda katta/g'alati hujjat so'rovni uzoq ushlab turmasin. */
+export const ANALYSIS_BUDGET_MS = 2_000;
 
 const SUPPORTED_NODES = new Set([
   "doc", "paragraph", "heading", "text", "hardBreak", "bulletList", "orderedList", "listItem", "blockquote", "codeBlock",
@@ -574,12 +579,21 @@ function previewOf(block: ContentNode): string {
  * Hujjatni Markdown'ga aylantiradi va uni FAKTIK qayta o'qib tekshiradi. `lossless=false` bo'lsa, `lossyBlocks` aynan qaysi
  * bloklar Markdown orqali buzilishini aytadi. Hech narsa tashlab yuborilmaydi — bu faqat hisobot.
  */
-export function analyzeDocMarkdown(doc: ContentNode | null | undefined): DocMarkdownAnalysis {
+export function analyzeDocMarkdown(doc: ContentNode | null | undefined, opts: { budgetMs?: number } = {}): DocMarkdownAnalysis {
+  const started = Date.now();
+  const budget = opts.budgetMs ?? ANALYSIS_BUDGET_MS;
   const markdown = docToMarkdown(doc);
   const original = (doc?.content ?? []) as ContentNode[];
   const lossy: LossyBlock[] = [];
+  let incomplete = false;
 
   original.forEach((block, index) => {
+    if (incomplete) return;
+    if (Date.now() - started > budget) {
+      incomplete = true;
+      lossy.push({ block: index + 1, type: block.type ?? "unknown", preview: "", reason: "the Markdown check ran out of time here; the remaining blocks were not verified" });
+      return;
+    }
     if (isEmptyParagraph(normalizeNode(block, true))) return;
     const single = docToMarkdown({ type: "doc", content: [block] });
     const parsed = markdownToDoc(single).doc;
@@ -588,6 +602,10 @@ export function analyzeDocMarkdown(doc: ContentNode | null | undefined): DocMark
     if (before !== after) lossy.push({ block: index + 1, type: block.type ?? "unknown", preview: previewOf(block), reason: describeLoss(block) });
   });
 
+  if (lossy.length === 0 && Date.now() - started > budget) {
+    incomplete = true;
+    lossy.push({ block: 1, type: "doc", preview: "", reason: "the Markdown check ran out of time; the whole document was not verified" });
+  }
   if (lossy.length === 0 && !docsEquivalent(doc, markdownToDoc(markdown).doc)) {
     // Bloklar alohida to'g'ri, lekin yonma-yon kelganda o'zgaradi (masalan ikkita ketma-ket bir xil ro'yxat birlashadi).
     const kept = normalizeDoc(doc).content ?? [];
@@ -604,5 +622,5 @@ export function analyzeDocMarkdown(doc: ContentNode | null | undefined): DocMark
     });
   }
 
-  return { markdown, lossless: lossy.length === 0, lossyBlocks: lossy };
+  return { markdown, lossless: lossy.length === 0, lossyBlocks: lossy, ...(incomplete ? { incomplete: true } : {}) };
 }
