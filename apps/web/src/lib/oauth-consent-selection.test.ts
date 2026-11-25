@@ -3,6 +3,7 @@ import {
   defaultScopeSelection,
   describeConnectionPermissions,
   hasDangerSelected,
+  inactiveConnectionScopes,
   isReadOnlySelection,
   selectionSummary,
   serializeScopeSelection,
@@ -57,5 +58,15 @@ describe("per-permission consent selection", () => {
     expect(d.readOnly).toBe(false);
     expect(d.hasDanger).toBe(true);
     expect(d.groups.map((g) => g.group)).toEqual(["read", "write", "danger"]);
+  });
+});
+
+describe("inactive permissions when write tools are off", () => {
+  const held = ["blog:read", "posts:write", "posts:publish", "comments:moderate", "offline_access"];
+  it("lists write, publish and danger scopes only when the switch is explicitly off", () => {
+    expect(inactiveConnectionScopes(held, false)).toEqual(["posts:write", "posts:publish", "comments:moderate"]);
+    expect(inactiveConnectionScopes(held, true)).toEqual([]);
+    expect(inactiveConnectionScopes(held, undefined)).toEqual([]);
+    expect(inactiveConnectionScopes(["blog:read"], false)).toEqual([]);
   });
 });

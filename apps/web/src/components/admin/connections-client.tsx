@@ -19,8 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
-import { describeConnectionPermissions, displayClientName } from "@/lib/oauth-flow";
-import { MCP_SCOPE_GROUP_LABELS, type McpScopeGroup } from "@blog/shared";
+import { describeConnectionPermissions, displayClientName, inactiveConnectionScopes } from "@/lib/oauth-flow";
+import { MCP_SCOPES, MCP_SCOPE_GROUP_LABELS, type McpScopeGroup } from "@blog/shared";
 import { cn } from "@/lib/utils";
 
 const GROUP_CHIP: Record<McpScopeGroup, string> = {
@@ -30,7 +30,8 @@ const GROUP_CHIP: Record<McpScopeGroup, string> = {
   danger: "border-destructive/40 bg-destructive/10 text-destructive",
 };
 
-function PermissionList({ perms }: { perms: ReturnType<typeof describeConnectionPermissions> }) {
+function PermissionList({ perms, inactive }: { perms: ReturnType<typeof describeConnectionPermissions>; inactive: string[] }) {
+  const inactiveLabels = new Set(MCP_SCOPES.filter((s) => inactive.includes(s.id)).map((s) => s.label));
   return (
     <div className="flex flex-col gap-1.5">
       {perms.readOnly ? (
@@ -42,18 +43,27 @@ function PermissionList({ perms }: { perms: ReturnType<typeof describeConnection
           <div key={g.group} className="flex flex-wrap items-center gap-1.5">
             <span className="w-24 shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{MCP_SCOPE_GROUP_LABELS[g.group]}</span>
             {g.labels.map((label) => (
-              <span key={label} className={cn("rounded-full border px-2 py-0.5 text-xs", GROUP_CHIP[g.group])}>
+              <span
+                key={label}
+                className={cn("rounded-full border px-2 py-0.5 text-xs", GROUP_CHIP[g.group], inactiveLabels.has(label) && "opacity-60 line-through decoration-1")}
+                title={inactiveLabels.has(label) ? "Hozir ishlamaydi: serverda yozuv vositalari o'chirilgan" : undefined}
+              >
                 {g.group === "danger" ? <ShieldAlert className="mr-1 inline size-3" aria-hidden="true" /> : null}
                 {label}
               </span>
             ))}
           </div>
         ))}
+      {inactive.length > 0 ? (
+        <p role="note" className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-200">
+          Serverda yozuv vositalari o&apos;chirilgan: bu ruxsatlar hozir ishlamaydi.
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; onRevoked: (clientId: string) => void }) {
+function ConnectionRow({ connection, writeToolsEnabled, onRevoked }: { connection: McpConnection; writeToolsEnabled?: boolean; onRevoked: (clientId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const perms = describeConnectionPermissions(connection.scopes);
@@ -80,7 +90,7 @@ function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; o
         {connection.redirectHost ? <div className="text-xs text-muted-foreground">{connection.redirectHost}</div> : null}
       </TableCell>
       <TableCell className="align-top">
-        <PermissionList perms={perms} />
+        <PermissionList perms={perms} inactive={inactiveConnectionScopes(connection.scopes, writeToolsEnabled)} />
       </TableCell>
       <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(connection.connectedAt)}</TableCell>
       <TableCell className="align-top text-xs whitespace-nowrap text-muted-foreground">
@@ -159,7 +169,7 @@ function RevokeAllButton({ count, onDone }: { count: number; onDone: () => void 
 }
 
 /** `initial === null` — konnektor serverda o'chiq (yoki API javob bermadi). */
-export function ConnectionsClient({ initial }: { initial: McpConnection[] | null }) {
+export function ConnectionsClient({ initial, writeToolsEnabled }: { initial: McpConnection[] | null; writeToolsEnabled?: boolean }) {
   const [items, setItems] = useState<McpConnection[]>(initial ?? []);
 
   if (initial === null) {
@@ -196,6 +206,7 @@ export function ConnectionsClient({ initial }: { initial: McpConnection[] | null
             <ConnectionRow
               key={connection.clientId}
               connection={connection}
+              writeToolsEnabled={writeToolsEnabled}
               onRevoked={(clientId) => setItems((current) => current.filter((item) => item.clientId !== clientId))}
             />
           ))}

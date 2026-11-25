@@ -188,3 +188,12 @@ export function describeConnectionPermissions(scopes: readonly string[]): {
     offline,
   };
 }
+
+/**
+ * Serverda yozuv vositalari o'chiq (`writeToolsEnabled === false`) bo'lsa, ulanishdagi yozish/chop etish/xavfli ruxsatlar
+ * hozir ishlamaydi (ular saqlanadi, lekin vositalar yo'q). `undefined` (eski API) — o'chiq deb hisoblanmaydi.
+ */
+export function inactiveConnectionScopes(scopes: readonly string[], writeToolsEnabled: boolean | undefined): string[] {
+  if (writeToolsEnabled !== false) return [];
+  return MCP_SCOPES.filter((s) => s.group !== "read" && scopes.includes(s.id)).map((s) => s.id);
+}
