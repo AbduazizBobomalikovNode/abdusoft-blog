@@ -164,6 +164,47 @@ const EnvSchema = z.object({
   MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY: intEnv(10, 0),
   MCP_WRITE_LIMIT_MODERATION_PER_HOUR: intEnv(100, 0),
   MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY: intEnv(30, 0),
+  // --- Video (animatsiyali tushuntirish): render xizmati — default O'CHIQ. O'chiq bo'lsa yangi marshrut, vosita, scheduler ishi va UI yo'q;
+  // render kodi API jarayoniga HECH QACHON yuklanmaydi (alohida jarayon, `docs/video.md`). ---
+  VIDEO_ENABLED: z
+    .string()
+    .optional()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  // Ishchi jarayon ma'lumotlari: har bir ish uchun vaqtinchalik papka, bundle keshi, natija fayllari (saqlashga yuklanguncha). Bo'sh — `apps/api/.data/video`.
+  VIDEO_DATA_DIR: z.string().optional().default(""),
+  // `@blog/motion` paketi papkasi (render ishchisi shu yerdan ishga tushadi). Bo'sh — monorepo ichidagi `packages/motion`.
+  VIDEO_MOTION_DIR: z.string().optional().default(""),
+  // Bo'sh — Remotion o'rnatgan Chrome Headless Shell (`scripts/setup-motion-browser.sh`); aks holda brauzer fayliga to'liq yo'l.
+  VIDEO_BROWSER_PATH: z.string().optional().default(""),
+  // Mashinada bir vaqtda ishlaydigan render ishchilari soni (1..2). Kichik umumiy serverda 1.
+  VIDEO_MAX_RUNNING: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).max(2).default(1)),
+  // Bitta ishchida parallel kadrlar (Remotion concurrency). Har biri taxminan 0.4-0.6 GB xotira qo'shadi.
+  VIDEO_CONCURRENCY: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).max(8).default(1)),
+  // Ishchi jarayon daraxti (Node + Chrome) uchun xotira shifti, MB (RSS yig'indisi). Oshsa butun guruh o'ldiriladi.
+  VIDEO_WORKER_MEMORY_MB: intEnv(1536, 256),
+  // Ishchi Node jarayonining V8 heap chegarasi, MB.
+  VIDEO_WORKER_HEAP_MB: intEnv(512, 128),
+  // Ishchi jarayonning CPU ustuvorligi (nice, 0..19; katta = kamroq CPU). Blog saytiga xalaqit bermasligi uchun.
+  VIDEO_WORKER_NICE: intEnv(15, 0),
+  // Devor soati chegaralari, soniya: render/GIF va ko'rik (preview).
+  VIDEO_RENDER_TIMEOUT_SECONDS: intEnv(900, 30),
+  VIDEO_PREVIEW_TIMEOUT_SECONDS: intEnv(120, 10),
+  // Kvotalar. 0 — chegarasiz (tavsiya etilmaydi).
+  VIDEO_MAX_RENDERS_PER_DAY: intEnv(10, 0),
+  VIDEO_MAX_PREVIEWS_PER_DAY: intEnv(60, 0),
+  VIDEO_MAX_QUEUE: intEnv(5, 1),
+  // Disk va xotira yetishmasa yangi ish rad etiladi (MB).
+  VIDEO_MIN_FREE_DISK_MB: intEnv(2048, 0),
+  VIDEO_MIN_FREE_MEMORY_MB: intEnv(1400, 0),
+  // Natija fayllari: hajm chegaralari (bayt) va saqlash qoidasi.
+  VIDEO_MAX_MP4_BYTES: intEnv(80 * 1024 * 1024, 1024),
+  VIDEO_MAX_GIF_BYTES: intEnv(25 * 1024 * 1024, 1024),
+  VIDEO_MAX_STILL_BYTES: intEnv(600 * 1024, 1024),
+  VIDEO_KEEP_RENDERS_PER_POST: intEnv(3, 1),
+  VIDEO_PREVIEW_TTL_HOURS: intEnv(6, 1),
+  // Muvaffaqiyatsiz/bekor qilingan ishlar yozuvi shuncha kundan keyin o'chiriladi.
+  VIDEO_FAILED_TTL_DAYS: intEnv(7, 1),
   NODE_ENV: z
     .union([z.literal("development"), z.literal("production"), z.literal("test")])
     .default("development"),
