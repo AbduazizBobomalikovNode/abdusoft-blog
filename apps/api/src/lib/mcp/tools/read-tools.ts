@@ -130,7 +130,7 @@ export const whoami = defineTool({
         server: config.MCP_WRITE_TOOLS_ENABLED
           ? {
               mode: "read-write",
-              note: "Write tools are enabled. A write tool needs the matching permission (see grantedScopes) and, for existing posts, the post's current updatedAt as expected_updated_at. Every change is logged and undoable (history, trash, audit log).",
+              note: "Write tools are enabled. A write tool needs the matching permission (see grantedScopes) and, for existing posts, the post's current updatedAt as expected_updated_at. Every change is logged and undoable: in the web panel use Tarix (post editor), Savat (Postlar) and Jurnal first; the history, trash and audit-log tools and restore tools do the same.",
               permanentDeleteEnabled: config.MCP_PURGE_ENABLED,
               writeLimits: {
                 createsPerHour: config.MCP_WRITE_LIMIT_CREATES_PER_HOUR || null,
