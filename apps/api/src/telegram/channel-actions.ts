@@ -56,10 +56,37 @@ export async function sendToChannelAudited(
   postId: string,
   request: ChannelSendRequest,
 ): Promise<SendChannelPostResult> {
-  const result =
+  const requestMeta =
     "versionId" in request
-      ? await sendVersionToChannel(postId, request.versionId, { replaceExisting: request.replaceExisting })
-      : await sendPostToChannel(postId, request.mode, request.variant, { replaceExisting: request.replaceExisting });
+      ? { versionId: request.versionId, replaceExisting: Boolean(request.replaceExisting) }
+      : { mode: request.mode, variant: request.variant, replaceExisting: Boolean(request.replaceExisting) };
+  let result: SendChannelPostResult;
+  try {
+    result =
+      "versionId" in request
+        ? await sendVersionToChannel(postId, request.versionId, { replaceExisting: request.replaceExisting })
+        : await sendPostToChannel(postId, request.mode, request.variant, { replaceExisting: request.replaceExisting });
+  } catch (error) {
+    // Yuborish yiqildi: avvalgi xabar (almashtirishda) o'zgarmagan holda qoladi — buni jurnalga yozamiz va xatoni qayta tashlaymiz.
+    await recordAuditSafe(actor, {
+      action: "post.channel_send_failed",
+      entityType: "post",
+      entityId: postId,
+      summary: request.replaceExisting ? "Kanalga qayta yuborish muvaffaqiyatsiz (eski xabar saqlandi)" : "Kanalga yuborish muvaffaqiyatsiz",
+      meta: { ...requestMeta, error: error instanceof Error ? error.name : "error", previousMessageKept: Boolean(request.replaceExisting) },
+    });
+    throw error;
+  }
+
+  if (!result.ok && result.reason === "preflight_failed") {
+    await recordAuditSafe(actor, {
+      action: "post.channel_send_failed",
+      entityType: "post",
+      entityId: postId,
+      summary: "Kanalga yuborish tekshiruvdan o'tmadi",
+      meta: { ...requestMeta, reason: result.reason },
+    });
+  }
 
   if (result.ok) {
     await recordAuditSafe(actor, {
@@ -67,10 +94,7 @@ export async function sendToChannelAudited(
       entityType: "post",
       entityId: postId,
       summary: request.replaceExisting ? "Post kanalga qayta yuborildi (almashtirildi)" : "Post kanalga yuborildi",
-      meta:
-        "versionId" in request
-          ? { versionId: request.versionId, replaceExisting: Boolean(request.replaceExisting) }
-          : { mode: request.mode, variant: request.variant, replaceExisting: Boolean(request.replaceExisting) },
+      meta: requestMeta,
     });
   }
   return result;

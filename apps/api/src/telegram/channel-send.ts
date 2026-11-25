@@ -69,6 +69,8 @@ export async function upsertTelegramRef(
     channelVersionId: string | null;
     channelMessageIds: number[] | null;
     channelSentAt: Date | null;
+    discussionChatId: number | null;
+    discussionMessageId: number | null;
   }>,
 ): Promise<void> {
   const existing = await loadTelegramRef(postId);
@@ -243,6 +245,8 @@ export type SendChannelPostResult =
       messageIds: number[];
       messageUrl: string | null;
       sentAt: string;
+      /** Faqat almashtirishda: yangi xabar yuborildi, lekin eski xabar(lar)ning shuncha qismi kanaldan o'chmadi (log'ga yozilgan). */
+      oldMessagesNotDeleted?: number;
     }
   | {
       ok: false;
@@ -384,11 +388,56 @@ export async function sendChannelPreviewToChat(chatId: number | string, data: Ch
 }
 
 /**
- * Umumiy yuborish yo'li: sozlamalar -> allaqachon yuborilganmi -> preflight (server
- * tomonida, o'tmasa HECH NARSA yuborilmaydi) -> (kerak bo'lsa) eski xabarlarni
- * o'chirish -> yuborish -> `telegram_refs`ni yozish.
+ * Bir post uchun kanalga yuborishlar ketma-ket bajariladi (jarayon ichidagi navbat): parallel to'rtta so'rov to'rtta xabar
+ * yaratmaydi — birinchisi yuboradi, qolganlari kutib, `already_sent`ni ko'radi. (API bitta jarayon sifatida ishlaydi; rejalashtirilgan
+ * yuborish ham shu yo'ldan o'tadi va qo'shimcha ravishda `channel-plan.ts`dagi atomik "claim"ga ega.)
  */
-async function sendComputed(
+const sendTails = new Map<string, Promise<void>>();
+async function withSendLock<T>(postId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = sendTails.get(postId) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => mine);
+  sendTails.set(postId, tail);
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (sendTails.get(postId) === tail) sendTails.delete(postId);
+  }
+}
+
+/** Faqat berilgan xabarlarni kanaldan o'chiradi (xato bo'lsa log qiladi); nechtasi o'chmaganini qaytaradi. */
+async function deleteChannelMessageIds(channelId: string, ids: number[]): Promise<number> {
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      await bot?.api.deleteMessage(channelId, id);
+    } catch (error) {
+      failed++;
+      console.error(`Eski kanal xabarini o'chirishda xatolik (message ${id}):`, error);
+    }
+  }
+  return failed;
+}
+
+/**
+ * Umumiy yuborish yo'li: sozlamalar -> allaqachon yuborilganmi -> preflight (server
+ * tomonida, o'tmasa HECH NARSA yuborilmaydi) -> YANGI xabarni yuborish -> `telegram_refs`ni yozish -> (almashtirishda)
+ * eski xabarlarni o'chirish. Yuborish yiqilsa eski xabar ham, havola ham o'zgarmaydi.
+ */
+function sendComputed(
+  postId: string,
+  compute: () => Promise<ComputeChannelPostResult>,
+  opts: { replaceExisting?: boolean },
+): Promise<SendChannelPostResult> {
+  return withSendLock(postId, () => sendComputedLocked(postId, compute, opts));
+}
+
+async function sendComputedLocked(
   postId: string,
   compute: () => Promise<ComputeChannelPostResult>,
   opts: { replaceExisting?: boolean },
@@ -409,11 +458,16 @@ async function sendComputed(
   const preflight = await computeChannelPreflightFor(computed.data, { requirePublished: true });
   if (!preflight.canSend) return { ok: false, reason: "preflight_failed", preflight };
 
-  if (existingRef?.channelSentAt && opts.replaceExisting) {
-    await deleteChannelMessages(postId);
-  }
-
   const channelId = settings.telegram.channelId;
+  const oldIds =
+    existingRef?.channelSentAt && opts.replaceExisting
+      ? existingRef.channelMessageIds && existingRef.channelMessageIds.length > 0
+        ? existingRef.channelMessageIds
+        : existingRef.channelMessageId
+          ? [existingRef.channelMessageId]
+          : []
+      : [];
+
   const { messageType, messageIds } = await deliverChannelMessage(channelId, computed.data, true);
 
   const sentAt = new Date();
@@ -425,7 +479,11 @@ async function sendComputed(
     channelMode: computed.data.mode,
     channelMessageIds: messageIds,
     channelSentAt: sentAt,
+    // Eski xabarlarning muhokama guruhidagi forward'lari yaroqsiz — yangi xabar uchun bog'lanish qaytadan o'rnatiladi.
+    ...(oldIds.length > 0 ? { discussionChatId: null, discussionMessageId: null } : {}),
   });
+  // Yangi xabar yuborilib, havola saqlangandan KEYIN eskisini o'chiramiz.
+  const oldMessagesNotDeleted = oldIds.length > 0 ? await deleteChannelMessageIds(channelId, oldIds) : 0;
 
   return {
     ok: true,
@@ -436,6 +494,7 @@ async function sendComputed(
     messageIds,
     messageUrl: messageIds[0] !== undefined ? messageUrlFor(channelId, messageIds[0]) : null,
     sentAt: sentAt.toISOString(),
+    ...(oldMessagesNotDeleted > 0 ? { oldMessagesNotDeleted } : {}),
   };
 }
 
