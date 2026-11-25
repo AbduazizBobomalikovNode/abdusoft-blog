@@ -1,12 +1,17 @@
 import type { MetadataRoute } from "next";
 import { getPosts, getTags } from "@/lib/api";
 import { site } from "@/lib/site";
+import { fetchAllPostPages } from "@/lib/sitemap-posts";
 
 export const revalidate = 60;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  // API bir so'rovda ko'pi bilan 50 ta post beradi — barcha postlar sahifalab yig'iladi.
   const [posts, tags] = await Promise.all([
-    getPosts({ limit: 50 }),
+    fetchAllPostPages(
+      (page, limit) => getPosts({ page, limit }),
+      (post) => post.slug,
+    ),
     getTags(),
   ]);
 
@@ -16,7 +21,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${site.url}/haqida`, changeFrequency: "monthly", priority: 0.3 },
   ];
 
-  const postEntries: MetadataRoute.Sitemap = (posts?.items ?? []).map((post) => ({
+  const postEntries: MetadataRoute.Sitemap = posts.map((post) => ({
     url: `${site.url}/${post.slug}`,
     lastModified: post.publishedAt ?? undefined,
     changeFrequency: "monthly",
