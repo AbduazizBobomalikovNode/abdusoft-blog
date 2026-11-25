@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { History, TriangleAlert } from "lucide-react";
 import type { PostConflictResponse } from "@blog/shared";
 import {
@@ -39,15 +39,21 @@ export function ConflictBanner({
   onOpenHistory: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Foydalanuvchi sahifaning pastida yozayotgan bo'lishi mumkin — banner paydo bo'lganda ko'rinadigan joyga keltiramiz (fokusni olmaymiz).
+  useEffect(() => {
+    rootRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, []);
   const summary = conflictSummary(conflict, meId);
 
   return (
     <>
       <div
+        ref={rootRef}
         role="status"
         aria-live="polite"
         data-testid="conflict-banner"
-        className="flex flex-col gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm"
+        className="flex scroll-mt-40 flex-col gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm"
       >
         <div className="flex items-start gap-2.5">
           <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
@@ -90,7 +96,7 @@ export function ConflictBanner({
           <AlertDialogHeader>
             <AlertDialogTitle>Meniki bilan almashtirilsinmi?</AlertDialogTitle>
             <AlertDialogDescription>
-              Serverdagi o&apos;zgarishlar ({summary.who}) sizning versiyangiz bilan almashtiriladi. Ularning nusxasi Tarixda
+              Serverdagi o&apos;zgarishlar ({summary.by}) sizning versiyangiz bilan almashtiriladi. Ularning nusxasi Tarixda
               saqlanadi va keyin qaytarib olish mumkin.
             </AlertDialogDescription>
           </AlertDialogHeader>

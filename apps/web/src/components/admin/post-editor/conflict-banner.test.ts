@@ -12,7 +12,7 @@ const render = (conflict = base, extra: Partial<Parameters<typeof ConflictBanner
 
 describe("conflictSummary", () => {
   it("names who and through what, with a readable source", () => {
-    expect(conflictSummary(base, "me")).toEqual({ who: "O'zgartirgan: Dilnoza · Yordamchi ulagich", own: false });
+    expect(conflictSummary(base, "me")).toEqual({ who: "O'zgartirgan: Dilnoza · Yordamchi ulagich", by: "Dilnoza · Yordamchi ulagich", own: false });
     expect(conflictSummary({ updatedBy: { id: "u2", name: "Dilnoza" }, via: "telegram" }, "me").who).toBe("O'zgartirgan: Dilnoza · Telegram");
   });
 
