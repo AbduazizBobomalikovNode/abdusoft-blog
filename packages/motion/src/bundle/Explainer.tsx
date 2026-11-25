@@ -23,6 +23,19 @@ import { StepsScene } from "./scenes/StepsScene.tsx";
 import { plainLines } from "../highlight.ts";
 import { parseDiff } from "../schema/storyboard.ts";
 
+/**
+ * Backdrop clock: identity, except that with a loop window (closing scene at the end) the clock slows down
+ * over the 60 frames before it (velocity 1 -> 0, C1-smooth) and stands still from there on.
+ */
+export function backdropClock(frame: number, loopStart: number | null): number {
+  if (loopStart === null) return frame;
+  const a = loopStart - 60;
+  if (frame <= a) return frame;
+  if (frame >= loopStart) return a + 30;
+  const p = (frame - a) / 60;
+  return a + 60 * (p - (p * p) / 2);
+}
+
 const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp" } as const;
 
 /**
@@ -34,7 +47,7 @@ const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp" } as const;
  *  - push:  the incoming scene pushes the outgoing one out to the left
  *  - zoom:  zoom-through: the outgoing scene rushes toward the camera as the incoming one settles in
  */
-const SceneShell: React.FC<{ timing: SceneTiming; children: (t: number) => React.ReactNode }> = ({ timing, children }) => {
+const SceneShell: React.FC<{ timing: SceneTiming; backdropClock: (f: number) => number; children: (t: number) => React.ReactNode }> = ({ timing, backdropClock: bd, children }) => {
   const frame = useCurrentFrame();
   const { layout, theme } = useStage();
   const { px, width } = layout;
@@ -69,7 +82,7 @@ const SceneShell: React.FC<{ timing: SceneTiming; children: (t: number) => React
   return (
     <AbsoluteFill style={{ opacity, transform: tf.length > 0 ? tf.join(" ") : undefined, clipPath }}>
       {wiping && <AbsoluteFill style={{ background: theme.background }} />}
-      {wiping && <Backdrop theme={theme} frame={frame + timing.startFrame} width={layout.width} height={layout.height} />}
+      {wiping && <Backdrop theme={theme} frame={bd(frame + timing.startFrame)} width={layout.width} height={layout.height} />}
       {content}
       {wiping && (
         <div style={{ position: "absolute", top: 0, bottom: 0, right: 0, width: px(6), background: theme.gradient, opacity: 1 - inP * 0.4 }} />
@@ -95,18 +108,21 @@ export const Explainer: React.FC<RenderProps> = ({ storyboard, highlights }) => 
   const endLoop = timeline.scenes.at(-1)?.loop ?? null;
   const progressEnd = endLoop ? endLoop.startFrame : timeline.totalFrames - 1;
   const progress = Math.min(1, frame / Math.max(1, progressEnd));
+  // The preset backdrop drifts slowly; it decelerates smoothly to rest one loop period before the closing loop
+  // window, so the loop window itself is static (seamless) under every preset.
+  const bdFrame = (f: number): number => backdropClock(f, endLoop?.startFrame ?? null);
 
   return (
     <StageProvider value={{ layout, theme, siteName: storyboard.siteName }}>
       <AbsoluteFill style={{ background: theme.background, color: theme.foreground, fontFamily: FONT_STACK.sans, WebkitFontSmoothing: "antialiased" }}>
-        <Backdrop theme={theme} frame={frame} width={layout.width} height={layout.height} />
+        <Backdrop theme={theme} frame={bdFrame(frame)} width={layout.width} height={layout.height} />
 
         {timeline.scenes.map((timing) => {
           const scene = storyboard.scenes[timing.index];
           if (!scene) return null;
           return (
             <Sequence key={timing.index} from={timing.startFrame} durationInFrames={timing.durationFrames} name={`${timing.index + 1} ${scene.type}`}>
-              <SceneShell timing={timing}>
+              <SceneShell timing={timing} backdropClock={bdFrame}>
                 {(t) => {
                   const c = timing.content;
                   switch (scene.type) {
