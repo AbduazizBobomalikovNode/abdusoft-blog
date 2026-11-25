@@ -338,6 +338,10 @@ export const adminApi = {
   revokeStaffInvite: (id: string) =>
     adminJson<{ ok: true }>(`/admin/staff/invites/${id}/revoke`, { method: "POST" }),
 
+  /** Ulangan ilovani to'liq uzadi (token'lar va rozilik) — qaytarib bo'lmaydi. */
+  revokeConnection: (clientId: string) =>
+    adminJson<{ revoked: true }>(`/admin/connections/${encodeURIComponent(clientId)}`, { method: "DELETE" }),
+
   removeStaffMember: (userId: string) => adminJson<{ ok: true }>(`/admin/staff/${userId}`, { method: "DELETE" }),
 
   acceptStaffInvite: (token: string) =>

@@ -8,6 +8,7 @@ import {
   AdminStatsSummarySchema,
   AdminUmamiStatsSchema,
   BansListResponseSchema,
+  McpConnectionsResponseSchema,
   MeSchema,
   MediaListResponseSchema,
   PostDetailSchema,
@@ -31,6 +32,7 @@ import {
   type AdminStatsSummary,
   type AdminUmamiStats,
   type BansListResponse,
+  type McpConnectionsResponse,
   type Me,
   type MediaListResponse,
   type PostDetail,
@@ -381,6 +383,19 @@ export async function getAdminStaff(cookieHeader: string | null): Promise<StaffL
   });
 
   return parseJson(res, StaffListResponseSchema);
+}
+
+/**
+ * "Ulangan ilovalar" (Claude konnektori): admin uchun. `null` — serverda konnektor o'chiq (`MCP_ENABLED`, API 404 beradi)
+ * yoki API vaqtincha ishlamayapti.
+ */
+export async function getAdminConnections(cookieHeader: string | null): Promise<McpConnectionsResponse | null> {
+  const res = await apiFetch("/admin/connections", {
+    cache: "no-store",
+    headers: authHeaders(cookieHeader),
+  });
+
+  return parseJson(res, McpConnectionsResponseSchema);
 }
 
 /** Xodimning o'z postlari bo'yicha kichik dashboard xulosasi (`/admin` sahifasi, `staff` roli uchun). */
