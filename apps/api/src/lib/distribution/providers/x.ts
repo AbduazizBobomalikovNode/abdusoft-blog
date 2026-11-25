@@ -1,7 +1,7 @@
 import type { ChannelCheck } from "@blog/shared";
 import { DistributionError } from "../errors.js";
 import { asRecord, formBody, HostClient, realSleep, str, type HttpResponse, type ProviderDeps } from "../http.js";
-import { check, fmtBytes, textCheck } from "../checks.js";
+import { assertPublicHttpsUrl, check, fmtBytes, textCheck } from "../checks.js";
 import { findUrls, fitParts, normalizeUzbekApostrophes, toHashtags, xWeightedLength } from "../text.js";
 import { DAY_MS, getTokenStatus, type TokenPolicy } from "../token-status.js";
 import type {
@@ -15,6 +15,7 @@ import type {
   ProviderContext,
   PublishInput,
   PublishResult,
+  RefreshResult,
   RenderOptions,
 } from "../types.js";
 
@@ -128,14 +129,14 @@ export function createXProvider(): DistributionProvider {
     return undefined;
   };
 
-  async function tokenCall(deps: ProviderDeps, creds: ClientCredentials, params: Record<string, string>, secrets: string[]) {
+  async function tokenCall(deps: ProviderDeps, creds: ClientCredentials, params: Record<string, string>, secrets: string[], mode: "safe_write" | "refresh" = "safe_write") {
     const http = new HostClient(deps, X_HOSTS, [creds.clientSecret ?? "", ...secrets]);
     const { headers, body } = buildXTokenRequest(creds, params);
-    const res = await http.request({ method: "POST", url: X_TOKEN_URL, headers, body, mode: "safe_write" });
+    const res = await http.request({ method: "POST", url: X_TOKEN_URL, headers, body, mode });
     if (res.status < 200 || res.status >= 300) {
-      const e = http.fail(res, "safe_write");
+      const e = http.fail(res, mode);
       // Token so'rovida 400 (invalid_grant) — kod/refresh token yaroqsiz.
-      throw res.status === 400 || res.status === 401
+      throw (res.status === 400 || res.status === 401) && e.kind !== "refresh_ambiguous"
         ? new DistributionError({ kind: "auth_expired", status: res.status, platformMessage: e.platformMessage, message: "X tokeni yaroqsiz yoki bekor qilingan — qayta ulang" })
         : e;
     }
@@ -197,12 +198,15 @@ export function createXProvider(): DistributionProvider {
           connectedAt: now,
         };
       },
-      async refresh(deps: ProviderDeps, creds: ClientCredentials, account: ConnectedAccount): Promise<ConnectedAccount> {
+      async refresh(deps: ProviderDeps, creds: ClientCredentials, account: ConnectedAccount): Promise<RefreshResult> {
         if (!account.refreshToken) throw new DistributionError({ kind: "auth_expired", message: "X refresh token yo'q — qayta ulang" });
         const now = nowOf(deps);
-        const tokenRes = await tokenCall(deps, creds, { grant_type: "refresh_token", refresh_token: account.refreshToken }, [account.refreshToken, account.accessToken]);
-        // MUHIM: qaytgan YANGI refresh token chaqiruvchi tomonidan darhol saqlanishi shart (eskisi bekor bo'ladi).
-        return { ...account, ...applyTokens(tokenRes, account, now) };
+        // "refresh" rejimi: timeout/uzilish/5xx -> `refresh_ambiguous` (X tokenni allaqachon almashtirgan bo'lishi mumkin).
+        const tokenRes = await tokenCall(deps, creds, { grant_type: "refresh_token", refresh_token: account.refreshToken }, [account.refreshToken, account.accessToken], "refresh");
+        const rotated = Boolean(str(tokenRes.refresh_token));
+        // MUHIM: chaqiruvchi qaytgan akkauntni YANGI access token'dan foydalanishdan OLDIN saqlashi shart.
+        // Javobda refresh token bo'lmasa (rotatsiya yo'q) eskisi saqlanadi — X hujjati rotatsiya/umr haqida aniq aytmaydi (UNVERIFIED).
+        return { account: { ...account, ...applyTokens(tokenRes, account, now) }, refreshTokenRotated: rotated };
       },
     },
 
@@ -237,12 +241,13 @@ export function createXProvider(): DistributionProvider {
 
     async publish(ctx: ProviderContext, input: PublishInput): Promise<PublishResult> {
       const { deps, account } = ctx;
+      assertPublicHttpsUrl(input.post.url, "Maqola havolasi");
       const http = new HostClient(deps, X_HOSTS, [account.accessToken, account.refreshToken ?? ""]);
       const ref = refine();
       const auth = { Authorization: `Bearer ${account.accessToken}` };
-      let mediaId: string | undefined;
+      let mediaId: string | undefined = input.resume?.mediaId;
 
-      if (input.image) {
+      if (input.image && !mediaId) {
         const up = await http.request({
           method: "POST",
           url: X_MEDIA_UPLOAD_URL,
@@ -250,35 +255,41 @@ export function createXProvider(): DistributionProvider {
           body: JSON.stringify(buildXMediaUploadBody(input.image.bytes)),
           mode: "safe_write",
         });
-        if (up.status < 200 || up.status >= 300) throw http.fail(up, "safe_write", ref);
+        if (up.status < 200 || up.status >= 300) throw http.fail(up, "safe_write", ref).with({ step: "media" });
         const data = asRecord(asRecord(up.json).data);
         mediaId = str(data.id);
-        if (!mediaId) throw new DistributionError({ kind: "validation_rejected", message: "X media id qaytarmadi" });
+        if (!mediaId) throw new DistributionError({ kind: "validation_rejected", step: "media", message: "X media id qaytarmadi" });
         // processing_info faqat javobda bo'lsa (UNVERIFIED: rasm uchun uchraydimi) — chegaralangan kutish.
         let info = asRecord(data.processing_info);
         const sleep = deps.sleep ?? realSleep;
+        const partial = { mediaId };
         for (let i = 0; i < 5 && (info.state === "pending" || info.state === "in_progress"); i++) {
           const wait = typeof info.check_after_secs === "number" ? Math.min(info.check_after_secs, 10) : 2;
           await sleep(wait * 1000);
           const st = await http.request({ method: "GET", url: `${X_MEDIA_UPLOAD_URL}?command=STATUS&media_id=${encodeURIComponent(mediaId)}`, headers: auth, mode: "read" });
-          if (st.status < 200 || st.status >= 300) throw http.fail(st, "read", ref);
+          if (st.status < 200 || st.status >= 300) throw http.fail(st, "read", ref).with({ step: "poll", partial });
           info = asRecord(asRecord(asRecord(st.json).data).processing_info);
         }
-        if (info.state === "failed") throw new DistributionError({ kind: "validation_rejected", message: "X rasmni qayta ishlay olmadi" });
-        if (info.state === "pending" || info.state === "in_progress") throw new DistributionError({ kind: "transient", message: "X rasm qayta ishlashi tugamadi — keyinroq urining" });
+        if (info.state === "failed") throw new DistributionError({ kind: "validation_rejected", step: "poll", message: "X rasmni qayta ishlay olmadi" });
+        if (info.state === "pending" || info.state === "in_progress") throw new DistributionError({ kind: "transient", step: "poll", partial, message: "X rasm qayta ishlashi tugamadi — keyinroq urining (resume.mediaId bilan)" });
       }
 
-      const res = await http.request({
-        method: "POST",
-        url: X_TWEETS_URL,
-        headers: { ...auth, "Content-Type": "application/json" },
-        body: JSON.stringify(buildXTweetBody(input.text, mediaId)),
-        mode: "create",
-      });
-      if (res.status < 200 || res.status >= 300) throw http.fail(res, "create", ref);
-      const id = str(asRecord(asRecord(res.json).data).id);
-      if (!id) throw new DistributionError({ kind: "outcome_unknown", status: res.status, message: "X post id qaytarmadi — qayta urinmang, profilni tekshiring" });
-      return { externalId: id, url: `https://x.com/${account.username ?? "i"}/status/${id}` };
+      const partial = mediaId ? { mediaId } : undefined;
+      try {
+        const res = await http.request({
+          method: "POST",
+          url: X_TWEETS_URL,
+          headers: { ...auth, "Content-Type": "application/json" },
+          body: JSON.stringify(buildXTweetBody(input.text, mediaId)),
+          mode: "create",
+        });
+        if (res.status < 200 || res.status >= 300) throw http.fail(res, "create", ref);
+        const id = str(asRecord(asRecord(res.json).data).id);
+        if (!id) throw new DistributionError({ kind: "outcome_unknown", status: res.status, message: "X post id qaytarmadi — qayta urinmang, profilni tekshiring" });
+        return { externalId: id, url: `https://x.com/${account.username ?? "i"}/status/${id}` };
+      } catch (e) {
+        throw e instanceof DistributionError ? e.with({ step: "publish", partial }) : e;
+      }
     },
 
     async remove(ctx: ProviderContext, externalId: string): Promise<void> {

@@ -48,7 +48,8 @@ describe("X auth", () => {
   });
   it("refresh rotates the refresh token and the caller gets the new one", async () => {
     const m = mockFetch(() => json({ access_token: "AT-NEW-1234567", refresh_token: "RT-NEW-1234567", expires_in: 7200 }));
-    const next = await p.auth.refresh!(makeDeps(m.fetch), confidential, account);
+    const { account: next, refreshTokenRotated } = await p.auth.refresh!(makeDeps(m.fetch), confidential, account);
+    expect(refreshTokenRotated).toBe(true);
     expect(formOf(m.calls[0]!)).toEqual({ grant_type: "refresh_token", refresh_token: "REFRESH-OLD-123456" });
     expect(next.refreshToken).toBe("RT-NEW-1234567");
     expect(next.accessToken).toBe("AT-NEW-1234567");
@@ -59,9 +60,26 @@ describe("X auth", () => {
   });
   it("keeps the old refresh token when none is returned; invalid_grant -> auth_expired", async () => {
     const m = mockFetch(() => json({ access_token: "AT-NEW-1234567", expires_in: 7200 }));
-    expect((await p.auth.refresh!(makeDeps(m.fetch), confidential, account)).refreshToken).toBe("REFRESH-OLD-123456");
+    const kept = await p.auth.refresh!(makeDeps(m.fetch), confidential, account);
+    expect(kept.account.refreshToken).toBe("REFRESH-OLD-123456");
+    expect(kept.refreshTokenRotated).toBe(false);
     const bad = mockFetch(() => json({ error: "invalid_request", error_description: "Value passed for the token was invalid." }, { status: 400 }));
     await expect(p.auth.refresh!(makeDeps(bad.fetch), confidential, account)).rejects.toMatchObject({ kind: "auth_expired" });
+  });
+});
+
+describe("X refresh failures (item 4)", () => {
+  const run = (responder: Parameters<typeof mockFetch>[0]) => p.auth.refresh!(makeDeps(mockFetch(responder).fetch), confidential, account).then(() => null, (e: unknown) => e as { kind: string; message: string });
+  it("a dropped connection, timeout or 5xx during refresh is refresh_ambiguous (the token may have been rotated)", async () => {
+    for (const r of [() => new Error("ECONNRESET"), () => json({ title: "x" }, { status: 500 }), () => json({ title: "x" }, { status: 503 })]) {
+      const e = await run(r);
+      expect(e).toMatchObject({ kind: "refresh_ambiguous" });
+      expect(e?.message).toMatch(/qayta ulang/);
+    }
+  });
+  it("invalid_grant stays auth_expired; the old account object is untouched", async () => {
+    expect(await run(() => json({ error: "invalid_request" }, { status: 400 }))).toMatchObject({ kind: "auth_expired" });
+    expect(account.refreshToken).toBe("REFRESH-OLD-123456");
   });
 });
 
