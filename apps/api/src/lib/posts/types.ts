@@ -18,7 +18,7 @@ export interface Actor {
    * Faqat `via: "mcp"` uchun: qaysi ulangan ilova va qaysi vosita. Jurnal yozuvlariga (`meta.client`, `meta.tool`) avtomatik
    * qo'shiladi — shu sabab har bir yozuv "kim, qaysi ilova, qaysi vosita" bilan izlanadi (kontent va sirlarsiz).
    */
-  mcp?: { clientId: string; clientName: string | null; tool: string };
+  mcp?: { clientId: string; clientName: string | null; tool: string; channelsSend: boolean };
 }
 
 /** Rejalashtirilgan postlarni chop etuvchi tizim aktyori (foydalanuvchi yo'q). */

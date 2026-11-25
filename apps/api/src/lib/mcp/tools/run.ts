@@ -46,7 +46,7 @@ export async function runTool<Shape extends z.ZodRawShape>(
 
     // Yozuv vositasi: amal jurnalga "qaysi ilova, qaysi vosita" bilan yoziladi (xizmat funksiyalari `actor.mcp`ni jurnalga qo'shadi).
     const toolCtx: McpToolContext =
-      def.kind === "write" ? { ...ctx, actor: { ...ctx.actor, mcp: { clientId: ctx.client.id, clientName: ctx.client.name, tool: def.name } } } : ctx;
+      def.kind === "write" ? { ...ctx, actor: { ...ctx.actor, mcp: { clientId: ctx.client.id, clientName: ctx.client.name, tool: def.name, channelsSend: ctx.scopes.has("channels:send") } } } : ctx;
     if (def.kind === "write" && def.limit && (parsed.data as { dry_run?: unknown }).dry_run !== true) {
       await enforceWriteLimit(toolCtx, def.limit);
     }

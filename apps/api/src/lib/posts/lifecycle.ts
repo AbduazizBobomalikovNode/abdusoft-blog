@@ -5,6 +5,7 @@ import { user } from "../../db/auth-schema.js";
 import { posts } from "../../db/schema.js";
 import { events } from "../events.js";
 import { recordAudit, type AuditEntry } from "../audit.js";
+import { actorMayTouchChannel, CHANNEL_REMOVAL_REFUSED, postHasChannelMessage } from "./channel-guard.js";
 import { announcePublished, announceUnpublished } from "./effects.js";
 import { preparePlan } from "./plan.js";
 import { snapshotPost, type RevisionReason } from "./revisions.js";
@@ -177,7 +178,7 @@ async function executePublish(
   }, { expectedUpdatedAt: args.expectedUpdatedAt });
   if (!result.ok) return result;
 
-  await announcePublished(result.data.after);
+  await announcePublished(result.data.after, { skipChannel: !actorMayTouchChannel(actor) });
   return ok(result.data.after);
 }
 
@@ -230,6 +231,18 @@ export async function publishDuePosts(now: Date = new Date()): Promise<void> {
 // Boshqa o'tishlar
 // ---------------------------------------------------------------------------
 
+/**
+ * Ulangan yordamchi `channels:send` ruxsatisiz kanalga yuborilgan postni saytdan olib tashlay olmaydi: bu kanal xabarini
+ * o'chirib yuborardi. Panel/tizim aktyorlari uchun hech narsa o'zgarmaydi.
+ */
+async function refuseChannelRemoval(actor: Actor, id: string) {
+  if (actorMayTouchChannel(actor)) return null;
+  const post = await findPost(id);
+  if (post?.status !== "published") return null;
+  if (!(await postHasChannelMessage(id))) return null;
+  return fail("forbidden", CHANNEL_REMOVAL_REFUSED);
+}
+
 async function leavePublished(
   actor: Actor,
   id: string,
@@ -240,9 +253,11 @@ async function leavePublished(
 ): Promise<ServiceResult<LifecycleSummary>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
+  const blocked = await refuseChannelRemoval(actor, id);
+  if (blocked) return blocked;
   const result = await transition(actor, id, { buildPatch, audit, revision }, opts);
   if (!result.ok) return result;
-  if (result.data.before.status === "published") await announceUnpublished(result.data.after);
+  if (result.data.before.status === "published") await announceUnpublished(result.data.after, { skipChannel: !actorMayTouchChannel(actor) });
   return ok(toLifecycleSummary(result.data.after));
 }
 
@@ -293,6 +308,8 @@ export async function schedulePost(
     storedPlan = prepared.data;
   }
 
+  const blocked = await refuseChannelRemoval(actor, id);
+  if (blocked) return blocked;
   const result = await transition(actor, id, {
     revision: "schedule",
     audit: statusChange("post.schedule", "rejalashtirildi", {
@@ -302,7 +319,7 @@ export async function schedulePost(
     buildPatch: () => ({ status: "scheduled", scheduledAt, channelPlan: storedPlan, channelSendAt: null }),
   }, { expectedUpdatedAt: input.expectedUpdatedAt });
   if (!result.ok) return result;
-  if (result.data.before.status === "published") await announceUnpublished(result.data.after);
+  if (result.data.before.status === "published") await announceUnpublished(result.data.after, { skipChannel: !actorMayTouchChannel(actor) });
   return ok(toLifecycleSummary(result.data.after));
 }
 

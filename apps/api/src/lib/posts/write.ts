@@ -13,6 +13,7 @@ import { postRevisions, postTags, posts, tags } from "../../db/schema.js";
 import { renderPost } from "../content/render.js";
 import { validatePanelDocument } from "../content/validate.js";
 import { recordAudit, recordAuditCoalesced } from "../audit.js";
+import { actorMayTouchChannel } from "./channel-guard.js";
 import { announceUpdated } from "./effects.js";
 import { preparePlan } from "./plan.js";
 import { shouldSnapshotForUpdate, snapshotPost, type RevisionReason } from "./revisions.js";
@@ -406,6 +407,7 @@ export async function updatePost(
     await announceUpdated(fresh, {
       tagSlugs: tagRows ? tagRows.map((tag) => tag.slug) : null,
       previousSlug: update.slug && update.slug !== previousSlug ? previousSlug : null,
+      skipChannel: !actorMayTouchChannel(actor),
     });
   }
 
