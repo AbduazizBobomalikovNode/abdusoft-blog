@@ -247,6 +247,7 @@ async function buildDetail(post: PostRow) {
       : null,
     createdBy: toAuthorRef(post.createdBy, authorMap),
     updatedBy: toAuthorRef(post.updatedBy, authorMap),
+    updatedVia: post.updatedVia ?? null,
     reviewNote: post.reviewNote,
     submittedAt: post.submittedAt?.toISOString() ?? null,
     reviewedBy: toAuthorRef(post.reviewedBy, authorMap),

@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
   DEFAULT_POST_SETTINGS,
@@ -9,7 +9,7 @@ import {
   type UpdatePostBody,
 } from "@blog/shared";
 import { db } from "../../db/index.js";
-import { postTags, posts, tags } from "../../db/schema.js";
+import { postRevisions, postTags, posts, tags } from "../../db/schema.js";
 import { renderPost } from "../content/render.js";
 import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { announceUpdated } from "./effects.js";
@@ -198,6 +198,9 @@ export async function authorizeEdit(actor: Actor, id: string): Promise<ServiceRe
   return ok(post);
 }
 
+/** `overwrite: true` bilan majburiy surat orasidagi eng kichik oraliq (bir aktyor/post/kanal uchun). */
+export const OVERWRITE_SNAPSHOT_WINDOW_MS = 60_000;
+
 export type UpdatePostFields = UpdatePostBody;
 
 /** Ichki parametrlar (revision tiklash kabi xizmat ichidagi chaqiruvlar uchun) — HTTP tanasidan KELMAYDI. */
@@ -205,6 +208,12 @@ export interface UpdateInternalOptions {
   /** Oraliq/aktyor qoidasidan qat'i nazar, yozishdan oldin surat olish. */
   forceSnapshot?: boolean;
   revisionReason?: RevisionReason;
+  /**
+   * "Meniki bilan almashtirish" niyati (HTTP `overwrite: true`, `expectedUpdatedAt`siz): joriy holat `overwrite` sababli
+   * suratga olinadi, lekin bir aktyor/kanal/post uchun `OVERWRITE_SNAPSHOT_WINDOW_MS` ichida ko'pi bilan bitta —
+   * takroriy so'rovlar eski revision'larni saqlash chegarasidan siqib chiqarmasin.
+   */
+  overwriteSnapshot?: boolean;
   /** Berilsa, `post.update` o'rniga shu jurnal yozuvi (birlashtirilmasdan) yoziladi. */
   audit?: { action: string; summary: string; meta?: Record<string, unknown> };
 }
@@ -312,11 +321,29 @@ export async function updatePost(
 
     const hasColumnChanges = Object.keys(update).length > 0;
     const now = new Date();
-    if (
-      (hasColumnChanges || tagRows) &&
-      (internal.forceSnapshot || (await shouldSnapshotForUpdate(tx, id, actor, now)))
-    ) {
-      await snapshotPost(tx, locked, actor, internal.revisionReason ?? "update");
+    let forceSnapshot = internal.forceSnapshot ?? false;
+    let snapshotReason: RevisionReason = internal.revisionReason ?? "update";
+    if ((hasColumnChanges || tagRows) && !forceSnapshot && internal.overwriteSnapshot) {
+      const [recent] = await tx
+        .select({ id: postRevisions.id })
+        .from(postRevisions)
+        .where(
+          and(
+            eq(postRevisions.postId, id),
+            eq(postRevisions.reason, "overwrite"),
+            eq(postRevisions.via, actor.via),
+            actor.userId ? eq(postRevisions.createdBy, actor.userId) : isNull(postRevisions.createdBy),
+            gte(postRevisions.createdAt, new Date(now.getTime() - OVERWRITE_SNAPSHOT_WINDOW_MS)),
+          ),
+        )
+        .limit(1);
+      if (!recent) {
+        forceSnapshot = true;
+        snapshotReason = "overwrite";
+      }
+    }
+    if ((hasColumnChanges || tagRows) && (forceSnapshot || (await shouldSnapshotForUpdate(tx, id, actor, now)))) {
+      await snapshotPost(tx, locked, actor, snapshotReason);
     }
     if (hasColumnChanges) {
       update.updatedAt = new Date();

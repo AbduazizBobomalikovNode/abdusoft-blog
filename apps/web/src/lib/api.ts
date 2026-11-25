@@ -1,5 +1,7 @@
 import {
   AdminCommentListResponseSchema,
+  AuditListResponseSchema,
+  TrashListResponseSchema,
   AdminPostDetailSchema,
   AdminPostListResponseSchema,
   AdminPostPreviewSchema,
@@ -24,6 +26,8 @@ import {
   TagWithCountSchema,
   TelegramStatusSchema,
   type AdminCommentListResponse,
+  type AuditListResponse,
+  type TrashListResponse,
   type AdminPostDetail,
   type AdminPostListResponse,
   type AdminPostPreview,
@@ -185,6 +189,49 @@ export async function getAdminPosts(
   });
 
   return parseJson(res, AdminPostListResponseSchema);
+}
+
+export async function getAdminTrash(
+  params: { page?: number; limit?: number },
+  cookieHeader: string | null,
+): Promise<TrashListResponse | null> {
+  const search = new URLSearchParams();
+  if (params.page) search.set("page", String(params.page));
+  if (params.limit) search.set("limit", String(params.limit));
+
+  const res = await apiFetch(`/admin/posts/trash?${search.toString()}`, {
+    cache: "no-store",
+    headers: authHeaders(cookieHeader),
+  });
+
+  return parseJson(res, TrashListResponseSchema);
+}
+
+export async function getAdminAudit(
+  params: {
+    via?: string;
+    action?: string;
+    entityType?: string;
+    entityId?: string;
+    actor?: string;
+    from?: string;
+    to?: string;
+    page?: number;
+    limit?: number;
+  },
+  cookieHeader: string | null,
+): Promise<AuditListResponse | null> {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") search.set(key, String(value));
+  }
+
+  const res = await apiFetch(`/admin/audit?${search.toString()}`, {
+    cache: "no-store",
+    headers: authHeaders(cookieHeader),
+  });
+
+  return parseJson(res, AuditListResponseSchema);
 }
 
 export async function getAdminPost(

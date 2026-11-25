@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Trash2 } from "lucide-react";
 import type { AdminPostStatus, AdminPostTotals } from "@blog/shared";
 import { cn } from "@/lib/utils";
 
@@ -16,10 +17,13 @@ export function PostStatusTabs({
   active,
   totals,
   q,
+  trashCount,
 }: {
-  active: "all" | AdminPostStatus;
+  active: "all" | AdminPostStatus | "trash";
   totals: AdminPostTotals;
   q?: string;
+  /** Berilsa (faqat admin) — oxirida "Savat" bo'limi ko'rsatiladi. */
+  trashCount?: number;
 }) {
   return (
     <div className="flex flex-wrap gap-1.5 border-b border-border pb-3">
@@ -46,6 +50,21 @@ export function PostStatusTabs({
           </Link>
         );
       })}
+      {trashCount !== undefined ? (
+        <Link
+          href="/admin/postlar?status=trash"
+          data-testid="tab-trash"
+          className={cn(
+            "flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-medium max-md:min-h-11",
+            active === "trash"
+              ? "border-foreground bg-foreground text-background"
+              : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+          )}
+        >
+          <Trash2 className="size-3.5" aria-hidden="true" />
+          Savat <span className="opacity-60">{trashCount}</span>
+        </Link>
+      ) : null}
     </div>
   );
 }

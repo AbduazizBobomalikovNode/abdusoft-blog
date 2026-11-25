@@ -2,6 +2,14 @@
 
 import type {
   AcceptStaffInviteResponse,
+  AuditListQuery,
+  AuditListResponse,
+  PostConflictResponse,
+  PostRevision,
+  PostRevisionListResponse,
+  RestoreRevisionBody,
+  RestoreRevisionResponse,
+  TrashListResponse,
   AdminCommentListResponse,
   AdminPostDetail,
   BansListResponse,
@@ -48,6 +56,8 @@ export class AdminApiError extends Error {
     public fields?: Record<string, string>,
     /** 422 (Telegram cheklovlari) javobida — tekshiruv hisoboti. */
     public preflight?: ChannelPreflightResponse,
+    /** Server javobining tanasi (xato bo'lganda) — masalan `409` konkurensiya javobi (`updatedAt`, `updatedBy`, `via`). */
+    public data?: unknown,
   ) {
     super(message);
     this.name = "AdminApiError";
@@ -64,6 +74,37 @@ interface LifecycleSummary {
   updatedAt: string;
   /** Faqat `sendToChannel: true` so'ralganda — belgilangan versiyani kanalga yuborish natijasi. */
   channelSend?: PublishChannelSendResult;
+}
+
+/** Ixtiyoriy "optimistic concurrency" tokeni: berilsa serverga `expectedUpdatedAt` sifatida yuboriladi. */
+export interface ConcurrencyArg {
+  expectedUpdatedAt?: string;
+}
+
+/**
+ * `409` javobi POST/PATCH konkurensiya to'qnashuvi bo'lsa (tanada `updatedAt` bor) — uni qaytaradi.
+ * Boshqa `409`lar (band slug, "chop etilgan postni o'chirib bo'lmaydi") `null` beradi.
+ */
+export function asPostConflict(error: unknown): PostConflictResponse | null {
+  if (!(error instanceof AdminApiError) || error.status !== 409) return null;
+  const data = error.data;
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.updatedAt !== "string") return null;
+  const by = record.updatedBy;
+  const updatedBy =
+    by && typeof by === "object" && typeof (by as Record<string, unknown>).id === "string"
+      ? {
+          id: (by as { id: string }).id,
+          name: typeof (by as { name?: unknown }).name === "string" ? (by as { name: string }).name : null,
+        }
+      : null;
+  return {
+    error: typeof record.error === "string" ? record.error : error.message,
+    updatedAt: record.updatedAt,
+    updatedBy,
+    via: typeof record.via === "string" ? record.via : null,
+  };
 }
 
 async function adminJson<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -114,7 +155,7 @@ async function adminJson<T>(path: string, options: RequestInit = {}): Promise<T>
       data && typeof data === "object" && "preflight" in data && data.preflight && typeof data.preflight === "object"
         ? (data.preflight as ChannelPreflightResponse)
         : undefined;
-    throw new AdminApiError(res.status, message, fields, preflight);
+    throw new AdminApiError(res.status, message, fields, preflight, data);
   }
 
   return data as T;
@@ -124,6 +165,11 @@ function jsonBody(body: unknown): RequestInit {
   return { headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
+/** Tanasiz POST (eski xatti-harakat) yoki faqat `expectedUpdatedAt` bilan POST. */
+function postWithToken(opts?: ConcurrencyArg): RequestInit {
+  return opts?.expectedUpdatedAt ? { method: "POST", ...jsonBody({ expectedUpdatedAt: opts.expectedUpdatedAt }) } : { method: "POST" };
+}
+
 export const adminApi = {
   createPost: (title?: string) =>
     adminJson<CreatePostResponse>("/admin/posts", { method: "POST", ...jsonBody({ title }) }),
@@ -131,25 +177,73 @@ export const adminApi = {
   updatePost: (id: string, body: UpdatePostBody) =>
     adminJson<UpdatePostResponse>(`/admin/posts/${id}`, { method: "PATCH", ...jsonBody(body) }),
 
-  publishPost: (id: string, opts?: { sendToChannel?: boolean }) =>
+  publishPost: (id: string, opts?: { sendToChannel?: boolean } & ConcurrencyArg) =>
     adminJson<LifecycleSummary>(
       `/admin/posts/${id}/publish`,
-      opts?.sendToChannel ? { method: "POST", ...jsonBody({ sendToChannel: true }) } : { method: "POST" },
+      opts?.sendToChannel || opts?.expectedUpdatedAt
+        ? {
+            method: "POST",
+            ...jsonBody({
+              ...(opts.sendToChannel ? { sendToChannel: true } : {}),
+              ...(opts.expectedUpdatedAt ? { expectedUpdatedAt: opts.expectedUpdatedAt } : {}),
+            }),
+          }
+        : { method: "POST" },
     ),
 
-  unpublishPost: (id: string) =>
-    adminJson<LifecycleSummary>(`/admin/posts/${id}/unpublish`, { method: "POST" }),
+  unpublishPost: (id: string, opts?: ConcurrencyArg) =>
+    adminJson<LifecycleSummary>(`/admin/posts/${id}/unpublish`, postWithToken(opts)),
 
-  archivePost: (id: string) =>
-    adminJson<LifecycleSummary>(`/admin/posts/${id}/archive`, { method: "POST" }),
+  archivePost: (id: string, opts?: ConcurrencyArg) =>
+    adminJson<LifecycleSummary>(`/admin/posts/${id}/archive`, postWithToken(opts)),
 
-  schedulePost: (id: string, scheduledAt: string, channelPlan?: ChannelPlan | null) =>
+  schedulePost: (id: string, scheduledAt: string, channelPlan?: ChannelPlan | null, opts?: ConcurrencyArg) =>
     adminJson<LifecycleSummary>(`/admin/posts/${id}/schedule`, {
       method: "POST",
-      ...jsonBody({ scheduledAt, channelPlan: channelPlan ?? null }),
+      ...jsonBody({ scheduledAt, channelPlan: channelPlan ?? null, ...(opts?.expectedUpdatedAt ? { expectedUpdatedAt: opts.expectedUpdatedAt } : {}) }),
     }),
 
-  deletePost: (id: string) => adminJson<{ ok: true }>(`/admin/posts/${id}`, { method: "DELETE" }),
+  /** Postni chiqindi qutisiga ko'chiradi ("Savat") — qaytarish mumkin. */
+  deletePost: (id: string, opts?: ConcurrencyArg) =>
+    adminJson<{ ok: true }>(
+      `/admin/posts/${id}`,
+      opts?.expectedUpdatedAt ? { method: "DELETE", ...jsonBody({ expectedUpdatedAt: opts.expectedUpdatedAt }) } : { method: "DELETE" },
+    ),
+
+  restoreTrashedPost: (id: string) =>
+    adminJson<{ id: string; slug: string; status: string; updatedAt: string; slugRestored: boolean; originalSlug: string }>(
+      `/admin/posts/trash/${id}/restore`,
+      { method: "POST" },
+    ),
+
+  /** Chiqindi qutisidagi postni BUTUNLAY o'chiradi (izohlar va kanal versiyalari ham ketadi). */
+  purgeTrashedPost: (id: string) => adminJson<{ ok: true }>(`/admin/posts/trash/${id}`, { method: "DELETE" }),
+
+  listTrash: (params: { page?: number; limit?: number } = {}) => {
+    const search = new URLSearchParams();
+    if (params.page) search.set("page", String(params.page));
+    if (params.limit) search.set("limit", String(params.limit));
+    return adminJson<TrashListResponse>(`/admin/posts/trash?${search.toString()}`);
+  },
+
+  listRevisions: (postId: string) => adminJson<PostRevisionListResponse>(`/admin/posts/${postId}/revisions`),
+
+  getRevision: (postId: string, revisionId: string) =>
+    adminJson<PostRevision>(`/admin/posts/${postId}/revisions/${revisionId}`),
+
+  restoreRevision: (postId: string, revisionId: string, body: RestoreRevisionBody = {}) =>
+    adminJson<RestoreRevisionResponse>(`/admin/posts/${postId}/revisions/${revisionId}/restore`, {
+      method: "POST",
+      ...jsonBody(body),
+    }),
+
+  listAudit: (params: Partial<AuditListQuery> = {}) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") search.set(key, String(value));
+    }
+    return adminJson<AuditListResponse>(`/admin/audit?${search.toString()}`);
+  },
 
   getPost: (id: string) => adminJson<AdminPostDetail>(`/admin/posts/${id}`),
 
@@ -321,16 +415,28 @@ export const adminApi = {
 
   // --- Xodim (staff) va ko'rib chiqish (review) ---
 
-  submitPost: (id: string) => adminJson<SubmitPostResponse>(`/admin/posts/${id}/submit`, { method: "POST" }),
+  submitPost: (id: string, opts?: ConcurrencyArg) =>
+    adminJson<SubmitPostResponse>(`/admin/posts/${id}/submit`, postWithToken(opts)),
 
-  approvePost: (id: string, opts?: { sendToChannel?: boolean }) =>
+  approvePost: (id: string, opts?: { sendToChannel?: boolean } & ConcurrencyArg) =>
     adminJson<LifecycleSummary>(
       `/admin/posts/${id}/approve`,
-      opts?.sendToChannel ? { method: "POST", ...jsonBody({ sendToChannel: true }) } : { method: "POST" },
+      opts?.sendToChannel || opts?.expectedUpdatedAt
+        ? {
+            method: "POST",
+            ...jsonBody({
+              ...(opts.sendToChannel ? { sendToChannel: true } : {}),
+              ...(opts.expectedUpdatedAt ? { expectedUpdatedAt: opts.expectedUpdatedAt } : {}),
+            }),
+          }
+        : { method: "POST" },
     ),
 
-  requestPostChanges: (id: string, note: string) =>
-    adminJson<LifecycleSummary>(`/admin/posts/${id}/request-changes`, { method: "POST", ...jsonBody({ note }) }),
+  requestPostChanges: (id: string, note: string, opts?: ConcurrencyArg) =>
+    adminJson<LifecycleSummary>(`/admin/posts/${id}/request-changes`, {
+      method: "POST",
+      ...jsonBody({ note, ...(opts?.expectedUpdatedAt ? { expectedUpdatedAt: opts.expectedUpdatedAt } : {}) }),
+    }),
 
   createStaffInvite: (note?: string) =>
     adminJson<CreateStaffInviteResponse>("/admin/staff/invites", { method: "POST", ...jsonBody({ note }) }),

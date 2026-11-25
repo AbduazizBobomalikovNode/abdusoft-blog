@@ -11,7 +11,8 @@ export type RevisionReason =
   | "archive"
   | "schedule"
   | "trash"
-  | "restore-revision";
+  | "restore-revision"
+  | "overwrite";
 
 async function tagSlugsOf(executor: Executor, postId: string): Promise<string[]> {
   const rows = await executor

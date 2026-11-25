@@ -186,6 +186,9 @@ describe("get_post", () => {
     expect(post.channel).toHaveProperty("telegram");
     const [row] = await db.select().from(schema.posts).where(eq(schema.posts.id, postA));
     expect(post.updatedAt).toBe(row!.updatedAt.toISOString());
+    // "Oxirgi o'zgartirgan manba" (main'dagi GET /admin/posts/:id bilan bir xil qiymat) get_post'da ham bor.
+    expect(post).toHaveProperty("updatedVia");
+    expect(post.updatedVia).toBe(row!.updatedVia ?? null);
 
     expect(r.json.contentFormat).toBe("plain_text+tiptap_json");
     expect(r.json.contentNote).toMatch(/NOT Markdown/);
