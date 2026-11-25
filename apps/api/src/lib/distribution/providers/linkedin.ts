@@ -1,7 +1,7 @@
 import type { ChannelCheck } from "@blog/shared";
 import { DistributionError } from "../errors.js";
 import { asRecord, formBody, HostClient, str, type HttpResponse, type ProviderDeps } from "../http.js";
-import { check, fmtBytes, isPublicHttpsUrl, textCheck } from "../checks.js";
+import { assertPublicHttpsUrl, check, fmtBytes, isPublicHttpsUrl, textCheck } from "../checks.js";
 import { codePointLength, fitParts, normalizeUzbekApostrophes, toHashtags } from "../text.js";
 import { DAY_MS, getTokenStatus, type TokenPolicy } from "../token-status.js";
 import type {
@@ -48,6 +48,9 @@ export const LINKEDIN_AUTHORIZE_URL = "https://www.linkedin.com/oauth/v2/authori
 export const LINKEDIN_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
 /** Faqat shu hostlarga so'rov ketadi. `www.linkedin.com` — rasm yuklash (`dms-uploads`) URL'i uchun. */
 export const LINKEDIN_HOSTS = ["api.linkedin.com", "www.linkedin.com"] as const;
+/** Yuklash URL'i (`initializeUpload` javobi): hujjat misoli `https://www.linkedin.com/dms-uploads/...` — Authorization faqat shunga yuboriladi. */
+export const LINKEDIN_UPLOAD_HOST = "www.linkedin.com";
+export const LINKEDIN_UPLOAD_PATH_PREFIX = "/dms-uploads/";
 
 /**
  * `Linkedin-Version` (YYYYMM). Hujjat default monikeri `li-lms-2026-11`. LinkedIn versiyalarni ~12 oydan keyin
@@ -91,6 +94,24 @@ export function escapeLittle(text: string): string {
   return text.replace(/[\\|{}@[\]()<>#*_~]/g, (c) => `\\${c}`);
 }
 
+/**
+ * Hashtag'lar (`#Tag`) little formatda `HashtagElement ::= '#' SINGLE_WORD` — oddiy `#tag` shaklida YOZILADI (Posts API sahifasidagi
+ * "Hashtag a keyword" misoli: `"commentary": "Follow best practices #coding"`), shu sabab ular escape QILINMAYDI; qolgan matndagi
+ * ajratilgan belgilar escape qilinadi. `{hashtag|\\#|tag}` shabloni faqat GET javobida ko'rsatilgan — yuborishda ishlatilmaydi.
+ * UNVERIFIED (birinchi jonli sinov): (1) hashtag'lar haqiqatan havolaga aylanishi; (2) oddiy matndagi URL escape qilingach
+ * (`_`, `~`, `(` ... oldidan `\\`) bosiladigan holda qolishi — hujjat faqat "barcha ajratilgan belgilar escape qilinsin" deydi.
+ */
+export function escapeCommentary(text: string): string {
+  const tag = /(?<![\p{L}\p{N}_\\])#[\p{L}\p{N}]+/gu;
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(tag)) {
+    out += escapeLittle(text.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + escapeLittle(text.slice(last));
+}
+
 export interface LinkedInPostBodyInput {
   authorUrn: string;
   commentary: string;
@@ -101,7 +122,7 @@ export interface LinkedInPostBodyInput {
 export function buildLinkedInPostBody(input: LinkedInPostBodyInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     author: input.authorUrn,
-    commentary: escapeLittle(input.commentary),
+    commentary: escapeCommentary(input.commentary),
     visibility: "PUBLIC",
     distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
     lifecycleState: "PUBLISHED",
@@ -219,7 +240,7 @@ export function createLinkedInProvider(options: LinkedInOptions = {}): Distribut
 
   const provider: DistributionProvider = {
     id: "linkedin",
-    capabilities: { text: true, link: true, image: true, edit: false, delete: true, nativeScheduling: false },
+    capabilities: { text: true, link: true, image: true, edit: false, delete: true, nativeScheduling: false, notes: { edit: "Posts API partial update faqat commentary/CTA; bu modulda amalga oshirilmagan" } },
     limits: { textMax: LINKEDIN_COMMENTARY_MAX, textUnit: "characters", imageMaxBytes: null, imageMimes: LINKEDIN_IMAGE_MIMES },
     tokenPolicy: LINKEDIN_TOKEN_POLICY,
     auth: {
@@ -297,13 +318,14 @@ export function createLinkedInProvider(options: LinkedInOptions = {}): Distribut
     async publish(ctx: ProviderContext, input: PublishInput): Promise<PublishResult> {
       const { deps, account } = ctx;
       const mode = input.linkMode ?? "article";
+      const postUrl = assertPublicHttpsUrl(input.post.url, "Maqola havolasi");
       const http = client(deps, account);
       const ref = refine(nowOf(deps));
       const authorUrn = `urn:li:person:${account.externalId}`;
-      let thumbnailUrn: string | undefined;
+      let thumbnailUrn: string | undefined = mode === "article" ? input.resume?.imageUrn : undefined;
 
-      if (mode === "article") {
-        if (!input.image) throw new DistributionError({ kind: "validation_rejected", message: "Article posti uchun rasm kerak" });
+      if (mode === "article" && !thumbnailUrn) {
+        if (!input.image) throw new DistributionError({ kind: "validation_rejected", message: "Article posti uchun rasm kerak (yoki resume.imageUrn)" });
         // 1) Yuklashni boshlash (xavfsiz — qayta urinish yetim yozuv qoldirishi mumkin, zarar yo'q).
         const init = await http.request({
           method: "POST",
@@ -312,12 +334,17 @@ export function createLinkedInProvider(options: LinkedInOptions = {}): Distribut
           body: JSON.stringify({ initializeUploadRequest: { owner: authorUrn } }),
           mode: "safe_write",
         });
-        if (init.status < 200 || init.status >= 300) throw http.fail(init, "safe_write", ref);
+        if (init.status < 200 || init.status >= 300) throw http.fail(init, "safe_write", ref).with({ step: "init" });
         const value = asRecord(asRecord(init.json).value);
         const uploadUrl = str(value.uploadUrl);
-        thumbnailUrn = str(value.image);
-        if (!uploadUrl || !thumbnailUrn) throw new DistributionError({ kind: "validation_rejected", message: "LinkedIn yuklash URL'ini qaytarmadi" });
-        // 2) Baytlarni yuklash: PUT, Authorization bilan (vector-asset-api "Upload the Image"). URL host allow-list orqali tekshiriladi.
+        const imageUrn = str(value.image);
+        if (!uploadUrl || !imageUrn) throw new DistributionError({ kind: "validation_rejected", step: "init", message: "LinkedIn yuklash URL'ini qaytarmadi" });
+        // Authorization sarlavhasi faqat kutilgan host VA yo'l prefiksiga yuboriladi (www.linkedin.com/dms-uploads/).
+        const upUrl = new URL(uploadUrl);
+        if (upUrl.protocol !== "https:" || upUrl.hostname !== LINKEDIN_UPLOAD_HOST || !upUrl.pathname.startsWith(LINKEDIN_UPLOAD_PATH_PREFIX)) {
+          throw new DistributionError({ kind: "validation_rejected", step: "init", message: "LinkedIn yuklash URL'i kutilgan manzilda emas — Authorization yuborilmadi" });
+        }
+        // 2) Baytlarni yuklash: PUT, Authorization bilan (vector-asset-api "Upload the Image").
         const up = await http.request({
           method: "PUT",
           url: uploadUrl,
@@ -325,36 +352,42 @@ export function createLinkedInProvider(options: LinkedInOptions = {}): Distribut
           body: input.image.bytes,
           mode: "safe_write",
         });
-        if (up.status < 200 || up.status >= 300) throw http.fail(up, "safe_write", ref);
+        if (up.status < 200 || up.status >= 300) throw http.fail(up, "safe_write", ref).with({ step: "upload" }); // rasm hali TAYYOR emas -> partial yo'q
+        thumbnailUrn = imageUrn;
       }
 
-      // 3) Post (create): timeout/5xx = outcome_unknown.
+      // 3) Post (create): timeout/5xx = outcome_unknown. Rasm tayyor — `partial.imageUrn` bilan davom ettirsa bo'ladi.
+      const partial = thumbnailUrn ? { imageUrn: thumbnailUrn } : undefined;
       const body = buildLinkedInPostBody({
         authorUrn,
         commentary: input.text,
         article:
           mode === "article"
             ? {
-                source: input.post.url,
+                source: postUrl,
                 title: input.post.title.slice(0, LINKEDIN_ARTICLE_TITLE_MAX),
                 description: (input.post.excerpt ?? "").slice(0, LINKEDIN_ARTICLE_DESCRIPTION_MAX),
                 thumbnailUrn,
               }
             : undefined,
       });
-      const res = await http.request({
-        method: "POST",
-        url: LINKEDIN_POSTS_URL,
-        headers: linkedInHeaders(account.accessToken, version, { "Content-Type": "application/json" }),
-        body: JSON.stringify(body),
-        mode: "create",
-      });
-      if (res.status !== 201 && !(res.status >= 200 && res.status < 300)) throw http.fail(res, "create", ref);
-      const id = res.headers.get("x-restli-id") ?? str(asRecord(res.json).id);
-      if (!id) {
-        throw new DistributionError({ kind: "outcome_unknown", status: res.status, message: "LinkedIn post yaratdi, lekin id qaytarmadi — qayta urinmang, profilni tekshiring" });
+      try {
+        const res = await http.request({
+          method: "POST",
+          url: LINKEDIN_POSTS_URL,
+          headers: linkedInHeaders(account.accessToken, version, { "Content-Type": "application/json" }),
+          body: JSON.stringify(body),
+          mode: "create",
+        });
+        if (res.status < 200 || res.status >= 300) throw http.fail(res, "create", ref);
+        const id = res.headers.get("x-restli-id") ?? str(asRecord(res.json).id);
+        if (!id) {
+          throw new DistributionError({ kind: "outcome_unknown", status: res.status, message: "LinkedIn post yaratdi, lekin id qaytarmadi — qayta urinmang, profilni tekshiring" });
+        }
+        return { externalId: id, url: linkedInPostUrl(id) };
+      } catch (e) {
+        throw e instanceof DistributionError ? e.with({ step: "publish", partial }) : e;
       }
-      return { externalId: id, url: linkedInPostUrl(id) };
     },
 
     async remove(ctx: ProviderContext, externalId: string): Promise<void> {

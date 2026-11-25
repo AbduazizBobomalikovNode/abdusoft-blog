@@ -78,7 +78,7 @@ describe("LinkedIn publish", () => {
     expect(post?.headers["x-restli-protocol-version"]).toBe("2.0.0");
     const b = bodyJson(post!) as { commentary: string; content: { article: Record<string, string> }; author: string };
     expect(b.author).toBe("urn:li:person:abc123");
-    expect(b.commentary).toBe("Salom\\_dunyo \\#x");
+    expect(b.commentary).toBe("Salom\\_dunyo #x"); // hashtag oddiy #tag, qolgani escape
     expect(b.content.article).toEqual({ source: POST_FIXTURE.url, title: POST_FIXTURE.title, description: POST_FIXTURE.excerpt, thumbnail: "urn:li:image:C4E10" });
   });
   it("text variant: single POST, URL in commentary, no image calls", async () => {
