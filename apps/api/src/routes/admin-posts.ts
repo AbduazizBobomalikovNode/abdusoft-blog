@@ -594,9 +594,10 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
     }
 
-    // `snapshot` — maydon emas, parametr: xodim cheklovi va jurnal "maydonlar" ro'yxatiga kirmaydi.
-    const { snapshot, ...fields } = parsed.data;
-    const result = await updatePost(actor, id, fields, snapshot ? { forceSnapshot: true } : {});
+    // `overwrite` — maydon emas, parametr: xodim cheklovi va jurnal "maydonlar" ro'yxatiga kirmaydi. Faqat `expectedUpdatedAt`siz
+    // (haqiqiy "almashtirish") va tezlik cheklovi bilan hisobga olinadi (qarang `OVERWRITE_SNAPSHOT_WINDOW_MS`).
+    const { overwrite, ...fields } = parsed.data;
+    const result = await updatePost(actor, id, fields, overwrite && !fields.expectedUpdatedAt ? { overwriteSnapshot: true } : {});
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(result.data);
   })

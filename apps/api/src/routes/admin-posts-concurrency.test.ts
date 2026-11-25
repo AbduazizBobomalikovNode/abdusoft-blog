@@ -277,22 +277,46 @@ describe("fields the admin UI relies on for the conflict token and the 'changed 
   });
 });
 
-describe("PATCH snapshot flag (used by the editor's 'overwrite with mine')", () => {
-  it("forces a revision of the current state even for the same actor inside the snapshot window; it is not an editable field", async () => {
+describe("PATCH overwrite flag (used by the editor's 'overwrite with mine')", () => {
+  const revisions = async (id: string) =>
+    db.select().from(schema.postRevisions).where(eq(schema.postRevisions.postId, id)).orderBy(schema.postRevisions.seq);
+
+  it("takes a snapshot of the current state with reason 'overwrite' even for the same actor inside the snapshot window", async () => {
     const { id } = await createDraft();
-    const count = async () => (await db.select().from(schema.postRevisions).where(eq(schema.postRevisions.postId, id))).length;
     expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "Bir" })).status).toBe(200);
-    const afterFirst = await count();
+    const afterFirst = (await revisions(id)).length;
     expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "Ikki" })).status).toBe(200);
-    expect(await count()).toBe(afterFirst); // oddiy tahrir — bir oynada birlashadi
+    expect((await revisions(id)).length).toBe(afterFirst); // oddiy tahrir — bir oynada birlashadi
 
-    expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "Uch", snapshot: true })).status).toBe(200);
-    expect(await count()).toBe(afterFirst + 1);
-    const latest = (await db.select().from(schema.postRevisions).where(eq(schema.postRevisions.postId, id)).orderBy(schema.postRevisions.seq)).at(-1)!;
-    expect(latest.title).toBe("Ikki");
+    expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "Uch", overwrite: true })).status).toBe(200);
+    const all = await revisions(id);
+    expect(all.length).toBe(afterFirst + 1);
+    expect(all.at(-1)).toMatchObject({ title: "Ikki", reason: "overwrite" });
+  });
 
-    // Xodim ham yubora oladi: bu "maydon" emas (403 bermaydi).
+  it("is rate limited: repeated overwrite requests do not flush history (at most one forced snapshot per actor per window)", async () => {
+    const { id } = await createDraft();
+    await patch(`/admin/posts/${id}`, admin.cookie, { title: "A" });
+    for (let i = 0; i < 6; i++) {
+      expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: `B${i}`, overwrite: true })).status).toBe(200);
+    }
+    const forced = (await revisions(id)).filter((r) => r.reason === "overwrite");
+    expect(forced).toHaveLength(1);
+  });
+
+  it("is ignored when expectedUpdatedAt is sent (that is a normal checked save, not an overwrite)", async () => {
+    const { id } = await createDraft();
+    await patch(`/admin/posts/${id}`, admin.cookie, { title: "A" });
+    const before = (await revisions(id)).length;
+    const token = await currentUpdatedAt(id);
+    expect((await patch(`/admin/posts/${id}`, admin.cookie, { title: "B", overwrite: true, expectedUpdatedAt: token })).status).toBe(200);
+    expect((await revisions(id)).length).toBe(before);
+  });
+
+  it("is not an editable field: staff may send it on their own draft, and it never reaches the audit fields", async () => {
     const mine = await createDraft(staff.cookie);
-    expect((await patch(`/admin/posts/${mine.id}`, staff.cookie, { title: "Xodim", snapshot: true })).status).toBe(200);
+    expect((await patch(`/admin/posts/${mine.id}`, staff.cookie, { title: "Xodim", overwrite: true })).status).toBe(200);
+    const audit = await db.select().from(schema.auditLog).where(eq(schema.auditLog.entityId, mine.id));
+    expect(JSON.stringify(audit.map((row) => row.meta))).not.toContain("overwrite");
   });
 });
