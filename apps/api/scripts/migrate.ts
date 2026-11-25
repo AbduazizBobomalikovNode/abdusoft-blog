@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
 import "dotenv/config";
+import { lockTimeoutStartupOption, resolveMigrateLockTimeoutMs } from "../src/lib/migrate-options.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(dirname, "../drizzle");
@@ -29,7 +30,10 @@ async function main() {
     const { drizzle } = await import("drizzle-orm/node-postgres");
     const { migrate } = await import("drizzle-orm/node-postgres/migrator");
     const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    // Band production jadvalida `ALTER TABLE` lock kutib, barcha so'rovlarni ortidan navbatga qo'ymasin:
+    // `lock_timeout` o'tsa migratsiya xato bilan to'xtaydi (deploy restart'gacha to'xtaydi — sayt eski kodda ishlayveradi).
+    const lockTimeoutMs = resolveMigrateLockTimeoutMs(process.env.MIGRATE_LOCK_TIMEOUT_MS);
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, options: lockTimeoutStartupOption(lockTimeoutMs) });
     const db = drizzle(pool);
     await migrate(db, { migrationsFolder });
     await backfillPostCreatedBy(db);
