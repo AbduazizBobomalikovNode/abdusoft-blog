@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { config } from "../../config.js";
@@ -27,7 +28,8 @@ export function buildMcpServer(ctx: McpToolContext): McpServer {
       {
         title: def.title,
         description: def.description,
-        inputSchema: def.inputSchema,
+        // Qat'iy: noma'lum argumentlar rad etiladi (JSON sxemada additionalProperties:false).
+        inputSchema: z.object(def.inputSchema).strict(),
         annotations: { title: def.title, ...def.annotations },
       },
       async (args: unknown) => runTool(def, args, ctx),

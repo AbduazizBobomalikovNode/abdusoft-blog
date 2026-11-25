@@ -38,9 +38,9 @@ export async function runTool<Shape extends z.ZodRawShape>(
       );
     }
 
-    const parsed = z.object(def.inputSchema).safeParse(rawArgs ?? {});
+    const parsed = z.object(def.inputSchema).strict().safeParse(rawArgs ?? {});
     if (!parsed.success) {
-      throw new ToolError("invalid_request", `Invalid arguments: ${describeZodError(parsed.error)}`, "Fix the arguments and call the tool again.");
+      throw new ToolError("invalid_input", `Invalid arguments: ${describeZodError(parsed.error)}`, "Fix the arguments and call the tool again.");
     }
 
     const output = await def.handler(parsed.data as z.infer<z.ZodObject<Shape>>, ctx);

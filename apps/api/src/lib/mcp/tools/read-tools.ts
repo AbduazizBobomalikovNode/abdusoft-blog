@@ -14,6 +14,7 @@ import { config } from "../../../config.js";
 import { findLivePostIdBySlug, getPostDetail, getRevision, listPosts, listRevisions, listTrash } from "../../posts/index.js";
 import { getSettings } from "../../settings.js";
 import { docToReadableText } from "../doc-text.js";
+import { UNTRUSTED_DESCRIPTION_PREFIX as U, untrusted } from "./untrusted.js";
 import { defineTool, ToolError, unwrap, type McpToolDef, type ToolOutput } from "./types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
@@ -36,7 +37,7 @@ async function resolvePostId(args: { id?: string | undefined; slug?: string | un
     if (id) return id;
     throw new ToolError("not_found", `No live post with slug '${args.slug}'.`, "Use list_posts (query) to find the post; trashed posts are not addressable here.");
   }
-  throw new ToolError("invalid_request", "Provide either 'id' or 'slug'.", "Use list_posts to find the post first.");
+  throw new ToolError("invalid_input", "Provide either 'id' or 'slug'.", "Use list_posts to find the post first.");
 }
 
 const NOT_FOUND_POST = "Use list_posts to find a valid post id. Trashed posts are only visible through list_trash.";
@@ -56,8 +57,11 @@ function contentFor(
   };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuidField = (what: string) => z.string().regex(UUID_RE, `must be a UUID (${what})`);
+
 const idOrSlug = {
-  id: z.string().min(1).optional().describe("Post id (UUID) from list_posts."),
+  id: uuidField("post id from list_posts").optional().describe("Post id (UUID) from list_posts."),
   slug: z.string().min(1).optional().describe("Post slug, as an alternative to id."),
 };
 
@@ -102,7 +106,7 @@ export const listPostsTool = defineTool({
   name: "list_posts",
   title: "List posts",
   description:
-    "List or search the blog's posts (drafts, scheduled and published ones; never trashed). Filter by status and/or search words in title and text. " +
+    U + "List or search the blog's posts (drafts, scheduled and published ones; never trashed). Filter by status and/or search words in title and text. " +
     "Returns compact rows (id, slug, title, status, dates, tags, counts) newest-updated first; use get_post to read one post. Paginated: follow nextPage.",
   scope: "blog:read",
   inputSchema: {
@@ -115,7 +119,7 @@ export const listPostsTool = defineTool({
   kind: "read",
   async handler(args, ctx) {
     const result = await listPosts(ctx.actor, { status: args.status, q: args.query, page: args.page, limit: args.limit });
-    return { data: paged(result), listKey: "items" };
+    return { data: { ...paged(result), ...untrusted(["items[].title", "items[].reviewNote"]) }, listKey: "items" };
   },
 });
 
@@ -123,7 +127,7 @@ export const getPost = defineTool({
   name: "get_post",
   title: "Get a post",
   description:
-    "Read one post in full: metadata, settings, tags, review state, Telegram channel status and its content. " +
+    U + "Read one post in full: metadata, settings, tags, review state, Telegram channel status and its content. " +
     "'updatedAt' is the concurrency token that future edit tools require - pass it back unchanged. " +
     "Content comes as readable plain text ('content') and as the exact Tiptap JSON ('document'); use include to receive only one of them.",
   scope: "blog:read",
@@ -145,6 +149,7 @@ export const getPost = defineTool({
           channel: { plan: channelPlan, sendAt: channelSendAt, choice: channelChoice, telegram },
         },
         ...contentFor(contentJson, args.include),
+        ...untrusted(["content", "document", "post.title", "post.excerpt", "post.review.note"]),
       },
       shrink: [
         { key: "document", mode: "drop", note: "The structured 'document' was omitted because the post is very large; call get_post with include='text' or read revisions." },
@@ -172,13 +177,13 @@ export const listComments = defineTool({
   name: "list_comments",
   title: "List comments",
   description:
-    "List comments for moderation, newest first, with counts per status. Filter by status (pending needs review), source, post, search text or date range. " +
+    U + "List comments for moderation, newest first, with counts per status. Filter by status (pending needs review), source, post, search text or date range. " +
     "Comments of trashed posts are never included. Read-only; moderation tools are not available yet.",
   scope: "blog:read",
   inputSchema: {
     status: z.enum(["all", "pending", "visible", "hidden", "deleted"]).default("pending").describe("Comment status (default pending)."),
     source: z.enum(["all", "web", "telegram"]).default("all"),
-    post_id: z.string().min(1).optional().describe("Only comments of this post id."),
+    post_id: uuidField("post id").optional().describe("Only comments of this post id."),
     query: z.string().trim().min(1).max(200).optional().describe("Search in comment text and author name."),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("From date, YYYY-MM-DD (UTC)."),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("To date, YYYY-MM-DD (UTC)."),
@@ -189,7 +194,7 @@ export const listComments = defineTool({
   kind: "read",
   async handler(args) {
     if (args.from && args.to && args.from > args.to) {
-      throw new ToolError("invalid_request", "'from' must not be after 'to'.");
+      throw new ToolError("invalid_input", "'from' must not be after 'to'.");
     }
     const query = AdminCommentListQuerySchema.parse({
       status: args.status,
@@ -203,24 +208,30 @@ export const listComments = defineTool({
     });
     const result = await listAdminComments(query);
     return {
-      data: paged({
-        ...result,
-        items: result.items.map((c) => ({
-          id: c.id,
-          postId: c.postId,
-          postSlug: c.postSlug,
-          postTitle: c.postTitle,
-          parentId: c.parentId,
-          authorName: c.authorName,
-          authorIsAdmin: c.authorIsAdmin,
-          source: c.source,
-          status: c.status,
-          body: c.body.length > 1000 ? `${c.body.slice(0, 1000)}…` : c.body,
-          likes: c.likes,
-          dislikes: c.dislikes,
-          createdAt: c.createdAt,
-        })),
-      }),
+      data: {
+        ...paged({
+          ...result,
+          items: result.items.map((c) => ({
+            id: c.id,
+            postId: c.postId,
+            postSlug: c.postSlug,
+            parentId: c.parentId,
+            authorIsAdmin: c.authorIsAdmin,
+            source: c.source,
+            status: c.status,
+            likes: c.likes,
+            dislikes: c.dislikes,
+            createdAt: c.createdAt,
+            // Uchinchi shaxs yozgan matn — alohida, aniq belgilangan maydonda.
+            untrusted: {
+              authorName: c.authorName,
+              postTitle: c.postTitle,
+              body: c.body.length > 1000 ? `${c.body.slice(0, 1000)}…` : c.body,
+            },
+          })),
+        }),
+        ...untrusted(["items[].untrusted"]),
+      },
       listKey: "items",
     };
   },
@@ -232,21 +243,21 @@ export const getSiteStats = defineTool({
   name: "get_site_stats",
   title: "Site statistics",
   description:
-    "Site-wide statistics for a period: totals (views, likes, comments, published posts), the previous period for comparison, a daily series, top posts, recent comments and pending-comment count. Read-only.",
+    U + "Site-wide statistics for a period: totals (views, likes, comments, published posts), the previous period for comparison, a daily series, top posts, recent comments and pending-comment count. Read-only.",
   scope: "blog:read",
   inputSchema: { range: rangeField.describe("Period: 7d, 30d, 90d or all (default 7d).") },
   annotations: READ_ONLY,
   kind: "read",
   async handler(args) {
     const stats = await getStatsOverview(StatsRangeSchema.parse(args.range));
-    return { data: { ...stats }, shrink: [{ key: "series", mode: "drop", note: "The daily 'series' was omitted because it is too large." }] };
+    return { data: { ...stats, ...untrusted(["topPosts[].title", "recentComments[].authorName", "recentComments[].body", "recentComments[].postTitle"]) }, shrink: [{ key: "series", mode: "drop", note: "The daily 'series' was omitted because it is too large." }] };
   },
 });
 
 export const getPostStats = defineTool({
   name: "get_post_stats",
   title: "Post statistics",
-  description: "Statistics of one post for a period: views, reactions, comments, daily series, all-time counters and recent comments. Read-only.",
+  description: U + "Statistics of one post for a period: views, reactions, comments, daily series, all-time counters and recent comments. Read-only.",
   scope: "blog:read",
   inputSchema: { ...idOrSlug, range: rangeField.describe("Period: 7d, 30d, 90d or all (default 7d).") },
   annotations: READ_ONLY,
@@ -255,7 +266,7 @@ export const getPostStats = defineTool({
     const id = await resolvePostId(args);
     const stats = await getPostStatsView(id, StatsRangeSchema.parse(args.range));
     if (!stats) throw new ToolError("not_found", "Post not found.", NOT_FOUND_POST);
-    return { data: { ...stats }, shrink: [{ key: "series", mode: "drop", note: "The daily 'series' was omitted because it is too large." }] };
+    return { data: { ...stats, ...untrusted(["post.title", "recentComments[].authorName", "recentComments[].body", "recentComments[].postTitle"]) }, shrink: [{ key: "series", mode: "drop", note: "The daily 'series' was omitted because it is too large." }] };
   },
 });
 
@@ -263,7 +274,7 @@ export const listPostRevisions = defineTool({
   name: "list_post_revisions",
   title: "List post revisions",
   description:
-    "List the saved revision history of a post (newest first, without content): id, time, who and via what changed it, reason and the title/status at that time. Use get_post_revision to read one.",
+    U + "List the saved revision history of a post (newest first, without content): id, time, who and via what changed it, reason and the title/status at that time. Use get_post_revision to read one.",
   scope: "blog:read",
   inputSchema: { ...idOrSlug },
   annotations: READ_ONLY,
@@ -271,18 +282,18 @@ export const listPostRevisions = defineTool({
   async handler(args, ctx) {
     const id = await resolvePostId(args);
     const result = unwrap(await listRevisions(ctx.actor, id), { notFound: NOT_FOUND_POST });
-    return { data: { postId: id, items: result.items, total: result.items.length }, listKey: "items" };
+    return { data: { postId: id, items: result.items, total: result.items.length, ...untrusted(["items[].title"]) }, listKey: "items" };
   },
 });
 
 export const getPostRevision = defineTool({
   name: "get_post_revision",
   title: "Get a post revision",
-  description: "Read one saved revision of a post with its content (readable text and/or the Tiptap JSON). Read-only; restoring is not available yet.",
+  description: U + "Read one saved revision of a post with its content (readable text and/or the Tiptap JSON). Read-only; restoring is not available yet.",
   scope: "blog:read",
   inputSchema: {
     ...idOrSlug,
-    revision_id: z.string().min(1).describe("Revision id from list_post_revisions."),
+    revision_id: uuidField("revision id from list_post_revisions").describe("Revision id from list_post_revisions."),
     include: z.enum(["both", "text", "document"]).default("both"),
   },
   annotations: READ_ONLY,
@@ -294,7 +305,7 @@ export const getPostRevision = defineTool({
     });
     const { contentJson, ...meta } = revision;
     return {
-      data: { revision: meta, ...contentFor(contentJson, args.include) },
+      data: { revision: meta, ...contentFor(contentJson, args.include), ...untrusted(["content", "document", "revision.title", "revision.excerpt"]) },
       shrink: [
         { key: "document", mode: "drop", note: "The structured 'document' was omitted because it is very large; call again with include='text'." },
         { key: "content", mode: "truncate", note: "'content' was truncated because the revision is very large." },
@@ -306,14 +317,14 @@ export const getPostRevision = defineTool({
 export const listTrashTool = defineTool({
   name: "list_trash",
   title: "List trashed posts",
-  description: "List posts in the trash (most recently deleted first) with who deleted them and when. Trashed posts are not returned by any other tool. Read-only; restoring is not available yet.",
+  description: U + "List posts in the trash (most recently deleted first) with who deleted them and when. Trashed posts are not returned by any other tool. Read-only; restoring is not available yet.",
   scope: "blog:read",
   inputSchema: { page: PAGE, limit: limitField(50, 20) },
   annotations: READ_ONLY,
   kind: "read",
   async handler(args, ctx) {
     const result = unwrap(await listTrash(ctx.actor, { page: args.page, limit: args.limit }));
-    return { data: paged(result), listKey: "items" };
+    return { data: { ...paged(result), ...untrusted(["items[].title"]) }, listKey: "items" };
   },
 });
 
@@ -321,7 +332,7 @@ export const listAuditLog = defineTool({
   name: "list_audit_log",
   title: "List audit log",
   description:
-    "List the audit log of administrative actions (newest first): who did what, via which channel (web, mcp, telegram, scheduler), with a short summary. " +
+    U + "List the audit log of administrative actions (newest first): who did what, via which channel (web, mcp, telegram, scheduler), with a short summary. " +
     "Filter by entity, action, channel or date. Contains no post content or secrets.",
   scope: "blog:read",
   inputSchema: {
@@ -347,8 +358,8 @@ export const listAuditLog = defineTool({
       page: args.page,
       limit: args.limit,
     });
-    if (!parsed.success) throw new ToolError("invalid_request", "Invalid date in 'from' or 'to'.", "Use YYYY-MM-DD or a full ISO timestamp.");
-    return { data: paged(await listAuditEntries(parsed.data)), listKey: "items" };
+    if (!parsed.success) throw new ToolError("invalid_input", "Invalid date in 'from' or 'to'.", "Use YYYY-MM-DD or a full ISO timestamp.");
+    return { data: { ...paged(await listAuditEntries(parsed.data)), ...untrusted(["items[].summary", "items[].meta"]) }, listKey: "items" };
   },
 });
 

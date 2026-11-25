@@ -80,9 +80,9 @@ describe("runTool", () => {
     expect(parse(res)).toEqual({ updated: "p1" });
   });
 
-  it("reports invalid arguments as invalid_request with the offending field", async () => {
+  it("reports invalid arguments as invalid_input with the offending field", async () => {
     const res = await runTool(writeTool, { id: "", title: 5 }, ctxWith(["posts:write"]));
-    expect(parse(res).error.code).toBe("invalid_request");
+    expect(parse(res).error.code).toBe("invalid_input");
     expect(parse(res).error.message).toMatch(/id|title/);
   });
 

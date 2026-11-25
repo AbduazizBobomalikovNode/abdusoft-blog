@@ -51,7 +51,7 @@ export function defineTool<Shape extends z.ZodRawShape>(def: McpToolDef<Shape>):
 
 export type ToolErrorCode =
   | "insufficient_scope"
-  | "invalid_request"
+  | "invalid_input"
   | "not_found"
   | "conflict"
   | "forbidden"
@@ -72,7 +72,7 @@ export class ToolError extends Error {
 }
 
 const KIND_TO_CODE: Record<ServiceErrorKind, ToolErrorCode> = {
-  bad_request: "invalid_request",
+  bad_request: "invalid_input",
   forbidden: "forbidden",
   not_found: "not_found",
   conflict: "conflict",

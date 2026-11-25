@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { config } from "../../config.js";
@@ -13,6 +13,22 @@ import { CHALLENGE_SCOPES } from "./scopes.js";
 import { handleMcpRequest } from "./server.js";
 
 const MAX_MCP_BODY = 1024 * 1024;
+
+const allowedOrigins = new Set(
+  [config.WEB_ORIGIN, ...config.MCP_ALLOWED_ORIGINS.split(",")].map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean),
+);
+
+/**
+ * `Origin` sarlavhasi bo'lmasa (Claude serveri, Claude Code, curl) — o'tadi. Bor bo'lsa (brauzer) ro'yxatda bo'lishi shart:
+ * begona sayt foydalanuvchi brauzeri orqali `/mcp`ga so'rov yubora olmasin (DNS-rebinding/CSRF-ga o'xshash hujumlar).
+ */
+const originGuard: MiddlewareHandler = async (c, next) => {
+  const origin = c.req.header("origin");
+  if (origin && !allowedOrigins.has(origin.replace(/\/+$/, ""))) {
+    return c.json({ jsonrpc: "2.0", error: { code: -32600, message: "Origin not allowed" }, id: null }, 403);
+  }
+  return next();
+};
 
 function jsonRpcError(status: number, code: number, message: string, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }), {
@@ -42,8 +58,6 @@ const guarded = requireMcpAuth(
 /** Ildizdagi (issuer yo'lisiz) alias'lar — ba'zi klientlar shularni ham tekshiradi. Haqiqiy hujjatlar plagin tomonidan beriladi. */
 const WELL_KNOWN_ALIASES: Record<string, string> = {
   "/.well-known/oauth-authorization-server": "/.well-known/oauth-authorization-server/api/auth",
-  "/.well-known/openid-configuration": "/api/auth/.well-known/openid-configuration",
-  "/.well-known/openid-configuration/api/auth": "/api/auth/.well-known/openid-configuration",
 };
 
 /**
@@ -68,6 +82,7 @@ export function mountMcp(app: Hono): void {
 
   app.post(
     MCP_PATH,
+    originGuard,
     rateLimitWrites({ name: "mcp", limit: config.MCP_RATE_LIMIT_MAX, windowSeconds: config.MCP_RATE_LIMIT_WINDOW_SECONDS }),
     bodyLimit({
       maxSize: MAX_MCP_BODY,

@@ -134,7 +134,7 @@ describe("whoami", () => {
     expect(r.json.site.name).toBe("Abdusoft blog");
     expect(r.json.user).toMatchObject({ id: admin.id, email: admin.email, role: "admin" });
     expect(r.json.client.name).toBe("Claude");
-    expect(r.json.grantedScopes).toHaveLength(7);
+    expect(r.json.grantedScopes).toHaveLength(1);
     expect(r.json.tools).toHaveLength(12);
     expect(r.json.tools.every((t: Json) => t.available)).toBe(true);
     expect(r.json.limits).toMatchObject({ resultMaxChars: 100000, maxPageSize: 50, accessTokenTtlSeconds: 900 });
@@ -211,7 +211,7 @@ describe("get_post", () => {
     expect((await call("get_post", { id: postTrashed })).json.error.code).toBe("not_found");
     expect((await call("get_post", { slug: "chiqindi-post" })).json.error.code).toBe("not_found");
     const none = await call("get_post", {});
-    expect(none.json.error.code).toBe("invalid_request");
+    expect(none.json.error.code).toBe("invalid_input");
   });
 });
 
@@ -224,16 +224,18 @@ describe("list_tags / list_comments", () => {
   it("lists pending comments by default (never those of trashed posts), with counts and compact items", async () => {
     const r = await call("list_comments");
     expect(r.json.items).toHaveLength(1);
-    expect(r.json.items[0]).toMatchObject({ postId: postA, postTitle: TITLE_A, authorName: "Mehmon", status: "pending", body: BODY_COMMENT });
+    expect(r.json.items[0]).toMatchObject({ postId: postA, status: "pending", untrusted: { authorName: "Mehmon", postTitle: TITLE_A, body: BODY_COMMENT } });
+    expect(r.json).toMatchObject({ untrusted: true, untrustedFields: ["items[].untrusted"] });
+    expect(r.json.items[0]).not.toHaveProperty("body");
     expect(r.json.items[0]).not.toHaveProperty("bodyHtml");
     expect(r.json.items[0]).not.toHaveProperty("ipHashShort");
     expect(r.json.counts).toMatchObject({ pending: 1, visible: 1, all: 2 });
     const all = await call("list_comments", { status: "all" });
-    expect(all.json.items.map((c: Json) => c.authorName).sort()).toEqual(["Dilnoza", "Mehmon"]);
+    expect(all.json.items.map((c: Json) => c.untrusted.authorName).sort()).toEqual(["Dilnoza", "Mehmon"]);
     expect((await call("list_comments", { query: "foydali" })).json.items).toHaveLength(1);
     expect((await call("list_comments", { query: "Ajoyib" })).json.items).toHaveLength(0);
     expect((await call("list_comments", { status: "all", query: "Ajoyib" })).json.items).toHaveLength(1);
-    expect((await call("list_comments", { from: "2030-01-02", to: "2030-01-01" })).json.error.code).toBe("invalid_request");
+    expect((await call("list_comments", { from: "2030-01-02", to: "2030-01-01" })).json.error.code).toBe("invalid_input");
   });
 });
 
@@ -292,7 +294,7 @@ describe("list_trash, list_media, list_audit_log", () => {
 
     const mcp = await call("list_audit_log", { via: "mcp", entity_type: "mcp" });
     expect(mcp.json.items.some((i: Json) => i.action === "mcp.read" && i.via === "mcp")).toBe(true);
-    expect((await call("list_audit_log", { from: "not-a-date" })).json.error.code).toBe("invalid_request");
+    expect((await call("list_audit_log", { from: "not-a-date" })).json.error.code).toBe("invalid_input");
     expect((await call("list_audit_log", { limit: 2 })).json).toMatchObject({ limit: 2, hasMore: true, nextPage: 2 });
   });
 });
