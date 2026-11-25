@@ -600,10 +600,11 @@ export const UpdatePostBodySchema = z.object({
   /** Ixtiyoriy: oxirgi olingan `updatedAt`; bazadagidan farq qilsa `409` va hech narsa o'zgarmaydi. */
   expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
   /**
-   * Ixtiyoriy: `true` — yozishdan oldin joriy holat (oraliq/aktyor qoidasidan qat'i nazar) revision sifatida saqlanadi.
-   * Admin panel "meniki bilan almashtirish"da ishlatadi: boshqa joyda yozilgan versiya Tarixdan yo'qolmasin. Maydon EMAS.
+   * Ixtiyoriy: `true` — "meniki bilan almashtirish" niyati. `expectedUpdatedAt`siz yuborilganda yozishdan oldin joriy holat
+   * (oraliq/aktyor qoidasidan qat'i nazar) `overwrite` sababli revision sifatida saqlanadi — lekin bir aktyor uchun qisqa
+   * oraliqda (60 soniya) bittadan ortiq emas (tarix cheklovini to'ldirib yubormaslik uchun). Maydon EMAS.
    */
-  snapshot: z.boolean().optional(),
+  overwrite: z.boolean().optional(),
 });
 export type UpdatePostBody = z.infer<typeof UpdatePostBodySchema>;
 
