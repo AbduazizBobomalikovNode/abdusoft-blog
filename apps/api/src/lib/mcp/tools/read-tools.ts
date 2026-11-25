@@ -59,6 +59,9 @@ const INCLUDE_FIELD = config.MCP_WRITE_TOOLS_ENABLED
       )
   : z.enum(["both", "text", "document"]).default("both").describe("Which content form to return (default both).");
 
+/** `get_post_revision` uchun: `main`da bu maydonda tavsif yo'q edi — yozuv kaliti o'chiq bo'lsa shuni saqlaymiz. */
+const INCLUDE_FIELD_REVISION = config.MCP_WRITE_TOOLS_ENABLED ? INCLUDE_FIELD : z.enum(["both", "text", "document"]).default("both");
+
 /** Yozuv vositalari yoqilgan bo'lsa standart — Markdown; o'chiq bo'lsa PR #11 xatti-harakati ("both"). */
 function resolveInclude(include: IncludeMode | undefined): IncludeMode {
   return include ?? (config.MCP_WRITE_TOOLS_ENABLED ? "markdown" : "both");
@@ -353,7 +356,7 @@ export const getPostRevision = defineTool({
   inputSchema: {
     ...idOrSlug,
     revision_id: uuidField("revision id from list_post_revisions").describe("Revision id from list_post_revisions."),
-    include: INCLUDE_FIELD,
+    include: INCLUDE_FIELD_REVISION,
   },
   annotations: READ_ONLY,
   kind: "read",
