@@ -249,9 +249,27 @@ Quyidagilarning barchasi `.env`da ham, `/admin/sozlamalar`da ham sozlanishi mumk
 | Umami | `UMAMI_API_URL`, `UMAMI_API_KEY` yoki `UMAMI_USERNAME`/`UMAMI_PASSWORD`, `NEXT_PUBLIC_UMAMI_*` |
 | Infratuzilma | `TRUST_PROXY` (faqat ishonchli proksi orqasida `true`), `COOKIE_DOMAIN` |
 | Rate limit (faqat env, admin paneldan sozlanmaydi) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/parol endpoint'lari, IP bo'yicha; `AUTH_RATE_LIMIT_ENABLED` (bo'sh = faqat production'da; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = o'chiq), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` yozuv so'rovlari. Oshsa `429` + `Retry-After` |
+| Parolni tiklash (faqat env) | `PASSWORD_RESET_TTL_MINUTES` (default `20`, `10`–`30`) — tiklash havolasi amal qilish muddati; `PASSWORD_RESET_MAX_PER_HOUR` (default `3`, `1`–`10`) — bitta admin hisobi uchun soatiga Telegram xabarlari soni. Tafsilot: [Parolni tiklash](#parolni-tiklash) |
 | Post tarixi (faqat env) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = har tahrirdan oldin) — oddiy tahrirlar (avtosaqlash) shu oraliqdan tez-tez suratga olinmaydi (chop etish/arxiv/rejalashtirish/tiklashdan oldin surat doim olinadi); `POST_REVISION_MAX_PER_POST` (`100`) — bitta postda saqlanadigan revision'lar soni, eng eskilari o'chiriladi |
 | Migratsiya (faqat env) | `MIGRATE_LOCK_TIMEOUT_MS` (default `15000`, `0` = o'chiq) — `pnpm api:migrate` Postgres sessiyasida `lock_timeout`: band jadvalda `ALTER TABLE` lock kutib qolsa migratsiya xato bilan to'xtaydi (deploy restart'gacha to'xtaydi, sayt eski kodda ishlayveradi) |
 | Claude konnektori (MCP) | `MCP_ENABLED` (default `false` — o'chiq bo'lsa API avvalgidek ishlaydi), `MCP_ACCESS_TOKEN_TTL_SECONDS`, `MCP_REFRESH_TOKEN_TTL_DAYS`, `MCP_ALLOWED_REDIRECT_URIS`, `MCP_REGISTRATION_RATE_LIMIT_*`, `MCP_RATE_LIMIT_*` va boshqalar — to'liq ro'yxat, yoqish va ulash: **[docs/claude-connector.md](docs/claude-connector.md)** |
+
+#### Parolni tiklash
+
+Admin parolni unutsa: `/login` → **"Parolni unutdingizmi?"** → email kiritiladi. API **har doim bir xil** neytral javob qaytaradi (hisob bor-yo'qligi ko'rinmaydi). Hisob mavjud bo'lsa, roli `admin` bo'lsa va Telegram bot bilan admin chat sozlangan bo'lsa, bot **shaxsiy admin chatiga** bir martalik havola yuboradi (so'rov vaqti, IP manzil, amal qilish muddati va "agar bu siz bo'lmasangiz — e'tibor bermang" qatori bilan). Havola `/parolni-tiklash` sahifasiga olib boradi: yangi parol (kamida 12 belgi) kiritiladi, muvaffaqiyatda barcha sessiyalar (va yoqilgan bo'lsa Claude konnektori ulanishlari) tugatiladi.
+
+- **Ishonch.** Bu usul Telegram admin chatiga ishonadi: o'sha chatga kira oladigan odam parolni tiklay oladi. Shu sabab havola **faqat shaxsiy (DM) chatga** yuboriladi — `TELEGRAM_ADMIN_CHAT_ID` guruh yoki kanal bo'lsa havola yuborilmaydi (server logida aniq qator chiqadi, so'rovchiga hech narsa o'zgarmaydi). Bot tokenini va chatni himoyalang.
+- **Cheklovlar.** Havola `PASSWORD_RESET_TTL_MINUTES` (20) daqiqa amal qiladi va bir marta ishlaydi; havola amal qilib turganda yangi so'rovlar yangi xabar yubormaydi; bitta hisob uchun soatiga ko'pi bilan `PASSWORD_RESET_MAX_PER_HOUR` (3) ta xabar; IP bo'yicha `AUTH_RATE_LIMIT_*` chegarasi (so'rov, havolani ochish va yangi parol yuborish — uchchalasiga ham). Token jurnalga va logga yozilmaydi; jurnalda faqat "so'raldi" (IP bilan) va "tiklandi" yozuvlari bor.
+- **Xodimlar.** Xodimlarning Telegram bilan bog'lanishi yo'q, shuning uchun "unutdingizmi" formasi ular uchun xabar yubormaydi (javob baribir bir xil). Xodim admindan so'raydi: `/admin/xodimlar` → xodim qatoridagi **kalit** tugmasi bir martalik "yangi parol o'rnatish" havolasini yaratadi (shu muddat, bir marta, jurnalga yoziladi); admin uni xodimga xavfsiz yetkazadi. Admin hisoblari uchun va o'zi uchun bunday havola yaratib bo'lmaydi.
+- **Telegram sozlanmagan bo'lsa** (yoki bot ishlamasa) — serverning o'zida:
+
+  ```bash
+  read -rs NEW_PASSWORD && export NEW_PASSWORD      # parol terminal tarixiga tushmasin
+  pnpm --filter @blog/api exec tsx scripts/reset-password.ts admin@example.com
+  ```
+
+  Skript parolni (12–128 belgi) o'rnatadi, barcha sessiyalarni va ochiq havolalarni bekor qiladi hamda jurnalga yozadi.
+- **Sahifa xavfsizligi.** Token manzildan o'qilgach manzil satridan olib tashlanadi; sahifa tashqi so'rovlar yuklamaydi, `Referrer-Policy: no-referrer`; `/admin/**`, "unutdingizmi" va tiklash sahifalari `frame-ancestors 'none'` + `X-Frame-Options: DENY` bilan iframe'ga olinmaydi.
 
 ### 8. Deploy
 
@@ -622,9 +640,27 @@ Every one of these can be set via `.env` or `/admin/sozlamalar` — **a non-empt
 | Umami | `UMAMI_API_URL`, `UMAMI_API_KEY` or `UMAMI_USERNAME`/`UMAMI_PASSWORD`, `NEXT_PUBLIC_UMAMI_*` |
 | Infrastructure | `TRUST_PROXY` (only `true` behind a trusted proxy), `COOKIE_DOMAIN` |
 | Rate limit (env only, not editable in the admin panel) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/password endpoints, per IP; `AUTH_RATE_LIMIT_ENABLED` (empty = production only; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = off), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` write requests. Exceeding returns `429` + `Retry-After` |
+| Password recovery (env only) | `PASSWORD_RESET_TTL_MINUTES` (default `20`, `10`-`30`) — how long a reset link is valid; `PASSWORD_RESET_MAX_PER_HOUR` (default `3`, `1`-`10`) — Telegram messages per admin account per hour. Details: [Password recovery](#password-recovery) |
 | Post history (env only) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = before every edit) — plain edits (autosave) are not snapshotted more often than this (a snapshot is always taken before publish/archive/schedule/restore); `POST_REVISION_MAX_PER_POST` (`100`) — revisions kept per post, oldest pruned first |
 | Migration (env only) | `MIGRATE_LOCK_TIMEOUT_MS` (default `15000`, `0` = off) — `lock_timeout` for the `pnpm api:migrate` Postgres session: if an `ALTER TABLE` cannot get its lock in time the migration fails fast (the deploy stops before the restart and the site keeps running on the old code) |
 | Claude connector (MCP) | `MCP_ENABLED` (default `false` — with it off the API behaves exactly as before), `MCP_ACCESS_TOKEN_TTL_SECONDS`, `MCP_REFRESH_TOKEN_TTL_DAYS`, `MCP_ALLOWED_REDIRECT_URIS`, `MCP_REGISTRATION_RATE_LIMIT_*`, `MCP_RATE_LIMIT_*` and more — full list, enabling and connecting: **[docs/claude-connector.md](docs/claude-connector.md)** |
+
+#### Password recovery
+
+If the admin forgets the password: `/login` → **"Parolni unutdingizmi?"** (Forgot your password?) → enter the e-mail. The API **always answers the same neutral message** (no account enumeration). If the account exists, has the `admin` role, and the Telegram bot and its admin chat are configured, the bot sends a one-time link to the **private admin chat** (with the request time, the IP address, how long it is valid, and an "if this was not you, ignore it" line). The link opens `/parolni-tiklash`: enter a new password (at least 12 characters); on success all sessions (and Claude connector connections, if enabled) are ended.
+
+- **Trust.** This relies on the Telegram admin chat: whoever can read that chat can reset the password. That is why the link is sent **only to a private (DM) chat** — if `TELEGRAM_ADMIN_CHAT_ID` is a group or channel nothing is sent (a clear line is logged on the server, the requester sees no difference). Protect the bot token and the chat.
+- **Limits.** The link is valid for `PASSWORD_RESET_TTL_MINUTES` (20) minutes and works once; while a link is still valid, new requests do not send another message; at most `PASSWORD_RESET_MAX_PER_HOUR` (3) messages per account per hour; per-IP `AUTH_RATE_LIMIT_*` limits apply to the request, to opening the link and to submitting the new password. The token is never written to logs or the audit log; the audit log only has "requested" (with IP) and "completed" entries.
+- **Staff.** Staff accounts have no Telegram link, so the forgot form sends them nothing (the answer is still identical). A staff member asks the admin: `/admin/xodimlar` → the **key** button on the staff row creates a one-time "set a new password" link (same lifetime, single use, audited) that the admin hands over safely. It cannot be created for admin accounts or for yourself.
+- **If Telegram is not configured** (or the bot is down) — reset on the server itself:
+
+  ```bash
+  read -rs NEW_PASSWORD && export NEW_PASSWORD      # keep it out of shell history
+  pnpm --filter @blog/api exec tsx scripts/reset-password.ts admin@example.com
+  ```
+
+  The script sets the password (12-128 characters), ends all sessions, revokes open links, and writes an audit entry.
+- **Page hardening.** The token is read once and removed from the address bar; the page loads nothing from third parties and sends `Referrer-Policy: no-referrer`; `/admin/**` and the recovery pages send `frame-ancestors 'none'` + `X-Frame-Options: DENY` so they cannot be framed.
 
 ### 8. Deploy
 
