@@ -661,14 +661,14 @@ export const restorePostRevisionTool = defineTool({
   title: "Restore an earlier version of a post",
   description:
     U + "Replace the post's title, excerpt, body, cover, tags and settings with those of a saved revision (ids from list_post_revisions). The CURRENT version is saved as a new revision first, so this is itself undoable. " +
-    "The status is not changed and, by default, the current URL (slug) is kept - set restore_slug=true to also restore the old slug (refused for live posts only if the slug is now taken). expected_updated_at is REQUIRED.",
+    "The status is not changed. For a LIVE post (published/scheduled) the current URL (slug) is kept unless you set restore_slug=true; a draft gets the revision's slug back. expected_updated_at is REQUIRED.",
   scope: "posts:write",
   limit: "edit",
   inputSchema: {
     id: postId,
     revision_id: uuidField("revision id from list_post_revisions"),
     expected_updated_at: expectedUpdatedAtField,
-    restore_slug: z.boolean().optional().describe("Also restore the revision's slug (default false: keep the current URL)."),
+    restore_slug: z.boolean().optional().describe("Also restore the revision's slug for a live post (default false: keep the live URL)."),
   },
   annotations: OVERWRITES,
   kind: "write",
