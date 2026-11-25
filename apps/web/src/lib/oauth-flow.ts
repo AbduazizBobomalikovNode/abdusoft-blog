@@ -84,3 +84,28 @@ export function describeConnectionScopes(scopes: readonly string[]): { labels: s
     offline,
   };
 }
+
+/** Begona (anonim ro'yxatdan o'tgan) klient nomini ko'rsatish uchun: bo'sh joylarni yig'ib, ~60 belgigacha qisqartiradi. */
+export function displayClientName(name: string | null | undefined, max = 60): string {
+  const clean = (name ?? "").replace(/\s+/g, " ").trim();
+  if (!clean) return "Nomsiz ilova";
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
+/** "3 daqiqa oldin" ko'rinishida; noma'lum bo'lsa `null`. */
+export function registeredAgo(iso: string | null | undefined, now: number = Date.now()): string | null {
+  if (!iso) return null;
+  const sec = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+  if (Number.isNaN(sec)) return null;
+  if (sec < 60) return "hozirgina";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} daqiqa oldin`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours} soat oldin`;
+  return `${Math.floor(hours / 24)} kun oldin`;
+}
+
+/** Faqat o'qish ruxsati so'ralganmi (yozish/chop etish/xavfli guruhlarsiz). */
+export function isReadOnlyRequest(groups: readonly { group: string }[]): boolean {
+  return groups.every((group) => group.group === "read");
+}

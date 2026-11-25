@@ -35,6 +35,18 @@ const nextConfig: NextConfig = {
       // yoki custom domen ulangan bo'lsa: { protocol: "https", hostname: "cdn.abdusoft.uz" },
     ],
   },
+  // Kirish va rozilik sahifalari iframe ichida ochilmasin (clickjacking: foydalanuvchini ilovaga ruxsat berishga aldash).
+  // Faqat shu ikki yo'lga ta'sir qiladi.
+  async headers() {
+    const framing = [
+      { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+      { key: "X-Frame-Options", value: "DENY" },
+    ];
+    return [
+      { source: "/login", headers: framing },
+      { source: "/consent", headers: framing },
+    ];
+  },
   async redirects() {
     return [
       {

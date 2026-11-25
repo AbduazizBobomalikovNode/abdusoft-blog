@@ -7,7 +7,15 @@ import { MCP_SCOPE_GROUP_LABELS, type McpScopeGroup } from "@blog/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { authClient } from "@/lib/auth-client";
-import { consentRedirectUrl, consentViewState, rawOAuthQuery, type ConsentViewState } from "@/lib/oauth-flow";
+import {
+  consentRedirectUrl,
+  consentViewState,
+  displayClientName,
+  isReadOnlyRequest,
+  rawOAuthQuery,
+  registeredAgo,
+  type ConsentViewState,
+} from "@/lib/oauth-flow";
 import { site } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
@@ -166,18 +174,45 @@ export default function ConsentPage() {
         </Shell>
       );
     case "ready": {
-      const name = view.info.client?.name ?? "Noma'lum ilova";
+      const name = displayClientName(view.info.client?.name);
       const host = view.info.client?.redirectHost;
+      const kind = view.info.client?.redirectKind ?? "other";
+      const ago = registeredAgo(view.info.client?.registeredAt);
+      const readOnly = isReadOnlyRequest(view.groups);
       return (
-        <Shell
-          {...key(
-            <ShieldCheck className="size-5" aria-hidden="true" />,
-            `${name} blogingizga ulanmoqchi`,
-            host ? `Qaytish manzili: ${host}` : undefined,
-          )}
-        >
+        <Shell {...key(<ShieldCheck className="size-5" aria-hidden="true" />, "Ilovani blogingizga ulash")}>
           <Card>
             <CardContent className="flex flex-col gap-5 pt-6">
+              <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+                <p className="text-xs text-muted-foreground">Ilova o&apos;zini shunday atadi (tasdiqlanmagan — istalgan kishi istalgan nom qo&apos;yishi mumkin):</p>
+                <p className="mt-1 break-words text-base font-semibold">{name}</p>
+                <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
+                  <dt className="text-muted-foreground">Kod yuboriladi</dt>
+                  <dd className="min-w-0 break-words">
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded px-1.5 py-0.5 font-medium",
+                        kind === "claude" && "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+                        kind === "loopback" && "bg-sky-500/15 text-sky-700 dark:text-sky-400",
+                        kind === "other" && "bg-destructive/15 text-destructive",
+                      )}
+                    >
+                      {host ?? "noma'lum manzil"}
+                    </span>{" "}
+                    <span className="text-muted-foreground">
+                      {kind === "claude" ? "— Claude'ning rasmiy manzili" : kind === "loopback" ? "— shu kompyuterning o'zi (Claude Code)" : "— Claude manzili EMAS"}
+                    </span>
+                  </dd>
+                  <dt className="text-muted-foreground">Ro&apos;yxatdan o&apos;tgan</dt>
+                  <dd>{ago ?? "noma'lum"}</dd>
+                </dl>
+              </div>
+
+              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                Faqat <span className="font-medium">o&apos;zingiz hozirgina</span> o&apos;z Claude&apos;ingizdan ulanishni boshlagan bo&apos;lsangina ruxsat bering. Boshqa
+                holatda — <span className="font-medium">Rad etish</span>.
+              </p>
+
               <p className="text-sm text-muted-foreground">
                 <span className="font-medium text-foreground">{view.info.user.email}</span> sifatida ruxsat berasiz. Ilova quyidagilarni qila oladi:
               </p>
@@ -204,6 +239,11 @@ export default function ConsentPage() {
                 ))}
               </div>
 
+              {readOnly ? (
+                <p className="text-sm font-medium">
+                  Bu ulanish faqat O&apos;QIY oladi: hech narsani yozolmaydi, o&apos;zgartira, chop eta yoki o&apos;chira olmaydi.
+                </p>
+              ) : null}
               {view.offline ? (
                 <p className="text-xs text-muted-foreground">
                   Ulanish qayta kirmasdan saqlanib turadi. Istalgan payt Admin → Ulangan ilovalar bo&apos;limidan uzishingiz mumkin.

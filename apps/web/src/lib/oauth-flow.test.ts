@@ -4,6 +4,9 @@ import {
   consentRedirectUrl,
   consentViewState,
   describeConnectionScopes,
+  displayClientName,
+  isReadOnlyRequest,
+  registeredAgo,
   hasSignedOAuthQuery,
   oauthContinuationUrl,
   rawOAuthQuery,
@@ -15,7 +18,7 @@ const info = (over: Partial<McpConsentInfo> = {}): McpConsentInfo => ({
   allowed: true,
   reason: null,
   user: { name: "Owner", email: "o@example.test", role: "admin" },
-  client: { id: "abc", name: "Claude", redirectHost: "claude.ai" },
+  client: { id: "abc", name: "Claude", redirectHost: "claude.ai", redirectKind: "claude", registeredAt: "2030-01-01T00:00:00.000Z" },
   scopes: ["blog:read", "posts:publish", "posts:delete", "offline_access", "weird:scope"],
   ...over,
 });
@@ -94,5 +97,29 @@ describe("connection scope summary", () => {
       offline: true,
     });
     expect(describeConnectionScopes([])).toEqual({ labels: [], hasDanger: false, offline: false });
+  });
+});
+
+describe("impersonation hints", () => {
+  it("shortens and normalises untrusted client names", () => {
+    expect(displayClientName("  Claude \n  Desktop ")).toBe("Claude Desktop");
+    expect(displayClientName("x".repeat(100))).toHaveLength(60);
+    expect(displayClientName("x".repeat(100)).endsWith("…")).toBe(true);
+    expect(displayClientName(null)).toBe("Nomsiz ilova");
+  });
+
+  it("tells how long ago the client was registered", () => {
+    const now = Date.parse("2030-01-02T12:00:00.000Z");
+    expect(registeredAgo("2030-01-02T11:59:50.000Z", now)).toBe("hozirgina");
+    expect(registeredAgo("2030-01-02T11:30:00.000Z", now)).toBe("30 daqiqa oldin");
+    expect(registeredAgo("2030-01-02T07:00:00.000Z", now)).toBe("5 soat oldin");
+    expect(registeredAgo("2029-12-30T12:00:00.000Z", now)).toBe("3 kun oldin");
+    expect(registeredAgo(null, now)).toBeNull();
+  });
+
+  it("recognises a read-only request", () => {
+    const state = consentViewState(SIGNED, { status: 200, body: info({ scopes: ["blog:read", "offline_access"] }) });
+    expect(state.kind === "ready" && isReadOnlyRequest(state.groups)).toBe(true);
+    expect(isReadOnlyRequest([{ group: "read" }, { group: "danger" }])).toBe(false);
   });
 });

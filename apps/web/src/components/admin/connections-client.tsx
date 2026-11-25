@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plug, ShieldAlert } from "lucide-react";
+import { Plug, ShieldAlert, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import type { McpConnection } from "@blog/shared";
 import { EmptyState } from "@/components/admin/empty-state";
@@ -19,13 +19,13 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
-import { describeConnectionScopes } from "@/lib/oauth-flow";
+import { describeConnectionScopes, displayClientName } from "@/lib/oauth-flow";
 
 function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; onRevoked: (clientId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const scopes = describeConnectionScopes(connection.scopes);
-  const name = connection.name ?? "Nomsiz ilova";
+  const name = displayClientName(connection.name);
 
   async function handleRevoke() {
     setBusy(true);
@@ -43,8 +43,8 @@ function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; o
 
   return (
     <TableRow>
-      <TableCell className="align-top">
-        <div className="font-medium">{name}</div>
+      <TableCell className="max-w-[16rem] align-top whitespace-normal">
+        <div className="font-medium break-words">{name}</div>
         {connection.redirectHost ? <div className="text-xs text-muted-foreground">{connection.redirectHost}</div> : null}
       </TableCell>
       <TableCell className="align-top">
@@ -93,6 +93,51 @@ function ConnectionRow({ connection, onRevoked }: { connection: McpConnection; o
   );
 }
 
+function RevokeAllButton({ count, onDone }: { count: number; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function handle() {
+    setBusy(true);
+    try {
+      await adminApi.revokeAllConnections();
+      toast.success("Barcha ilovalar uzildi");
+      setOpen(false);
+      onDone();
+    } catch (error) {
+      toast.error(error instanceof AdminApiError ? error.message : "Uzib bo'lmadi");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
+        <Unplug className="size-4" aria-hidden="true" />
+        Hammasini uzish
+      </Button>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Barcha {count} ta ilova uzilsinmi?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hamma ilovaning kirish huquqi darhol yo&apos;qoladi: ochiq ulanishlar to&apos;xtaydi, yangilash kalitlari va hali ishlatilmagan ruxsat kodlari
+              o&apos;chiriladi. Qayta ishlatish uchun har birini boshidan ulash kerak bo&apos;ladi. Telefon yo&apos;qolganda yoki shubha bo&apos;lsa shuni bosing.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Bekor qilish</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={() => void handle()}>
+              {busy ? "Uzilmoqda…" : "Hammasini uzish"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 /** `initial === null` — konnektor serverda o'chiq (yoki API javob bermadi). */
 export function ConnectionsClient({ initial }: { initial: McpConnection[] | null }) {
   const [items, setItems] = useState<McpConnection[]>(initial ?? []);
@@ -111,6 +156,10 @@ export function ConnectionsClient({ initial }: { initial: McpConnection[] | null
   }
 
   return (
+    <div className="flex flex-col gap-3">
+      <div className="flex justify-end">
+        <RevokeAllButton count={items.length} onDone={() => setItems([])} />
+      </div>
     <div className="overflow-x-auto rounded-lg border border-border">
       <Table>
         <TableHeader>
@@ -132,6 +181,7 @@ export function ConnectionsClient({ initial }: { initial: McpConnection[] | null
           ))}
         </TableBody>
       </Table>
+    </div>
     </div>
   );
 }
