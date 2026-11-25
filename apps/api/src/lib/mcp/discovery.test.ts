@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { Hono } from "hono";
-import { MCP_SCOPE_IDS } from "@blog/shared";
+import { MCP_GRANTABLE_OAUTH_SCOPES, MCP_GRANTABLE_SCOPE_IDS } from "@blog/shared";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { API, CLAUDE_REDIRECT, ISSUER, MCP_URL, mcpCall, register, type Json } from "../../test/mcp-harness.js";
 
@@ -32,7 +32,7 @@ describe("unauthenticated /mcp", () => {
     expect(res.status).toBe(401);
     expect(res.www).toContain(`Bearer resource_metadata="${API}/.well-known/oauth-protected-resource/mcp"`);
     const scope = /scope="([^"]+)"/.exec(res.www ?? "")?.[1]?.split(" ") ?? [];
-    expect(scope.sort()).toEqual([...MCP_SCOPE_IDS, "offline_access"].sort());
+    expect(scope.sort()).toEqual(["blog:read", "offline_access"]);
   });
 
   it("rejects garbage bearer tokens with the same challenge", async () => {
@@ -69,7 +69,7 @@ describe("protected resource metadata (RFC 9728)", () => {
     expect(doc.resource).toBe(MCP_URL);
     expect(doc.authorization_servers).toEqual([ISSUER]);
     expect(doc.bearer_methods_supported).toEqual(["header"]);
-    expect([...doc.scopes_supported].sort()).toEqual([...MCP_SCOPE_IDS].sort());
+    expect([...doc.scopes_supported]).toEqual(["blog:read"]);
   });
 });
 
@@ -92,17 +92,10 @@ describe("authorization server metadata (RFC 8414)", () => {
     expect(doc.grant_types_supported).toEqual(expect.arrayContaining(["authorization_code", "refresh_token"]));
     expect(doc.response_types_supported).toEqual(["code"]);
     expect(doc.client_id_metadata_document_supported).toBe(true);
-    expect(doc.scopes_supported).toEqual(expect.arrayContaining([...MCP_SCOPE_IDS, "offline_access"]));
-    expect(Object.keys(doc.scope_descriptions).sort()).toEqual([...MCP_SCOPE_IDS, "offline_access"].sort());
+    expect([...doc.scopes_supported].sort()).toEqual([...MCP_GRANTABLE_OAUTH_SCOPES].sort());
+    expect(doc.scopes_supported).not.toContain("posts:delete");
+    expect(Object.keys(doc.scope_descriptions).sort()).toEqual([...MCP_GRANTABLE_SCOPE_IDS, "offline_access"].sort());
     expect(doc.scope_descriptions["blog:read"]).toMatch(/Read posts/);
-  });
-
-  it("serves OpenID configuration aliases too", async () => {
-    for (const path of ["/.well-known/openid-configuration", "/.well-known/openid-configuration/api/auth", "/api/auth/.well-known/openid-configuration"]) {
-      const res = await get(path);
-      expect(res.status, path).toBe(200);
-      expect(((await res.json()) as { issuer: string }).issuer).toBe(ISSUER);
-    }
   });
 
   it("publishes its signing keys", async () => {

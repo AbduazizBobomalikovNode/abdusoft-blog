@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { listConnections, revokeConnection } from "../lib/mcp/connections.js";
+import { listConnections, revokeAllConnections, revokeConnection } from "../lib/mcp/connections.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
 import { requireAdmin } from "../lib/require-admin.js";
 
@@ -12,6 +12,11 @@ export const adminConnectionsRoute = new Hono()
   .get("/", async (c) => {
     const adminUser = c.get("adminUser");
     return c.json({ items: await listConnections(adminUser.id) });
+  })
+  // "Hammasini uzish": barcha ulanishlar bir yo'la (token'lar, rozilik, kodlar) + jurnal.
+  .delete("/", async (c) => {
+    const adminUser = c.get("adminUser");
+    return c.json(await revokeAllConnections(actorFromAdminUser(adminUser, "web"), adminUser.id));
   })
   .delete("/:clientId", async (c) => {
     const adminUser = c.get("adminUser");

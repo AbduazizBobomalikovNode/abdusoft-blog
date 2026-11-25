@@ -85,6 +85,20 @@ export const MCP_OPENID_SCOPE = "openid";
 
 export const MCP_SCOPE_IDS: readonly string[] = MCP_SCOPES.map((scope) => scope.id);
 
+/**
+ * HOZIR berilishi mumkin bo'lgan ruxsatlar: faqat o'qish (+ `offline_access`). Qolgan ruxsatlar modelda saqlanadi, lekin
+ * ularning vositalari yo'q — shu sabab e'lon qilinmaydi, ro'yxatdan o'tishda/authorize'da/rozilikda qabul qilinmaydi.
+ * Yozuv vositalari qo'shilganda ruxsat shu ro'yxatga kiritiladi; mavjud (faqat o'qish) rozilik o'z-o'zidan kengaymaydi:
+ * yangi ruxsat so'ralsa server yangi rozilik talab qiladi.
+ */
+export const MCP_GRANTABLE_SCOPE_IDS: readonly string[] = ["blog:read"];
+export const MCP_GRANTABLE_OAUTH_SCOPES: readonly string[] = [...MCP_GRANTABLE_SCOPE_IDS, MCP_OFFLINE_SCOPE];
+
+/** `scope` ro'yxatini berilishi mumkin bo'lganlarga qisqartiradi (takrorlarsiz, tartib saqlanadi). */
+export function clampToGrantable(scopes: readonly string[]): string[] {
+  return [...new Set(scopes.filter((scope) => MCP_GRANTABLE_OAUTH_SCOPES.includes(scope)))];
+}
+
 export function findMcpScope(id: string): McpScopeInfo | undefined {
   return MCP_SCOPES.find((scope) => scope.id === id);
 }
@@ -127,6 +141,9 @@ export function groupRequestedScopes(requested: readonly string[]): {
 // HTTP DTO'lar (rozilik sahifasi va "Ulangan ilovalar")
 // ---------------------------------------------------------------------------------------------
 
+export const McpRedirectKindSchema = z.enum(["claude", "loopback", "other"]);
+export type McpRedirectKind = z.infer<typeof McpRedirectKindSchema>;
+
 export const McpConsentInfoSchema = z.object({
   /** Joriy foydalanuvchi shu konnektorga ruxsat bera oladimi (faqat admin). */
   allowed: z.boolean(),
@@ -138,6 +155,10 @@ export const McpConsentInfoSchema = z.object({
       name: z.string().nullable(),
       /** Birinchi redirect URI'ning host qismi (masalan `claude.ai`) — foydalanuvchi qaysi ilova ekanini tekshirishi uchun. */
       redirectHost: z.string().nullable(),
+      /** Kod yuboriladigan manzil turi: Claude'ning rasmiy callback'i, lokal loopback (Claude Code) yoki boshqa. */
+      redirectKind: McpRedirectKindSchema,
+      /** Klient ro'yxatdan o'tgan vaqt (ISO) — "hozirgina" ro'yxatdan o'tgan bo'lishi kerak. */
+      registeredAt: z.string().nullable(),
     })
     .nullable(),
   scopes: z.array(z.string()),

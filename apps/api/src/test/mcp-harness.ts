@@ -51,7 +51,11 @@ export class Browser {
   }
 }
 
-export async function register(app: Hono, body: Record<string, unknown>, ip = "203.0.113.5") {
+let ipSeq = 0;
+/** Har chaqiruv uchun alohida "mijoz IP" (TRUST_PROXY yoqilgan testlarda IP bo'yicha chegaralar bir-biriga halaqit bermasin). */
+const nextIp = () => `10.99.${Math.floor(ipSeq / 250)}.${(ipSeq++ % 250) + 1}`;
+
+export async function register(app: Hono, body: Record<string, unknown>, ip = nextIp()) {
   return app.request(`${API}/api/auth/oauth2/register`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-forwarded-for": ip },

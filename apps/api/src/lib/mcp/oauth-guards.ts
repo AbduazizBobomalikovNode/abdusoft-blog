@@ -1,5 +1,5 @@
 import type { Context, Next } from "hono";
-import { MCP_OFFLINE_SCOPE, parseScopeString } from "@blog/shared";
+import { MCP_OFFLINE_SCOPE, clampToGrantable, parseScopeString } from "@blog/shared";
 import { config } from "../../config.js";
 import { auth } from "../auth.js";
 import { handleAuthRequest } from "../auth-handler.js";
@@ -7,7 +7,9 @@ import { recordAuditSafe } from "../audit.js";
 import { clientIp } from "../device.js";
 import { consumeRateLimit } from "../rate-limit.js";
 import { MCP_RESOURCE_URL } from "./endpoints.js";
+import { trimUnconsentedClients } from "./connections.js";
 import { isAllowedRedirectUri } from "./redirect-policy.js";
+import { DEFAULT_SCOPE_STRING } from "./scopes.js";
 
 const MAX_REGISTRATION_BODY = 16 * 1024;
 const MAX_REDIRECT_URIS = 5;
@@ -17,9 +19,14 @@ function oauthError(c: Context, status: 400 | 403 | 413 | 429, error: string, de
 }
 
 /**
- * `POST /api/auth/oauth2/register` (autentifikatsiyasiz): (1) IP bo'yicha va (2) barcha IP'lar bo'yicha umumiy tezlik
- * cheklovi — bitta tarqatilgan hujum bazani to'ldirib yubormasin; (3) redirect URI'lar faqat ruxsat ro'yxatidan
- * (Claude callback'i, loopback, env). Boshqa hamma narsa tanasi Better Auth'ga o'zgarishsiz uzatiladi.
+ * `POST /api/auth/oauth2/register` (autentifikatsiyasiz):
+ * (1) IP bo'yicha tezlik chegarasi (ish beradigan asosiy to'siq) va (2) barcha IP'lar uchun ancha yuqori umumiy chegara —
+ *     egasining o'z ulanishi begonalar tufayli bloklanib qolmasligi uchun u katta; baza o'sishi esa (3) ishlatilmagan
+ *     klientlar sonini cheklash bilan chegaralanadi (eng eskilari o'chiriladi, yangi urinish RAD ETILMAYDI);
+ * (4) redirect URI'lar faqat ruxsat ro'yxatidan (Claude callback'i, loopback, env);
+ * (5) faqat `token_endpoint_auth_method: none` (klient sirlari berilmaydi);
+ * (6) `scope` HAR DOIM berilishi mumkin ruxsatlarga qisqartiriladi — aks holda Better Auth klient yuborgan/yubormagan
+ *     barcha ruxsatlarni saqlab qo'yardi.
  */
 export async function registrationGuard(c: Context, next: Next) {
   if (c.req.method !== "POST") return next();
@@ -41,13 +48,16 @@ export async function registrationGuard(c: Context, next: Next) {
   const text = await c.req.raw.clone().text();
   if (text.length > MAX_REGISTRATION_BODY) return oauthError(c, 413, "invalid_client_metadata", "Registration request is too large.");
 
-  let body: unknown;
+  let body: Record<string, unknown> | null = null;
   try {
-    body = JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) body = parsed as Record<string, unknown>;
   } catch {
-    return next(); // Better Auth o'zi 400 qaytaradi
+    // Better Auth o'zi 400 qaytaradi
   }
-  const uris = (body as { redirect_uris?: unknown } | null)?.redirect_uris;
+  if (!body) return next();
+
+  const uris = body.redirect_uris;
   if (Array.isArray(uris)) {
     const bad = uris.length > MAX_REDIRECT_URIS || uris.some((uri) => typeof uri !== "string" || !isAllowedRedirectUri(uri));
     if (bad) {
@@ -59,28 +69,56 @@ export async function registrationGuard(c: Context, next: Next) {
       );
     }
   }
-  return next();
+
+  const method = body.token_endpoint_auth_method;
+  if (method !== undefined && method !== "none") {
+    return oauthError(c, 400, "invalid_client_metadata", "Only public clients are accepted: token_endpoint_auth_method must be 'none'.");
+  }
+
+  // Ro'yxatdan o'tish ruxsat etildi — jadval o'sishini cheklaymiz (eng eskilari ketadi, egasi bloklanmaydi).
+  await trimUnconsentedClients(config.MCP_MAX_UNCONSENTED_CLIENTS - 1).catch((error: unknown) =>
+    console.error("MCP: ishlatilmagan klientlarni qisqartirib bo'lmadi:", error instanceof Error ? error.message : error),
+  );
+
+  const requested = typeof body.scope === "string" ? clampToGrantable(parseScopeString(body.scope)) : [];
+  const forwarded = { ...body, token_endpoint_auth_method: "none", scope: requested.length > 0 ? requested.join(" ") : DEFAULT_SCOPE_STRING };
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("content-length");
+  return handleAuthRequest(c, new Request(c.req.url, { method: "POST", headers, body: JSON.stringify(forwarded) }));
 }
 
 /**
- * `GET /api/auth/oauth2/authorize` — ikkita himoya tuzatish (faqat MCP yoqilganda):
+ * `GET /api/auth/oauth2/authorize` — himoya tuzatishlar (faqat MCP yoqilganda):
  *
- * 1. Klient `scope`da `offline_access`ni unutsa, qo'shamiz — aks holda refresh token umuman berilmaydi va qisqa umrli
- *    (default 15 daqiqa) access token tugagach ulanish uziladi. `scope` umuman yuborilmasa tegilmaydi (klientning
- *    ro'yxatdan o'tgan default scope'lari ishlatiladi, ular `offline_access`ni o'z ichiga oladi).
- *    `MCP_FORCE_OFFLINE_ACCESS=false` — o'chirish.
- * 2. Klient `resource` (RFC 8707) yubormasa, `MCP_RESOURCE_URL`ni qo'shamiz: bu AS faqat bitta resurs serverga xizmat
- *    qiladi, `resource`siz token esa shaffof (opaque) bo'lib `/mcp`da 401 bergan bo'lardi (cheksiz 401 sikli).
- *    Aniq boshqa `resource` yuborilsa tegilmaydi (AS uni `invalid_target` bilan rad etadi).
+ * 1. `scope` HAR DOIM berilishi mumkin ruxsatlarga qisqartiriladi (hozir: `blog:read`); `scope` yo'q yoki bo'sh bo'lsa
+ *    standart (`blog:read offline_access`) qo'yiladi — "scope yubormagan klient hamma narsani oladi" bo'lmaydi.
+ * 2. `offline_access` yo'q bo'lsa qo'shiladi (`MCP_FORCE_OFFLINE_ACCESS=false` — o'chirish): aks holda refresh token
+ *    berilmaydi va 15 daqiqada ulanish uziladi.
+ * 3. `resource` (RFC 8707) yo'q bo'lsa `MCP_RESOURCE_URL` qo'shiladi: `resource`siz token shaffof bo'lib `/mcp`da 401
+ *    bergan bo'lardi. Aniq boshqa `resource` tegilmaydi (AS `invalid_target` bilan rad etadi).
+ * 4. `client_id` https URL bo'lsa (Client ID Metadata Document) — begona URL'lar orqali server tashqi so'rovlar
+ *    ko'paytirmasligi uchun `/register` bilan bir xil IP chegarasi qo'llanadi.
  */
 export async function authorizeHook(c: Context, next: Next) {
   if (c.req.method !== "GET") return next();
   const url = new URL(c.req.url);
   let changed = false;
 
-  const scope = url.searchParams.get("scope");
-  if (config.MCP_FORCE_OFFLINE_ACCESS && scope !== null && !parseScopeString(scope).includes(MCP_OFFLINE_SCOPE)) {
-    url.searchParams.set("scope", `${scope} ${MCP_OFFLINE_SCOPE}`.trim());
+  const clientId = url.searchParams.get("client_id") ?? "";
+  if (/^https?:\/\//i.test(clientId)) {
+    const limit = consumeRateLimit(`mcp-cimd:${clientIp(c)}`, config.MCP_REGISTRATION_RATE_LIMIT_MAX, config.MCP_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS * 1000);
+    if (!limit.allowed) {
+      c.header("Retry-After", String(limit.retryAfterSeconds));
+      return oauthError(c, 429, "temporarily_unavailable", "Too many client metadata lookups; retry later.");
+    }
+  }
+
+  const requested = clampToGrantable(parseScopeString(url.searchParams.get("scope")));
+  if (config.MCP_FORCE_OFFLINE_ACCESS && !requested.includes(MCP_OFFLINE_SCOPE)) requested.push(MCP_OFFLINE_SCOPE);
+  if (!requested.some((scope) => scope !== MCP_OFFLINE_SCOPE)) requested.unshift(...DEFAULT_SCOPE_STRING.split(" ").filter((scope) => scope !== MCP_OFFLINE_SCOPE));
+  const scope = requested.join(" ");
+  if (scope !== url.searchParams.get("scope")) {
+    url.searchParams.set("scope", scope);
     changed = true;
   }
   if (!url.searchParams.has("resource")) {
@@ -119,6 +157,13 @@ export async function consentGuard(c: Context, next: Next) {
       { error: "access_denied", error_description: "Only the blog owner (admin) can connect an application." },
       403,
     );
+  }
+
+  if (session && body.accept !== false) {
+    const requested = parseScopeString(new URLSearchParams(typeof body.oauth_query === "string" ? body.oauth_query : "").get("scope"));
+    if (clampToGrantable(requested).length !== requested.length) {
+      return c.json({ error: "invalid_scope", error_description: "The request asks for permissions that cannot be granted yet." }, 403);
+    }
   }
 
   await next();

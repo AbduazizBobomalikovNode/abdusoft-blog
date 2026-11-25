@@ -1,11 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { MCP_SCOPE_IDS } from "@blog/shared";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { createTestUser, TEST_USER_PASSWORD, type TestUser } from "../../test/auth-test-helpers.js";
 import {
   API,
+  CLAUDE_REDIRECT,
   ISSUER,
   MCP_URL,
   WEB,
@@ -16,6 +16,7 @@ import {
   jwtPayload,
   mcpCall,
   register,
+  type Json,
   registerClient,
   tokenRequest,
 } from "../../test/mcp-harness.js";
@@ -62,7 +63,8 @@ describe("authorization code + PKCE flow", () => {
     expect(tok.body.token_type).toBe("Bearer");
     expect(tok.body.expires_in).toBe(900);
     expect(tok.body.refresh_token).toBeTruthy();
-    expect(tok.body.scope.split(" ").sort()).toEqual([...MCP_SCOPE_IDS, "offline_access"].sort());
+    // Barcha ruxsatlar so'ralgan bo'lsa ham faqat hozir berilishi mumkinlari beriladi.
+    expect(tok.body.scope.split(" ").sort()).toEqual(["blog:read", "offline_access"]);
 
     const claims = jwtPayload(tok.body.access_token);
     expect(claims.iss).toBe(ISSUER);
@@ -147,27 +149,65 @@ describe("refresh token rotation", () => {
   });
 });
 
-describe("permissions (scopes)", () => {
-  it("a connection without blog:read gets insufficient_scope naming the missing scope; whoami still works", async () => {
-    const { tokens } = await connect(app, creds, { scope: "posts:write" });
-    const denied = await callTool(app, tokens.access_token, "list_posts");
-    expect(denied.isError).toBe(true);
-    expect(denied.json.error).toMatchObject({ code: "insufficient_scope", requiredScope: "blog:read" });
-    expect(denied.json.error.message).toContain("blog:read");
-    expect(denied.json.error.hint).toMatch(/reconnect/i);
+describe("only what exists today can be granted (read access)", () => {
+  it("clamps a request for write/publish/delete scopes to blog:read in the consent query, the token and /mcp", async () => {
+    const clientId = await registerClient(app);
+    const a = await authorize(app, { clientId, ...creds, scope: "blog:read posts:write posts:delete comments:moderate offline_access", stopAtConsent: true });
+    expect(new URL(a.consentUrl!).searchParams.get("scope")).toBe("blog:read offline_access");
 
+    const { tokens } = await connect(app, creds, { scope: "posts:publish channels:send" });
+    expect(tokens.scope.split(" ").sort()).toEqual(["blog:read", "offline_access"]);
     const who = await callTool(app, tokens.access_token, "whoami");
-    expect(who.isError).toBe(false);
-    expect(who.json.grantedScopes.map((s: { id: string }) => s.id)).toEqual(["posts:write"]);
-    expect(who.json.tools.find((t: { name: string }) => t.name === "list_posts")).toMatchObject({ available: false, requiredScope: "blog:read" });
+    expect(who.json.grantedScopes.map((s: { id: string }) => s.id)).toEqual(["blog:read"]);
+    expect(who.json.tools.filter((t: Json) => t.available).length).toBe(12);
   });
 
-  it("records the denied attempt in the audit log without content", async () => {
-    const { tokens } = await connect(app, creds, { scope: "media:upload" });
-    await callTool(app, tokens.access_token, "get_site_stats");
-    const log = await app.request(`${API}/admin/audit?action=mcp.denied&limit=100`, { headers: { cookie: admin.cookie } });
-    const body = (await log.json()) as { items: Array<{ via: string; meta: Record<string, unknown>; entityType: string }> };
-    expect(body.items.some((i) => i.via === "mcp" && i.entityType === "mcp" && i.meta.requiredScope === "blog:read" && i.meta.tool === "get_site_stats")).toBe(true);
+  it("a client that omits `scope` gets only the default (read + offline), not everything", async () => {
+    const clientId = await registerClient(app);
+    const a = await authorize(app, { clientId, ...creds, scope: "", stopAtConsent: true });
+    expect(new URL(a.consentUrl!).searchParams.get("scope")).toBe("blog:read offline_access");
+  });
+
+  it("stores only grantable scopes on a registered client, whatever the client asked for or omitted", async () => {
+    const withScope = await register(app, { client_name: "X", redirect_uris: [CLAUDE_REDIRECT], token_endpoint_auth_method: "none", scope: "posts:delete blog:read openid" });
+    const registered = ((await withScope.json()) as { scope: string }).scope.split(" ");
+    expect(registered).toContain("blog:read");
+    expect(registered.every((scope) => ["blog:read", "offline_access"].includes(scope))).toBe(true);
+    const without = await register(app, { client_name: "Y", redirect_uris: [CLAUDE_REDIRECT] });
+    expect(without.status).toBe(201);
+    const rows = await db.select({ scopes: authSchema.oauthClient.scopes }).from(authSchema.oauthClient);
+    for (const row of rows) expect((row.scopes ?? []).every((scope) => ["blog:read", "offline_access"].includes(scope))).toBe(true);
+  });
+
+  it("refuses a consent whose signed query asks for non-grantable scopes (defence in depth)", async () => {
+    const other = await createTestUser({ role: "admin" });
+    const clientId = await registerClient(app);
+    const a = await authorize(app, { clientId, email: other.email, password: TEST_USER_PASSWORD, stopAtConsent: true });
+    const raw = new URL(a.consentUrl!).search.slice(1);
+    // Imzosiz o'zgartirilgan so'rov signature tekshiruvidan o'tmaydi, lekin bizning qo'riqchi undan oldin ham rad etadi:
+    const widened = raw.replace("scope=blog%3Aread+offline_access", "scope=blog%3Aread+posts%3Adelete+offline_access");
+    const res = await a.browser.req(`${API}/api/auth/oauth2/consent`, {
+      method: "POST",
+      origin: WEB,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accept: true, oauth_query: widened }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "invalid_scope" });
+  });
+
+  it("a connection consented earlier without offline_access is asked again (a changed scope set never widens silently)", async () => {
+    const owner = await createTestUser({ role: "admin" });
+    const clientId = await registerClient(app);
+    await db.insert(authSchema.oauthConsent).values({ id: "pre-consent", clientId, userId: owner.id, scopes: ["blog:read"], createdAt: new Date(), updatedAt: new Date() });
+    const a = await authorize(app, { clientId, email: owner.email, password: TEST_USER_PASSWORD, stopAtConsent: true });
+    expect(a.steps).toContain("consent-page");
+  });
+
+  it("rejects dynamic registration of confidential clients (no client secrets are ever issued)", async () => {
+    const res = await register(app, { client_name: "S", redirect_uris: [CLAUDE_REDIRECT], token_endpoint_auth_method: "client_secret_post" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_client_metadata");
   });
 });
 
@@ -215,12 +255,13 @@ describe("only the owner (admin) may connect and use the connector", () => {
 
   it("the consent info endpoint is allowed for the admin, lists the signed scopes, and rejects unsigned or foreign queries", async () => {
     const clientId = await registerClient(app);
-    const a = await authorize(app, { clientId, ...creds, scope: "blog:read posts:write offline_access", stopAtConsent: true });
+    const a = await authorize(app, { clientId, ...creds, scope: "blog:read offline_access", stopAtConsent: true });
     const query = new URL(a.consentUrl!).search.slice(1);
     const ok = await a.browser.req(`${API}/connector/consent?oauth_query=${encodeURIComponent(query)}`, { origin: WEB });
-    expect(await ok.json()).toMatchObject({ allowed: true, reason: null, scopes: ["blog:read", "posts:write", "offline_access"] });
+    expect(await ok.json()).toMatchObject({ allowed: true, reason: null, scopes: ["blog:read", "offline_access"] });
 
-    const forged = query.replace("blog%3Aread", "blog%3Aread+posts%3Adelete").replace(/scope=blog%3Aread\+posts%3Awrite/, "scope=posts%3Adelete");
+    const forged = query.replace("scope=blog%3Aread+offline_access", "scope=blog%3Aread+posts%3Adelete+offline_access");
+    expect(forged).not.toBe(query);
     const bad = await a.browser.req(`${API}/connector/consent?oauth_query=${encodeURIComponent(forged)}`, { origin: WEB });
     expect(bad.status).toBe(400);
     const none = await a.browser.req(`${API}/connector/consent`, { origin: WEB });

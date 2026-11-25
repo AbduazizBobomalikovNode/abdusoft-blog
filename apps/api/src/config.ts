@@ -108,7 +108,11 @@ const EnvSchema = z.object({
   MCP_ALLOWED_REDIRECT_URIS: z.string().optional().default(""),
   // `POST /api/auth/oauth2/register` (autentifikatsiyasiz): bitta IP uchun oynada ko'pi bilan MAX; bundan tashqari barcha IP'lar uchun umumiy GLOBAL_MAX.
   MCP_REGISTRATION_RATE_LIMIT_MAX: intEnv(20, 1),
-  MCP_REGISTRATION_RATE_LIMIT_GLOBAL_MAX: intEnv(100, 1),
+  MCP_REGISTRATION_RATE_LIMIT_GLOBAL_MAX: intEnv(1000, 1),
+  // Rozilik olmagan klientlar soni shu chegaradan oshsa, eng eskilari o'chiriladi (yangi ro'yxatdan o'tish RAD ETILMAYDI — egasi bloklanmasin).
+  MCP_MAX_UNCONSENTED_CLIENTS: intEnv(2000, 10),
+  // `/mcp`ga brauzer `Origin` bilan kelganda ruxsat etiladigan qo'shimcha originlar (vergul bilan); `WEB_ORIGIN` doim ruxsat. `Origin`siz so'rovlar (Claude serveri, Claude Code) o'tadi.
+  MCP_ALLOWED_ORIGINS: z.string().optional().default(""),
   MCP_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS: intEnv(3600, 1),
   // `/mcp` so'rovlari: IP bo'yicha oynada ko'pi bilan MAX (0 — o'chirilgan).
   MCP_RATE_LIMIT_MAX: intEnv(300, 0),

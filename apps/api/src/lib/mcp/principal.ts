@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { JWTPayload } from "jose";
-import { MCP_SCOPE_IDS, parseScopeString } from "@blog/shared";
+import { MCP_GRANTABLE_SCOPE_IDS, parseScopeString } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { oauthClient, oauthConsent, user } from "../../db/auth-schema.js";
 
@@ -36,6 +36,7 @@ export async function resolvePrincipal(claims: JWTPayload): Promise<PrincipalRes
       email: user.email,
       name: user.name,
       consentScopes: oauthConsent.scopes,
+      consentCreatedAt: oauthConsent.createdAt,
       clientName: oauthClient.name,
       clientDisabled: oauthClient.disabled,
     })
@@ -51,9 +52,16 @@ export async function resolvePrincipal(claims: JWTPayload): Promise<PrincipalRes
     return { ok: false, status: 401, reason: "consent_revoked", message: "the connection was revoked" };
   }
 
+  // Token JORIY rozilikdan keyin chiqarilgan bo'lishi shart: bekor qilingan (keyin qayta berilgan) ulanishning eski
+  // token'lari qayta tirilmaydi. `iat` soniya aniqligida — 1 soniya bardosh.
+  const issuedAtMs = typeof claims.iat === "number" ? claims.iat * 1000 : 0;
+  if (issuedAtMs + 1000 < row.consentCreatedAt!.getTime()) {
+    return { ok: false, status: 401, reason: "consent_revoked", message: "the token predates the current consent" };
+  }
+
   const tokenScopes = new Set(parseScopeString(typeof claims.scope === "string" ? claims.scope : ""));
   const consented = new Set(row.consentScopes);
-  const scopes = new Set(MCP_SCOPE_IDS.filter((id) => tokenScopes.has(id) && consented.has(id)));
+  const scopes = new Set(MCP_GRANTABLE_SCOPE_IDS.filter((id) => tokenScopes.has(id) && consented.has(id)));
 
   return {
     ok: true,

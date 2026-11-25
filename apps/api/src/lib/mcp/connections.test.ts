@@ -49,7 +49,7 @@ describe("GET /admin/connections", () => {
     expect(item).toBeTruthy();
     expect(item.name).toBe("Claude (test)");
     expect(item.redirectHost).toBe("claude.ai");
-    expect(item.scopes.sort()).toEqual(["blog:read", "offline_access", "posts:write"]);
+    expect(item.scopes.sort()).toEqual(["blog:read", "offline_access"]);
     expect(Date.now() - Date.parse(item.connectedAt)).toBeLessThan(60_000);
     expect(item.lastUsedAt).not.toBeNull();
     expect(JSON.stringify(body)).not.toContain(tokens.access_token);

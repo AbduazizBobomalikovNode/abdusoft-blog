@@ -1,9 +1,11 @@
 import { and, desc, eq, inArray, isNull, lt, notExists, or, sql } from "drizzle-orm";
+import type { Executor } from "../executor.js";
 import type { McpConnection, McpConsentInfo } from "@blog/shared";
-import { MCP_SCOPE_IDS, parseScopeString } from "@blog/shared";
+import { MCP_GRANTABLE_OAUTH_SCOPES, clampToGrantable, parseScopeString, type McpRedirectKind } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { oauthAccessToken, oauthClient, oauthConsent, oauthRefreshToken } from "../../db/auth-schema.js";
 import { auditLog } from "../../db/schema.js";
+import { verification } from "../../db/auth-schema.js";
 import { recordAudit } from "../audit.js";
 import type { Actor } from "../posts/types.js";
 
@@ -62,7 +64,7 @@ export async function listConnections(userId: string): Promise<McpConnection[]> 
     clientId: row.clientId,
     name: row.name,
     redirectHost: hostOf(row.redirectUris?.[0]),
-    scopes: row.scopes.filter((scope) => MCP_SCOPE_IDS.includes(scope) || scope === "offline_access"),
+    scopes: row.scopes.filter((scope) => MCP_GRANTABLE_OAUTH_SCOPES.includes(scope)),
     connectedAt: row.connectedAt.toISOString(),
     lastUsedAt: lastUsed.has(row.clientId) ? new Date(lastUsed.get(row.clientId)!).toISOString() : null,
   }));
@@ -89,6 +91,7 @@ export async function revokeConnection(actor: Actor, userId: string, clientId: s
     await tx.delete(oauthRefreshToken).where(and(eq(oauthRefreshToken.userId, userId), eq(oauthRefreshToken.clientId, clientId)));
     await tx.delete(oauthAccessToken).where(and(eq(oauthAccessToken.userId, userId), eq(oauthAccessToken.clientId, clientId)));
     await tx.delete(oauthConsent).where(and(eq(oauthConsent.userId, userId), eq(oauthConsent.clientId, clientId)));
+    await invalidateAuthorizationCodes(tx, [clientId]);
     await tx
       .update(oauthClient)
       .set({ metadata: { ...((client?.metadata as Record<string, unknown> | null) ?? {}), revokedAt: new Date().toISOString() } })
@@ -105,22 +108,99 @@ export async function revokeConnection(actor: Actor, userId: string, clientId: s
   });
 }
 
+/**
+ * Hali almashtirilmagan authorization code'larni yaroqsiz qiladi (Better Auth ularni `verification` jadvalida saqlaydi,
+ * qiymatda `"type":"authorization_code"` va `client_id`). Aks holda bekor qilishdan OLDIN berilgan kod keyin token olib berardi.
+ */
+export async function invalidateAuthorizationCodes(executor: Executor, clientIds: string[]): Promise<void> {
+  for (const clientId of clientIds) {
+    await executor
+      .delete(verification)
+      .where(and(sql`${verification.value} like '%"type":"authorization_code"%'`, sql`${verification.value} like ${`%"client_id":"${clientId.replace(/[%_\\"]/g, "")}"%`}`));
+  }
+}
+
+/**
+ * HAMMASINI uzish: foydalanuvchining barcha ulanishlari (refresh/access token qatorlari, rozilik qatorlari, kutilayotgan kodlar).
+ * Bitta tranzaksiya, bitta jurnal yozuvi (`mcp.revoke_all`).
+ */
+export async function revokeAllConnections(actor: Actor, userId: string): Promise<{ revoked: number }> {
+  return db.transaction(async (tx) => {
+    const consents = await tx.select({ clientId: oauthConsent.clientId }).from(oauthConsent).where(eq(oauthConsent.userId, userId));
+    const clientIds = [...new Set(consents.map((row) => row.clientId))];
+    await tx.delete(oauthRefreshToken).where(eq(oauthRefreshToken.userId, userId));
+    await tx.delete(oauthAccessToken).where(eq(oauthAccessToken.userId, userId));
+    await tx.delete(oauthConsent).where(eq(oauthConsent.userId, userId));
+    if (clientIds.length > 0) {
+      await invalidateAuthorizationCodes(tx, clientIds);
+      await tx
+        .update(oauthClient)
+        .set({ metadata: sql`coalesce(${oauthClient.metadata}, '{}'::jsonb) || ${JSON.stringify({ revokedAt: new Date().toISOString() })}::jsonb` })
+        .where(inArray(oauthClient.clientId, clientIds));
+    }
+    if (clientIds.length === 0 && actor.via !== "web") return { revoked: 0 };
+    await recordAudit(tx, actor, {
+      action: "mcp.revoke_all",
+      entityType: "mcp",
+      summary: `Barcha ulangan ilovalar uzildi (${clientIds.length} ta)`,
+      meta: { count: clientIds.length, trigger: actor.via === "web" ? "manual" : "credentials" },
+    });
+    return { revoked: clientIds.length };
+  });
+}
+
+/**
+ * Rozilik olmagan klientlar soni `max`dan oshsa, eng eskilarini o'chiradi (anonim ro'yxatdan o'tish jadvalni cheksiz
+ * o'stira olmasin; yangi ro'yxatdan o'tish hech qachon rad etilmaydi). Bekor qilingan klientlarga tegilmaydi.
+ */
+export async function trimUnconsentedClients(max: number): Promise<number> {
+  const unconsented = and(
+    notExists(db.select({ one: sql`1` }).from(oauthConsent).where(eq(oauthConsent.clientId, oauthClient.clientId))),
+    isNull(sql`${oauthClient.metadata}->>'revokedAt'`),
+  );
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(oauthClient).where(unconsented);
+  const excess = (row?.count ?? 0) - Math.max(0, max);
+  if (excess <= 0) return 0;
+  const oldest = await db.select({ id: oauthClient.id }).from(oauthClient).where(unconsented).orderBy(oauthClient.createdAt).limit(excess);
+  if (oldest.length === 0) return 0;
+  await db.delete(oauthClient).where(inArray(oauthClient.id, oldest.map((r) => r.id)));
+  return oldest.length;
+}
+
+function redirectKindOf(uri: string | undefined): McpRedirectKind {
+  if (!uri) return "other";
+  try {
+    const url = new URL(uri);
+    if (url.protocol === "https:" && url.host === "claude.ai") return "claude";
+    if (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) return "loopback";
+  } catch {
+    // quyida "other"
+  }
+  return "other";
+}
+
 /** Rozilik sahifasi uchun klient ma'lumoti (tasdiqlangan `oauth_query`dan olingan client_id/scope bilan). */
 export async function buildConsentInfo(input: {
   user: { name: string | null; email: string; role: string };
   clientId: string | null;
   scope: string | null;
 }): Promise<McpConsentInfo> {
-  const base = { user: input.user, scopes: parseScopeString(input.scope) };
+  const base = { user: input.user, scopes: clampToGrantable(parseScopeString(input.scope)) };
   if (!input.clientId) return { ...base, allowed: false, reason: "unknown_client", client: null };
 
   const [client] = await db
-    .select({ name: oauthClient.name, redirectUris: oauthClient.redirectUris, disabled: oauthClient.disabled })
+    .select({ name: oauthClient.name, redirectUris: oauthClient.redirectUris, disabled: oauthClient.disabled, createdAt: oauthClient.createdAt })
     .from(oauthClient)
     .where(eq(oauthClient.clientId, input.clientId))
     .limit(1);
 
-  const clientInfo = { id: input.clientId, name: client?.name ?? null, redirectHost: hostOf(client?.redirectUris?.[0]) };
+  const clientInfo = {
+    id: input.clientId,
+    name: client?.name ?? null,
+    redirectHost: hostOf(client?.redirectUris?.[0]),
+    redirectKind: redirectKindOf(client?.redirectUris?.[0]),
+    registeredAt: client?.createdAt ? client.createdAt.toISOString() : null,
+  };
   if (input.user.role !== "admin") return { ...base, allowed: false, reason: "not_admin", client: clientInfo };
   if (!client || client.disabled) return { ...base, allowed: false, reason: "unknown_client", client: clientInfo };
   return { ...base, allowed: true, reason: null, client: clientInfo };

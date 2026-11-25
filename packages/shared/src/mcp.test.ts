@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MCP_SCOPES, MCP_SCOPE_GROUPS, groupRequestedScopes, parseScopeString } from "./mcp.js";
+import { MCP_GRANTABLE_OAUTH_SCOPES, MCP_SCOPES, MCP_SCOPE_GROUPS, clampToGrantable, groupRequestedScopes, parseScopeString } from "./mcp.js";
 
 describe("MCP scopes", () => {
   it("has unique ids and every scope has an Uzbek label, description and English text", () => {
@@ -23,5 +23,11 @@ describe("MCP scopes", () => {
     expect(view.groups.map((g) => g.group)).toEqual(["read", "publish", "danger"]);
     expect(view.offline).toBe(true);
     expect(view.unknown).toEqual(["weird:scope"]);
+  });
+
+  it("only read access (and offline_access) is grantable today; everything else is clamped away", () => {
+    expect([...MCP_GRANTABLE_OAUTH_SCOPES]).toEqual(["blog:read", "offline_access"]);
+    expect(clampToGrantable(["posts:delete", "blog:read", "openid", "posts:write", "offline_access", "blog:read"])).toEqual(["blog:read", "offline_access"]);
+    expect(clampToGrantable([])).toEqual([]);
   });
 });
