@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ExternalLink, Menu, MoreHorizontal } from "lucide-react";
+import { ExternalLink, Menu, MoreHorizontal, UserRound } from "lucide-react";
 import { useState } from "react";
 import type { Me } from "@blog/shared";
 import { LogoutButton } from "@/app/admin/logout-button";
@@ -60,6 +60,28 @@ function NavLinks({
   );
 }
 
+/** Joriy foydalanuvchining o'z hisobi (`/admin/akkaunt`) — admin ham, xodim ham ko'radi. */
+const ACCOUNT_HREF = "/admin/akkaunt";
+
+function AccountLink({ email, pathname, onNavigate }: { email?: string; pathname: string; onNavigate?: () => void }) {
+  const active = pathname === ACCOUNT_HREF;
+  return (
+    <Link
+      href={ACCOUNT_HREF}
+      onClick={onNavigate}
+      aria-label="Akkaunt"
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex min-h-11 min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors md:min-h-0 md:py-1.5",
+        active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+      )}
+    >
+      <UserRound className="size-4 shrink-0" aria-hidden="true" />
+      <span className="truncate">{email ?? "Akkaunt"}</span>
+    </Link>
+  );
+}
+
 export function AdminShell({
   me,
   pendingComments,
@@ -100,8 +122,8 @@ export function AdminShell({
             <ExternalLink className="size-4" />
             Saytga o&apos;tish
           </a>
-          <div className="flex items-center justify-between gap-2 px-2.5 py-1">
-            <span className="truncate text-xs text-muted-foreground">{me.email}</span>
+          <div className="flex items-center justify-between gap-1 px-1 py-1">
+            <AccountLink email={me.email} pathname={pathname} />
             <ThemeToggle />
           </div>
           <LogoutButton />
@@ -111,7 +133,7 @@ export function AdminShell({
       <div className="flex min-h-svh min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
         <header className="sticky top-0 z-40 flex h-13 items-center justify-between border-b border-border bg-background px-4 md:hidden">
-          <span className="text-sm font-semibold tracking-tight">{titleForPath(pathname, me.role)}</span>
+          <span className="text-sm font-semibold tracking-tight">{pathname === ACCOUNT_HREF ? "Akkaunt" : titleForPath(pathname, me.role)}</span>
           <Button variant="ghost" size="icon-sm" className="-mr-2 size-11" onClick={() => setMobileNavOpen(true)} aria-label="Menyu">
             <Menu className="size-5" />
           </Button>
@@ -138,8 +160,8 @@ export function AdminShell({
                 <ExternalLink className="size-4" />
                 Saytga o&apos;tish
               </a>
-              <div className="flex items-center justify-between gap-2 px-2.5 py-1">
-                <span className="truncate text-xs text-muted-foreground">{me.email}</span>
+              <div className="flex items-center justify-between gap-1 px-1 py-1">
+                <AccountLink email={me.email} pathname={pathname} onNavigate={() => setMobileNavOpen(false)} />
                 <ThemeToggle />
               </div>
               <LogoutButton />
@@ -213,6 +235,7 @@ export function AdminShell({
                 <ExternalLink className="size-4" />
                 Saytga o&apos;tish
               </a>
+              <AccountLink pathname={pathname} onNavigate={() => setMoreOpen(false)} />
               <LogoutButton />
             </div>
           </SheetContent>
