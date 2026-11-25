@@ -5,8 +5,16 @@ import type { TitleTiming } from "../../timeline.ts";
 import { OG_CARD, PROSE } from "../../theme/tokens.ts";
 import { useStage } from "../context.tsx";
 import { lerp, progress } from "../motion.ts";
+import { TitleCentered, TitleSplit } from "../components/b-title-layouts.tsx";
 
-export const TitleScene: React.FC<{ scene: TitleSceneData; timing: TitleTiming; t: number }> = ({ scene, timing, t }) => {
+export const TitleScene: React.FC<{ scene: TitleSceneData; timing: TitleTiming; t: number }> = (props) => {
+  if (props.scene.layout === "centered") return <TitleCentered {...props} />;
+  if (props.scene.layout === "split") return <TitleSplit {...props} />;
+  return <TitleLeft {...props} />;
+};
+
+/** The original left-aligned layout (the default; unchanged). */
+const TitleLeft: React.FC<{ scene: TitleSceneData; timing: TitleTiming; t: number }> = ({ scene, timing, t }) => {
   const { layout, theme } = useStage();
   const { px, sp } = layout;
   const maxW = Math.min(layout.content.width, px(1440));

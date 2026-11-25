@@ -4,8 +4,16 @@ import type { BulletsTiming } from "../../timeline.ts";
 import { FONT_STACK } from "../../theme/tokens.ts";
 import { useStage } from "../context.tsx";
 import { lerp, progress } from "../motion.ts";
+import { BulletsCentered, BulletsSplit } from "../components/b-bullets-layouts.tsx";
 
-export const BulletsScene: React.FC<{ scene: BulletsSceneData; timing: BulletsTiming; t: number }> = ({ scene, timing, t }) => {
+export const BulletsScene: React.FC<{ scene: BulletsSceneData; timing: BulletsTiming; t: number }> = (props) => {
+  if (props.scene.layout === "centered") return <BulletsCentered {...props} />;
+  if (props.scene.layout === "split") return <BulletsSplit {...props} />;
+  return <BulletsList {...props} />;
+};
+
+/** The original list layout (the default; unchanged). */
+const BulletsList: React.FC<{ scene: BulletsSceneData; timing: BulletsTiming; t: number }> = ({ scene, timing, t }) => {
   const { layout, theme } = useStage();
   const { px, sp } = layout;
   const headingSize = scene.heading.length <= 34 ? 72 : 56;
