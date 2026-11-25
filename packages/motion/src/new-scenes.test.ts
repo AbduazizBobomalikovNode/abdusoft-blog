@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { layoutDiagram } from "./diagram-layout.ts";
@@ -419,5 +419,26 @@ describe("README examples", () => {
     }
     expect(scenes.length).toBeGreaterThanOrEqual(8);
     for (const scene of scenes) ok([scene]);
+  });
+});
+
+describe("committed example storyboards", () => {
+  const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+  const files = walk(path.join(PKG, "fixtures")).filter((f) => f.endsWith(".json"));
+
+  it("every fixture validates and stays within 60 s", () => {
+    expect(files.length).toBeGreaterThanOrEqual(9);
+    for (const f of files) {
+      const r = validateStoryboard(JSON.parse(readFileSync(f, "utf8")));
+      if (!r.ok) throw new Error(`${path.relative(PKG, f)}: ${JSON.stringify(r.issues)}`);
+      expect(r.timeline.totalSeconds, f).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("each intro/closing variant has its own short storyboard, and the showcase uses new scenes in Uzbek", () => {
+    for (const v of SHOWPIECE_VARIANTS) expect(files.some((f) => f.endsWith(`variants/${v}.json`)), v).toBe(true);
+    const sb = JSON.parse(readFileSync(path.join(PKG, "fixtures", "showcase.json"), "utf8")) as { scenes: Array<{ type: string }> };
+    const types = new Set(sb.scenes.map((s) => s.type));
+    for (const t of ["intro", "closing", "diagram", "compare", "stat", "steps", "quote", "codeDiff"]) expect(types.has(t), t).toBe(true);
   });
 });

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "title": "constellation: ochilish va yakun",
+  "theme": "dark",
+  "siteName": "abdusoft",
+  "scenes": [
+    {
+      "type": "intro",
+      "id": "intro",
+      "variant": "constellation",
+      "kicker": "abdusoft blog · TypeScript",
+      "title": "Zod bilan API chegarasini himoyalang",
+      "subtitle": "Kiruvchi maʼlumotga ishonmang: uni chegarada tekshiring va turlarni bepul oling.",
+      "tags": [
+        "TypeScript",
+        "zod",
+        "API",
+        "xavfsizlik"
+      ]
+    },
+    {
+      "type": "bullets",
+      "id": "mid",
+      "heading": "Nega chegarada?",
+      "items": [
+        "Tashqi maʼlumot gumonli",
+        "Bitta sxema: tekshiruv va tur"
+      ]
+    },
+    {
+      "type": "closing",
+      "id": "closing",
+      "variant": "constellation",
+      "cta": "Toʻliq maqolani oʻqing",
+      "url": "blog.abdusoft.uz"
+    }
+  ]
+}

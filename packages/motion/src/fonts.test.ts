@@ -76,3 +76,18 @@ describe("glyph coverage (real font files)", () => {
     expect(f.hasGlyphForCodePoint(0x2bb)).toBe(true);
   });
 });
+
+describe("glyphs the engine draws by itself (not from storyboards)", () => {
+  it("every non-ASCII character in the bundle sources is one the fonts cover", () => {
+    const dir = path.join(PKG, "src", "bundle");
+    const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+    const used = new Set<string>();
+    for (const f of walk(dir).filter((x) => /\.tsx?$/.test(x))) for (const ch of readFileSync(f, "utf8")) if (ch.codePointAt(0)! > 127) used.add(ch);
+    const allowed = new Set([...UZBEK, ...SIGNS]);
+    for (const ch of used) {
+      expect(allowed.has(ch), `U+${(ch.codePointAt(0) as number).toString(16)} ${ch}`).toBe(true);
+      expect(face("sans", ch.codePointAt(0) as number).length, ch).toBeGreaterThan(0);
+      expect(face("mono", ch.codePointAt(0) as number).length, ch).toBeGreaterThan(0);
+    }
+  });
+});
