@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { config, isProduction } from "../config.js";
 import { db, fullSchema } from "../db/index.js";
+import { AUTH_CLIENT_IP_HEADER, buildAuthRateLimit } from "./auth-options.js";
 import { getSettings } from "./settings.js";
 
 // GitHub OAuth provider'ni betterAuth BOOT vaqtida ro'yxatga oladi (better-auth
@@ -49,18 +50,23 @@ export const auth = betterAuth({
       },
     },
   },
-  advanced: isProduction
-    ? {
-        crossSubDomainCookies: {
-          enabled: true,
-          domain: config.COOKIE_DOMAIN || ".abdusoft.uz",
-        },
-        defaultCookieAttributes: {
-          secure: true,
-          sameSite: "lax",
-        },
-      }
-    : undefined,
+  // Rate limit: IP faqat `lib/auth-handler.ts` qo'yadigan header'dan olinadi (TRUST_PROXY hisobga olinadi).
+  rateLimit: buildAuthRateLimit(),
+  advanced: {
+    ipAddress: { ipAddressHeaders: [AUTH_CLIENT_IP_HEADER] },
+    ...(isProduction
+      ? {
+          crossSubDomainCookies: {
+            enabled: true,
+            domain: config.COOKIE_DOMAIN || ".abdusoft.uz",
+          },
+          defaultCookieAttributes: {
+            secure: true,
+            sameSite: "lax" as const,
+          },
+        }
+      : {}),
+  },
 });
 
 export type Auth = typeof auth;

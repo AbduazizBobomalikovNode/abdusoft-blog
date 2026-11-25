@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { config } from "./config.js";
-import { auth } from "./lib/auth.js";
+import { handleAuthRequest } from "./lib/auth-handler.js";
 import { uploadsDir } from "./lib/media/store.js";
 import { adminRoute } from "./routes/admin.js";
 import { commentItemRoute } from "./routes/comment-item.js";
@@ -40,7 +40,7 @@ app.use(
   }),
 );
 
-app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+app.on(["GET", "POST"], "/api/auth/*", (c) => handleAuthRequest(c));
 
 app.use("/uploads/*", async (c, next) => {
   // SVG upload'lar (sharp orqali o'tmaydigan passthrough fayllar) shu papkadan
