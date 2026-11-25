@@ -1,5 +1,5 @@
 import type { AuditLogItem } from "@blog/shared";
-import { auditActionLabel, entityLabel } from "@/lib/admin-labels";
+import { entityLabel } from "@/lib/admin-labels";
 
 /**
  * Jurnal qatorining "obyekt" ustuni: tur + (post uchun) hozirgi sarlavha. Post hali mavjud bo'lsa — havola; o'chirilgan
@@ -33,4 +33,25 @@ export function auditFieldsText(meta: Record<string, unknown>): string | null {
   return names.length > 0 ? names.join(", ") : null;
 }
 
-export { auditActionLabel };
+
+export interface AuditQueryState {
+  via?: string;
+  entityType?: string;
+  entityId?: string;
+  action?: string;
+  from?: string;
+  to?: string;
+}
+
+const BASE = "/admin/jurnal";
+
+export function auditHref(state: AuditQueryState, overrides: Partial<Record<keyof AuditQueryState, string | undefined>> = {}): string {
+  const merged = { ...state, ...overrides };
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(merged)) {
+    if (value) search.set(key, value);
+  }
+  const qs = search.toString();
+  return qs ? `${BASE}?${qs}` : BASE;
+}
+

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditFieldsText, auditTarget } from "./audit-view";
+import { auditFieldsText, auditHref, auditTarget } from "./audit-view";
 
 describe("auditTarget", () => {
   const posts = new Map([["p1", "Bor post"]]);
@@ -31,5 +31,18 @@ describe("auditFieldsText", () => {
     expect(auditFieldsText({ fields: [] })).toBeNull();
     expect(auditFieldsText({ fields: "title" })).toBeNull();
     expect(auditFieldsText({ fields: [1, null] })).toBeNull();
+  });
+});
+
+describe("auditHref", () => {
+  it("builds a link that keeps the active filters and applies overrides", () => {
+    expect(auditHref({})).toBe("/admin/jurnal");
+    expect(auditHref({ via: "mcp", entityType: "post" })).toBe("/admin/jurnal?via=mcp&entityType=post");
+    expect(auditHref({ via: "mcp", entityType: "post" }, { via: undefined })).toBe("/admin/jurnal?entityType=post");
+    expect(auditHref({ via: "mcp" }, { via: "telegram", from: "2026-11-01" })).toBe("/admin/jurnal?via=telegram&from=2026-11-01");
+  });
+
+  it("is a plain function usable from server components (lives outside the client module)", () => {
+    expect(typeof auditHref).toBe("function");
   });
 });

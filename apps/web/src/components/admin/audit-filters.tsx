@@ -4,29 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { auditHref, type AuditQueryState } from "@/lib/audit-view";
 import { AUDIT_ACTION_OPTIONS, AUDIT_ENTITY_OPTIONS, VIA_VALUES, isAutomatedVia, viaLabel } from "@/lib/admin-labels";
 import { cn } from "@/lib/utils";
-
-export interface AuditQueryState {
-  via?: string;
-  entityType?: string;
-  entityId?: string;
-  action?: string;
-  from?: string;
-  to?: string;
-}
-
-const BASE = "/admin/jurnal";
-
-export function auditHref(state: AuditQueryState, overrides: Partial<Record<keyof AuditQueryState, string | undefined>> = {}): string {
-  const merged = { ...state, ...overrides };
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(merged)) {
-    if (value) search.set(key, value);
-  }
-  const qs = search.toString();
-  return qs ? `${BASE}?${qs}` : BASE;
-}
 
 function toDateOnly(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -99,9 +79,9 @@ export function AuditFilters({ state }: { state: AuditQueryState }) {
   const preset = presetFor(state.from, state.to);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
       <Select value={state.entityType ?? "all"} onValueChange={(value) => go({ entityType: value === "all" ? undefined : value, action: undefined })}>
-        <SelectTrigger size="sm" className="w-40 max-md:h-11" aria-label="Obyekt turi">
+        <SelectTrigger size="sm" className="w-full max-md:h-11 sm:w-40" aria-label="Obyekt turi">
           <SelectValue placeholder="Obyekt" />
         </SelectTrigger>
         <SelectContent>
@@ -114,8 +94,9 @@ export function AuditFilters({ state }: { state: AuditQueryState }) {
         </SelectContent>
       </Select>
 
+      <div className="order-last col-span-2 sm:order-none sm:col-span-1">
       <Select value={state.action ?? "all"} onValueChange={(value) => go({ action: value === "all" ? undefined : value })}>
-        <SelectTrigger size="sm" className="w-52 max-md:h-11" aria-label="Amal">
+        <SelectTrigger size="sm" className="w-full max-md:h-11 sm:w-52" aria-label="Amal">
           <SelectValue placeholder="Amal" />
         </SelectTrigger>
         <SelectContent>
@@ -129,12 +110,13 @@ export function AuditFilters({ state }: { state: AuditQueryState }) {
           )}
         </SelectContent>
       </Select>
+      </div>
 
       <Select
         value={preset}
         onValueChange={(value) => go({ ...({ from: undefined, to: undefined } as const), ...rangeForPreset(value as TimePreset) })}
       >
-        <SelectTrigger size="sm" className="w-36 max-md:h-11" aria-label="Vaqt">
+        <SelectTrigger size="sm" className="w-full max-md:h-11 sm:w-36" aria-label="Vaqt">
           <SelectValue placeholder="Vaqt" />
         </SelectTrigger>
         <SelectContent>
@@ -147,7 +129,7 @@ export function AuditFilters({ state }: { state: AuditQueryState }) {
       </Select>
 
       {preset === "custom" ? (
-        <div className="flex items-center gap-1.5">
+        <div className="order-last col-span-2 flex items-center gap-1.5 sm:order-none sm:col-span-1">
           <Input
             type="date"
             aria-label="Boshlanish sanasi"
