@@ -24,8 +24,16 @@ export interface McpToolAnnotations {
  * Vosita natijasi. `data` — JSON-ga aylanadigan ob'ekt. Natija `MCP_RESULT_MAX_CHARS`dan oshsa `fitResult`:
  * avval `shrink` (tartib bilan: maydonni olib tashlash/qisqartirish), keyin `listKey` massivini qisqartiradi.
  */
+export interface ToolImage {
+  /** Base64 (oddiy, `data:` prefiksisiz). */
+  data: string;
+  mimeType: "image/jpeg" | "image/png";
+}
+
 export interface ToolOutput {
   data: Record<string, unknown>;
+  /** Rasm natijalari (masalan video ko'rik kadrlari): matn bilan birga `image` kontent sifatida qaytadi. Jami hajm vosita ichida cheklanadi. */
+  images?: ToolImage[];
   listKey?: string;
   /** Tartib bilan qo'llaniladigan qisqartirish qadamlari. */
   shrink?: Array<{ key: string; mode: "drop" | "truncate"; note: string }>;
@@ -88,6 +96,7 @@ const KIND_TO_CODE: Record<ServiceErrorKind, ToolErrorCode> = {
   not_found: "not_found",
   conflict: "conflict",
   unprocessable: "unprocessable",
+  rate_limited: "rate_limited",
 };
 
 /** Xizmat natijasini ochadi; xato bo'lsa `ToolError` tashlaydi (xizmatning o'z xabari + amaliy maslahat bilan). */

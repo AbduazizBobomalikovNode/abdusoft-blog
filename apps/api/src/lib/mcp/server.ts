@@ -32,7 +32,10 @@ export function buildMcpServer(ctx: McpToolContext): McpServer {
         inputSchema: z.object(def.inputSchema).strict(),
         annotations: { title: def.title, ...def.annotations },
       },
-      async (args: unknown) => runTool(def, args, ctx),
+      async (args: unknown) => {
+        const { images, ...result } = await runTool(def, args, ctx);
+        return images ? { ...result, content: [...result.content, ...images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }))] } : result;
+      },
     );
   }
   return server;

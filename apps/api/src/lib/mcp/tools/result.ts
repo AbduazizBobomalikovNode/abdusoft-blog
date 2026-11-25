@@ -1,10 +1,12 @@
-import type { ToolError } from "./types.js";
+import type { ToolError, ToolImage } from "./types.js";
 import { untrusted } from "./untrusted.js";
 import type { ToolOutput } from "./types.js";
 
 export interface McpToolResult {
   [key: string]: unknown;
   content: Array<{ type: "text"; text: string }>;
+  /** Rasm natijalari: `server.ts` ularni `image` kontent sifatida matndan keyin qo'shadi. */
+  images?: ToolImage[];
   isError?: boolean;
 }
 
@@ -74,8 +76,8 @@ export function fitResult(output: ToolOutput, maxChars: number): { text: string;
   };
 }
 
-export function okResult(text: string): McpToolResult {
-  return { content: [{ type: "text", text }] };
+export function okResult(text: string, images?: ToolImage[]): McpToolResult {
+  return { content: [{ type: "text", text }], ...(images && images.length > 0 ? { images } : {}) };
 }
 
 export function errorResult(error: ToolError): McpToolResult {
