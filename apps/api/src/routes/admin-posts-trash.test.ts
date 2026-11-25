@@ -238,6 +238,16 @@ describe("slug of a trashed post is freed", () => {
     expect((await row(id)).originalSlug).toBeNull();
   });
 
+  it("restoring a row trashed before migration 0014 (original_slug NULL) keeps its own slug", async () => {
+    const created = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "Eski chiqindi" }));
+    await patch(`/admin/posts/${created.id}`, admin.cookie, { slug: "eski-chiqindi-slug" });
+    // 0014'dan oldingi kod: faqat deleted_at qo'yilgan, slug o'zgarmagan.
+    await db.execute(sql`update posts set deleted_at = now() where id = ${created.id}`);
+    const res = await post(`/admin/posts/trash/${created.id}/restore`, admin.cookie);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ slug: "eski-chiqindi-slug", slugRestored: true, originalSlug: "eski-chiqindi-slug" });
+  });
+
   it("restore uses a free variant when another post took the slug, and says so (response and audit)", async () => {
     const id = await trashedWithSlug("band-bolgan-slug");
     const other = await json<{ id: string }>(await post("/admin/posts", admin.cookie, { title: "Egallovchi" }));
