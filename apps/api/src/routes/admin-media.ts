@@ -1,13 +1,10 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "../db/index.js";
-import { media } from "../db/schema.js";
-import { MediaListQuerySchema, listMedia, toMediaDto } from "../lib/admin-reads/media.js";
+import { MediaListQuerySchema, listMedia } from "../lib/admin-reads/media.js";
 import { requireRole } from "../lib/require-admin.js";
-import { recordAuditSafe } from "../lib/audit.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
-import { deleteStoredFile, processImage, storeProcessedFile } from "../lib/media/store.js";
+import { createMediaFromBuffer, deleteMedia, updateMediaAlt } from "../lib/media/service.js";
+import { errorResponse } from "./service-response.js";
 
 const MAX_SIZE = 10 * 1024 * 1024;
 
@@ -50,41 +47,16 @@ export const adminMediaRoute = new Hono()
     const alt = typeof body.alt === "string" && body.alt.length > 0 ? body.alt : null;
 
     let buffer: Buffer;
-    let processed: Awaited<ReturnType<typeof processImage>>;
     try {
       buffer = Buffer.from(await file.arrayBuffer());
-      processed = await processImage(buffer, file.type);
     } catch (error) {
       console.error("Rasmni qayta ishlashda xatolik:", error);
       return c.json({ error: "Rasmni qayta ishlab bo'lmadi" }, 400);
     }
 
-    const stored = await storeProcessedFile(processed);
-
-    const [created] = await db
-      .insert(media)
-      .values({
-        key: stored.key,
-        url: stored.url,
-        mime: processed.mime,
-        size: processed.buffer.byteLength,
-        width: processed.width,
-        height: processed.height,
-        alt,
-        createdBy: adminUser.id,
-      })
-      .returning();
-
-    if (!created) return c.json({ error: "Yuklab bo'lmadi" }, 500);
-    await recordAuditSafe(actorFromAdminUser(adminUser), {
-      action: "media.upload",
-      entityType: "media",
-      entityId: created.id,
-      summary: "Media fayl yuklandi",
-      meta: { mime: created.mime, size: created.size },
-    });
-
-    return c.json(toMediaDto(created), 201);
+    const result = await createMediaFromBuffer(actorFromAdminUser(adminUser), { buffer, mime: file.type, alt });
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data, 201);
   })
   .patch("/:id", async (c) => {
     const adminUser = c.get("adminUser");
@@ -93,46 +65,13 @@ export const adminMediaRoute = new Hono()
     const parsed = UpdateMediaBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
-    const [existing] = await db.select({ createdBy: media.createdBy }).from(media).where(eq(media.id, id)).limit(1);
-    if (!existing) return c.json({ error: "Topilmadi" }, 404);
-    if (adminUser.role === "staff" && existing.createdBy !== adminUser.id) {
-      return c.json({ error: "Faqat o'zingiz yuklagan fayllarni o'zgartira olasiz" }, 403);
-    }
-
-    const [updated] = await db
-      .update(media)
-      .set({ alt: parsed.data.alt })
-      .where(eq(media.id, id))
-      .returning();
-
-    if (!updated) return c.json({ error: "Topilmadi" }, 404);
-    await recordAuditSafe(actorFromAdminUser(adminUser), {
-      action: "media.update",
-      entityType: "media",
-      entityId: id,
-      summary: "Media fayl tavsifi (alt) o'zgartirildi",
-      meta: { fields: ["alt"] },
-    });
-    return c.json(toMediaDto(updated));
+    const result = await updateMediaAlt(actorFromAdminUser(adminUser), id, parsed.data.alt);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .delete("/:id", async (c) => {
     const adminUser = c.get("adminUser");
-    const id = c.req.param("id");
-    const [row] = await db.select().from(media).where(eq(media.id, id)).limit(1);
-    if (!row) return c.json({ error: "Topilmadi" }, 404);
-    if (adminUser.role === "staff" && row.createdBy !== adminUser.id) {
-      return c.json({ error: "Faqat o'zingiz yuklagan fayllarni o'chira olasiz" }, 403);
-    }
-
-    await deleteStoredFile(row.key);
-    await db.delete(media).where(eq(media.id, id));
-    await recordAuditSafe(actorFromAdminUser(adminUser), {
-      action: "media.delete",
-      entityType: "media",
-      entityId: id,
-      summary: "Media fayl o'chirildi",
-      meta: { mime: row.mime, size: row.size },
-    });
-
+    const result = await deleteMedia(actorFromAdminUser(adminUser), c.req.param("id"));
+    if (!result.ok) return errorResponse(c, result.error);
     return c.json({ ok: true });
   });

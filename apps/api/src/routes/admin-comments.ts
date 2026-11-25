@@ -9,16 +9,9 @@ import {
 import { db } from "../db/index.js";
 import { bannedDevices } from "../db/schema.js";
 import { AdminCommentListQuerySchema, listAdminComments } from "../lib/admin-reads/comments.js";
-import {
-  banCommentAuthor,
-  deleteCommentCascade,
-  isBanAvailable,
-  loadCommentRow,
-  replyToCommentAsAdmin,
-  sendAdminReplyToTelegram,
-  setCommentStatus,
-  TelegramReplyError,
-} from "../lib/comments-admin.js";
+import { sendAdminReplyToTelegram, setCommentStatus, TelegramReplyError } from "../lib/comments-admin.js";
+import { banCommenter, deleteComment, moderateComment, replyToComment } from "../lib/comments-moderation.js";
+import { errorResponse } from "./service-response.js";
 import { requireAdmin } from "../lib/require-admin.js";
 import { recordAuditSafe } from "../lib/audit.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
@@ -51,15 +44,8 @@ export const adminCommentsRoute = new Hono()
     const parsed = AdminCommentUpdateBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
-    const updated = await setCommentStatus(id, parsed.data.status);
-    if (!updated) return c.json({ error: "Topilmadi" }, 404);
-    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-      action: "comment.status",
-      entityType: "comment",
-      entityId: id,
-      summary: `Izoh holati o'zgardi: ${parsed.data.status}`,
-      meta: { status: parsed.data.status, postId: updated.postId },
-    });
+    const result = await moderateComment(actorFromAdminUser(c.get("adminUser")), id, parsed.data.status);
+    if (!result.ok) return errorResponse(c, result.error);
 
     return c.json({ ok: true });
   })
@@ -94,20 +80,13 @@ export const adminCommentsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
     try {
-      const created = await replyToCommentAsAdmin(id, parsed.data.body, {
+      const created = await replyToComment(actorFromAdminUser(adminUser), id, parsed.data.body, {
         id: adminUser.id,
         name: adminUser.name ?? adminUser.email,
       });
-      if (!created) return c.json({ error: "Topilmadi" }, 404);
-      await recordAuditSafe(actorFromAdminUser(adminUser), {
-        action: "comment.reply",
-        entityType: "comment",
-        entityId: created.id,
-        summary: "Izohga admin javob yozdi",
-        meta: { parentId: id },
-      });
+      if (!created.ok) return errorResponse(c, created.error);
 
-      return c.json({ id: created.id }, 201);
+      return c.json({ id: created.data.id }, 201);
     } catch (error) {
       if (error instanceof TelegramReplyError) return c.json({ error: error.message }, error.status);
       throw error;
@@ -130,15 +109,8 @@ export const adminCommentsRoute = new Hono()
     }
   })
   .delete("/:id", async (c) => {
-    const deleted = await deleteCommentCascade(c.req.param("id"));
-    if (!deleted) return c.json({ error: "Topilmadi" }, 404);
-    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-      action: "comment.delete",
-      entityType: "comment",
-      entityId: deleted.id,
-      summary: "Izoh o'chirildi",
-      meta: { postId: deleted.postId },
-    });
+    const deleted = await deleteComment(actorFromAdminUser(c.get("adminUser")), c.req.param("id"));
+    if (!deleted.ok) return errorResponse(c, deleted.error);
     return c.json({ ok: true });
   })
   .post("/:id/ban", async (c) => {
@@ -147,21 +119,8 @@ export const adminCommentsRoute = new Hono()
     const parsed = AdminCommentBanBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
-    const target = await loadCommentRow(id);
-    if (!target) return c.json({ error: "Topilmadi" }, 404);
-    if (!isBanAvailable(target)) {
-      return c.json({ error: "Bu izoh muallifini bloklab bo'lmaydi (Telegram foydalanuvchi id'si yo'q)" }, 409);
-    }
-
-    const banned = await banCommentAuthor(id, parsed.data.reason);
-    if (!banned) return c.json({ error: "Topilmadi" }, 404);
-    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-      action: "comment.ban",
-      entityType: "comment",
-      entityId: id,
-      summary: "Izoh muallifi bloklandi",
-      meta: { hasReason: Boolean(parsed.data.reason) },
-    });
+    const banned = await banCommenter(actorFromAdminUser(c.get("adminUser")), id, parsed.data.reason);
+    if (!banned.ok) return errorResponse(c, banned.error);
 
     return c.json({ ok: true });
   });

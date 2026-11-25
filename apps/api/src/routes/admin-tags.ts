@@ -1,12 +1,10 @@
 import { Hono, type Context } from "hono";
-import { eq, sql } from "drizzle-orm";
-import { CreateTagBodySchema, UpdateTagBodySchema, slugify } from "@blog/shared";
-import { db } from "../db/index.js";
-import { postTags, tags } from "../db/schema.js";
+import { CreateTagBodySchema, UpdateTagBodySchema } from "@blog/shared";
 import { tagsQuery } from "../lib/admin-reads/tags.js";
 import { requireRole } from "../lib/require-admin.js";
-import { recordAuditSafe } from "../lib/audit.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
+import { createTag, deleteTag, updateTag } from "../lib/tags-admin.js";
+import { errorResponse } from "./service-response.js";
 
 /** Bio `admin-posts.ts`dagi izohga qarang — Hono zanjiri turini saqlab qolish uchun middleware o'rniga handler ichidagi tekshiruv. */
 function forbidUnlessAdmin(c: Context): Response | null {
@@ -28,31 +26,9 @@ export const adminTagsRoute = new Hono()
     const parsed = CreateTagBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
-    const slug = slugify(parsed.data.slug ?? parsed.data.name);
-    if (!slug) return c.json({ error: "Slug bo'sh bo'lishi mumkin emas" }, 400);
-
-    const [existing] = await db.select({ id: tags.id }).from(tags).where(eq(tags.slug, slug)).limit(1);
-    if (existing) return c.json({ error: `"${slug}" slug allaqachon band` }, 409);
-
-    const [created] = await db
-      .insert(tags)
-      .values({
-        slug,
-        name: parsed.data.name,
-        description: parsed.data.description ?? null,
-        color: parsed.data.color ?? null,
-      })
-      .returning();
-
-    if (!created) return c.json({ error: "Yaratib bo'lmadi" }, 500);
-    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-      action: "tag.create",
-      entityType: "tag",
-      entityId: created.id,
-      summary: `Teg yaratildi: ${created.name}`,
-      meta: { slug: created.slug },
-    });
-    return c.json({ ...created, postsCount: 0 }, 201);
+    const result = await createTag(actorFromAdminUser(c.get("adminUser")), parsed.data);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data, 201);
   })
   .patch("/:id", async (c) => {
     const forbidden = forbidUnlessAdmin(c);
@@ -62,71 +38,14 @@ export const adminTagsRoute = new Hono()
     const parsed = UpdateTagBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
-    const [existingTag] = await db.select().from(tags).where(eq(tags.id, id)).limit(1);
-    if (!existingTag) return c.json({ error: "Topilmadi" }, 404);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- drizzle partial update payload
-    const update: Record<string, any> = {};
-    if (parsed.data.name !== undefined) update.name = parsed.data.name;
-    if (parsed.data.description !== undefined) update.description = parsed.data.description;
-    if (parsed.data.color !== undefined) update.color = parsed.data.color;
-
-    if (parsed.data.slug !== undefined) {
-      const clean = slugify(parsed.data.slug);
-      if (!clean) return c.json({ error: "Slug bo'sh bo'lishi mumkin emas" }, 400);
-      const [conflict] = await db.select({ id: tags.id }).from(tags).where(eq(tags.slug, clean)).limit(1);
-      if (conflict && conflict.id !== id) return c.json({ error: `"${clean}" slug allaqachon band` }, 409);
-      update.slug = clean;
-    }
-
-    if (Object.keys(update).length > 0) {
-      await db.update(tags).set(update).where(eq(tags.id, id));
-    }
-
-    if (Object.keys(update).length > 0) {
-      await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-        action: "tag.update",
-        entityType: "tag",
-        entityId: id,
-        summary: `Teg tahrirlandi: ${(update.name as string | undefined) ?? existingTag.name}`,
-        meta: { fields: Object.keys(update) },
-      });
-    }
-
-    const [row] = await tagsQuery(id);
-    return c.json(row);
+    const result = await updateTag(actorFromAdminUser(c.get("adminUser")), id, parsed.data);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .delete("/:id", async (c) => {
     const forbidden = forbidUnlessAdmin(c);
     if (forbidden) return forbidden;
-    const id = c.req.param("id");
-    const force = c.req.query("force") === "1";
-
-    const [existingTag] = await db.select().from(tags).where(eq(tags.id, id)).limit(1);
-    if (!existingTag) return c.json({ error: "Topilmadi" }, 404);
-
-    const [countRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(postTags)
-      .where(eq(postTags.tagId, id));
-    const postsCount = countRow?.count ?? 0;
-
-    if (postsCount > 0 && !force) {
-      return c.json(
-        { error: "Teg postlarda ishlatilmoqda — o'chirish uchun ?force=1 qo'shing", postsCount },
-        409,
-      );
-    }
-
-    await db.delete(postTags).where(eq(postTags.tagId, id));
-    await db.delete(tags).where(eq(tags.id, id));
-    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-      action: "tag.delete",
-      entityType: "tag",
-      entityId: id,
-      summary: `Teg o'chirildi: ${existingTag.name}`,
-      meta: { slug: existingTag.slug, postsCount, force },
-    });
-
+    const result = await deleteTag(actorFromAdminUser(c.get("adminUser")), c.req.param("id"), c.req.query("force") === "1");
+    if (!result.ok) return errorResponse(c, result.error);
     return c.json({ ok: true });
   });
