@@ -45,14 +45,19 @@ cat >"$SHIMS/killparent" <<'EOF'
 #!/bin/bash
 # deploy skriptini (abdusoft-blog-deploy.XXXXXX) SIGKILL qiladi — o'ldirilgan jarayonni simulyatsiya.
 p=$$
+targets=""
 while [ "$p" -gt 1 ]; do
   cmd="$(ps -o command= -p "$p" 2>/dev/null)"
+  # subshell'lar skript bilan bir xil argv'ga ega — barcha mos ajdodlar (skript va uning subshell'lari) o'ldiriladi
   case "$cmd" in
-    *abdusoft-blog-deploy.*) kill -9 "$p"; exit 0 ;;
+    *abdusoft-blog-deploy.*) targets="$p $targets" ;;
   esac
   p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
-  [ -n "$p" ] || exit 0
+  [ -n "$p" ] || break
 done
+# shellcheck disable=SC2086
+[ -n "$targets" ] && kill -9 $targets
+exit 0
 EOF
 cat >"$SHIMS/sudo" <<EOF
 #!/bin/bash
