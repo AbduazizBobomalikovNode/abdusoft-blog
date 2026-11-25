@@ -31,6 +31,9 @@ export interface ToolOutput {
   shrink?: Array<{ key: string; mode: "drop" | "truncate"; note: string }>;
 }
 
+/** Yozuv chegarasi toifasi (har bir ulanish uchun, `MCP_WRITE_LIMIT_*`). */
+export type WriteLimitCategory = "create" | "edit" | "upload" | "publish" | "channel" | "moderate" | "destructive";
+
 export interface McpToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   name: string;
   title: string;
@@ -42,6 +45,10 @@ export interface McpToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   annotations: McpToolAnnotations;
   /** `read` — chaqiruv jurnalga yig'ilib yoziladi; `write` — xizmat funksiyasining o'zi jurnalga yozadi. */
   kind: "read" | "write";
+  /** Faqat yozuv vositalari: qaysi chegara toifasiga kiradi (`dry_run: true` chaqiruvlar hisobga olinmaydi). */
+  limit?: WriteLimitCategory;
+  /** `true` — vosita faqat `MCP_PURGE_ENABLED` yoqilganda ro'yxatga olinadi va ishlaydi. */
+  requiresPurgeSwitch?: boolean;
   handler: (args: z.infer<z.ZodObject<Shape>>, ctx: McpToolContext) => Promise<ToolOutput>;
 }
 
@@ -56,6 +63,8 @@ export type ToolErrorCode =
   | "conflict"
   | "forbidden"
   | "unprocessable"
+  | "rate_limited"
+  | "lossy_content"
   | "internal_error";
 
 /** Modelga qaytariladigan, "amal qilsa bo'ladigan" xato. */

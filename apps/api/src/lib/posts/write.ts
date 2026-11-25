@@ -5,6 +5,7 @@ import {
   RESERVED_SLUGS,
   STAFF_EDITABLE_POST_FIELDS,
   slugify,
+  type PostSettings,
   type UpdatePostBody,
 } from "@blog/shared";
 import { db } from "../../db/index.js";
@@ -31,7 +32,7 @@ async function generateDraftSlug(): Promise<string> {
 }
 
 /** Slug tozalanadi, band qilingan/bo'sh/boshqa postga tegishli bo'lsa xato qaytaradi (slug unikal — o'chirilganlar uchun ham band). */
-async function validateSlug(rawSlug: string, postId: string): Promise<ServiceResult<string>> {
+export async function validateSlug(rawSlug: string, postId: string): Promise<ServiceResult<string>> {
   const clean = slugify(rawSlug);
   if (!clean) return fail("bad_request", "Slug bo'sh bo'lishi mumkin emas");
   if ((RESERVED_SLUGS as readonly string[]).includes(clean)) {
@@ -103,6 +104,86 @@ export async function createPost(
 
   if (!created) return fail("bad_request", "Post yaratib bo'lmadi");
   return ok({ id: created.id, slug: created.slug });
+}
+
+export interface CreateDraftInput {
+  title: string;
+  /** Berilmasa sarlavhadan (yoki bo'sh bo'lsa tasodifiy) olinadi; band bo'lsa `-2`, `-3`... qo'shiladi. */
+  slug?: string;
+  excerpt?: string | null;
+  contentJson: unknown;
+  coverUrl?: string | null;
+  tagSlugs?: string[];
+  settings?: Partial<PostSettings>;
+}
+
+async function findFreeDraftSlug(wanted: string): Promise<string> {
+  const base = slugify(wanted);
+  if (!base || (RESERVED_SLUGS as readonly string[]).includes(base)) return generateDraftSlug();
+  for (let n = 1; n <= 30; n++) {
+    const candidate = n === 1 ? base : `${base}-${n}`;
+    if ((RESERVED_SLUGS as readonly string[]).includes(candidate)) continue;
+    const [existing] = await db.select({ id: posts.id }).from(posts).where(eq(posts.slug, candidate)).limit(1);
+    if (!existing) return candidate;
+  }
+  return `${base}-${nanoid(SLUG_ID_LENGTH).toLowerCase()}`;
+}
+
+/**
+ * MCP `create_post_draft`: kontent, teglar va sozlamalar bilan BIR yozuvda (bitta tranzaksiya, bitta jurnal yozuvi) qoralama
+ * yaratadi. Hech qachon chop etilmaydi (`status: "draft"`). Mavjud `createPost` (bo'sh qoralama) o'zgarmagan.
+ */
+export async function createDraft(actor: Actor, input: CreateDraftInput): Promise<ServiceResult<{ id: string; slug: string; updatedAt: string }>> {
+  let slug: string;
+  if (input.slug !== undefined) {
+    const checked = await validateSlug(input.slug, "00000000-0000-0000-0000-000000000000");
+    if (!checked.ok) return checked;
+    slug = checked.data;
+  } else {
+    slug = await findFreeDraftSlug(input.title);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tiptap JSONContent
+  const rendered = await renderPost(input.contentJson as any);
+  const tagRows = input.tagSlugs && input.tagSlugs.length > 0 ? await resolveTagIds(input.tagSlugs) : [];
+  const now = new Date();
+
+  const created = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(posts)
+      .values({
+        slug,
+        title: input.title,
+        excerpt: input.excerpt === undefined || input.excerpt === null ? rendered.excerpt : input.excerpt,
+        contentJson: input.contentJson,
+        contentHtml: rendered.html,
+        contentText: rendered.text,
+        toc: rendered.toc,
+        readingTime: rendered.readingTime,
+        coverUrl: input.coverUrl ?? null,
+        status: "draft",
+        settings: resolveSettings(DEFAULT_POST_SETTINGS, input.settings),
+        createdBy: actor.userId,
+        updatedBy: actor.userId,
+        updatedVia: actor.via,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    if (!row) return null;
+    if (tagRows.length > 0) {
+      await tx.insert(postTags).values(tagRows.map((tag) => ({ postId: row.id, tagId: tag.id }))).onConflictDoNothing();
+    }
+    await recordAudit(tx, actor, {
+      action: "post.create",
+      entityType: "post",
+      entityId: row.id,
+      summary: `Post yaratildi: ${postLabel(row)}`,
+      meta: { slug: row.slug, fields: ["title", "contentJson", ...(input.excerpt != null ? ["excerpt"] : []), ...(input.coverUrl ? ["coverUrl"] : []), ...(tagRows.length ? ["tagSlugs"] : []), ...(input.settings ? ["settings"] : [])] },
+    });
+    return row;
+  });
+  if (!created) return fail("bad_request", "Post yaratib bo'lmadi");
+  return ok({ id: created.id, slug: created.slug, updatedAt: created.updatedAt.toISOString() });
 }
 
 /**
