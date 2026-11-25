@@ -150,14 +150,15 @@ export function rotateHue(color: string, deg: number): string {
 
 /**
  * Move `color` toward white (dark surface) or black (light surface) in OKLab until its contrast against
- * `bg` reaches `min`. Returns hex; the colour is untouched if it already passes.
+ * every surface in `bg` reaches `min`. Returns hex; the colour is untouched if it already passes.
  */
-export function ensureContrast(color: string, bg: string, min: number, towards: "white" | "black"): string {
+export function ensureContrast(color: string, bg: string | readonly string[], min: number, towards: "white" | "black"): string {
+  const bgs = typeof bg === "string" ? [bg] : bg;
   const target: RGBA = { rgb: towards === "white" ? [255, 255, 255] : [0, 0, 0], a: 1 };
   const base = parseColor(color);
   for (let step = 0; step <= 20; step++) {
     const c = toHex(mix(base, target, step / 20).rgb);
-    if (contrast(c, bg) >= min) return c;
+    if (bgs.every((b) => contrast(c, b) >= min)) return c;
   }
   return towards === "white" ? "#ffffff" : "#000000";
 }

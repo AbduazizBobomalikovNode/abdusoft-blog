@@ -194,8 +194,8 @@ export function createTheme(mode: ThemeMode, accentOverride?: string, preset: Pr
   const accent2 = pal?.accent2 && !accentOverride ? pal.accent2 : rotateHue(accentHex, 55);
   const towards = dark ? "white" : "black";
   // The default preset keeps the original expressions (pixel-identical to the first release).
-  const accentText = pal === null ? (dark ? `color-mix(in oklab, ${accent} 62%, white)` : `${accent}`) : ensureContrast(accentHex, background, 4.6, towards);
-  const accent2Text = ensureContrast(toHex(parseColor(accent2).rgb), background, 4.6, towards);
+  const accentText = pal === null ? (dark ? `color-mix(in oklab, ${accent} 62%, white)` : `${accent}`) : ensureContrast(accentHex, [background, pal.card], 4.6, towards);
+  const accent2Text = ensureContrast(toHex(parseColor(accent2).rgb), pal ? [background, pal.card] : background, 4.6, towards);
   const mutedForeground = pal?.mutedForeground ?? get("muted-foreground");
   return {
     mode,
