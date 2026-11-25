@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+[O'zbekcha](#ozbekcha) · [English](#english)
+
+### O'zbekcha
+
+**Claude konnektori — 1a bosqich (faqat o'qish), `MCP_ENABLED` orqasida**
+- Masofaviy MCP server (`/mcp`) va OAuth 2.1 avtorizatsiya serveri (PKCE, dinamik ro'yxatdan o'tish, Client ID Metadata Document, refresh rotatsiyasi); server tomonda AI modeli yo'q
+- 12 ta o'qish vositasi: postlar, post kontenti, teglar, izohlar, statistika, tarix, chiqindi qutisi, amallar jurnali, media, `whoami`
+- Ruxsatlar (o'qish / yozish / chop etish / xavfli) va veb rozilik sahifasi (faqat admin); Admin → Ulangan ilovalar (to'liq bekor qilish)
+- `better-auth` 1.7.7 → 1.7.28; yangi `jwks` va `oauth_*` jadvallari (additiv migratsiya `0015`)
+- Qo'llanma: `docs/claude-connector.md`
+
+### English
+
+**Claude connector — stage 1a (read-only), behind `MCP_ENABLED`**
+- Remote MCP server (`/mcp`) and OAuth 2.1 authorization server (PKCE, dynamic registration, Client ID Metadata Documents, refresh rotation); no AI model on the server
+- 12 read tools: posts, post content, tags, comments, stats, history, trash, audit log, media, `whoami`
+- Permissions (read / write / publish / dangerous) and a web consent page (admin only); Admin → Connected apps (full revocation)
+- `better-auth` 1.7.7 → 1.7.28; new `jwks` and `oauth_*` tables (additive migration `0015`)
+- Guide: `docs/claude-connector.md`
+
 ## v1.0.0 — 2026-10-01
 
 [O'zbekcha](#ozbekcha) · [English](#english)
