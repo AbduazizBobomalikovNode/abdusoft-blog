@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { layoutDiagram } from "../diagram-layout.ts";
 import { ENABLED_FORMATS } from "../layout.ts";
-import { LIMITS } from "../limits.ts";
+import { INPUT_LIMITS, LIMITS } from "../limits.ts";
 import { HEX_PATTERN, PRESETS } from "../theme/tokens.ts";
 
 /**
@@ -14,10 +14,9 @@ import { HEX_PATTERN, PRESETS } from "../theme/tokens.ts";
  */
 export const STORYBOARD_VERSION = 1 as const;
 
-const hasControl = (v: string): boolean => [...v].some((c) => {
-  const n = c.codePointAt(0) as number;
-  return n < 32 || n === 127;
-});
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/;
+const hasControl = (v: string): boolean => CONTROL.test(v);
 
 /** Single-line display text: no line breaks or control characters. */
 const line = (max: number, what: string) =>
@@ -160,6 +159,9 @@ export const codeSceneSchema = z
     code: z
       .string()
       .min(1, { error: "code must not be empty" })
+      .max(INPUT_LIMITS.maxCodeChars, {
+        error: `code is far longer than the screen can show (limit ${INPUT_LIMITS.maxCodeChars} characters = ${LIMITS.maxCodeLines} lines of ${LIMITS.maxLineChars})`,
+      })
       .describe(`Source text, max ${LIMITS.maxCodeLines} lines of max ${LIMITS.maxLineChars} chars; use spaces, not tabs`),
     steps: z
       .array(codeStepSchema)
@@ -177,6 +179,8 @@ export function codeLines(code: string): string[] {
 }
 
 function checkCode(scene: { code: string; steps?: Array<{ lines: { from: number; to: number } }> | undefined }, ctx: z.RefinementCtx): void {
+  // Oversized text is already reported by the field's own max(); do not walk it line by line.
+  if (scene.code.length > INPUT_LIMITS.maxCodeChars) return;
   const lines = codeLines(scene.code);
   if (scene.code.includes("\t")) {
     ctx.addIssue({
@@ -616,12 +620,16 @@ export const codeDiffSceneSchema = z
     diff: z
       .string()
       .min(1, { error: "diff must not be empty" })
+      .max(INPUT_LIMITS.maxDiffChars, {
+        error: `diff is far longer than the screen can show (limit ${INPUT_LIMITS.maxDiffChars} characters = ${LIMITS.maxDiffLines} lines of ${LIMITS.maxLineChars})`,
+      })
       .describe(`Unified-style lines: '+' added, '-' removed, ' ' (space) unchanged. Max ${LIMITS.maxDiffLines} lines of max ${LIMITS.maxLineChars} chars after the marker; use spaces, not tabs`),
     label: line(LIMITS.diffLabel, "label").optional().describe(`Caption under the diff, max ${LIMITS.diffLabel} chars`),
   })
   .superRefine((scene, ctx) => checkDiff(scene.diff, ctx));
 
 function checkDiff(diff: string, ctx: z.RefinementCtx): void {
+  if (diff.length > INPUT_LIMITS.maxDiffChars) return; // reported by the field's max()
   if (diff.includes("\t")) {
     ctx.addIssue({ code: "custom", path: ["diff"], message: "diff contains a tab character", params: { suggestion: "Replace tabs with spaces (2 or 4)." } });
   }
@@ -704,6 +712,21 @@ export const storyboardSchema = z.strictObject({
     .min(1, { error: "scenes must contain at least one scene" })
     .max(LIMITS.maxScenes)
     .describe(`Ordered scenes, 1-${LIMITS.maxScenes}; total video at most ${LIMITS.maxTotalSeconds} s`),
+}).superRefine((sb, ctx) => {
+  const seen = new Map<string, number>();
+  sb.scenes.forEach((scene, i) => {
+    if (scene.id === undefined) return;
+    const first = seen.get(scene.id);
+    if (first === undefined) seen.set(scene.id, i);
+    else {
+      ctx.addIssue({
+        code: "custom",
+        path: ["scenes", i, "id"],
+        message: `scene id "${scene.id}" is already used by scene ${first + 1}; ids must be unique`,
+        params: { suggestion: `Rename this scene's id (for example "${scene.id}-2") or remove it.` },
+      });
+    }
+  });
 });
 
 export type Storyboard = z.output<typeof storyboardSchema>;
