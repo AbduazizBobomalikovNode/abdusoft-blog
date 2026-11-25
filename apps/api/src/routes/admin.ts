@@ -46,3 +46,9 @@ export const adminRoute = new Hono()
 
 // "Ulangan ilovalar" (Claude konnektori) — faqat MCP_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut yo'q.
 if (config.MCP_ENABLED) adminRoute.route("/connections", adminConnectionsRoute);
+
+// Video render xizmati — faqat VIDEO_ENABLED=true; o'chiq bo'lsa marshrut ham, modul ham yuklanmaydi (render kodi umuman).
+if (config.VIDEO_ENABLED) {
+  const { adminVideoRoute } = await import("./admin-video.js");
+  adminRoute.route("/video", adminVideoRoute);
+}
