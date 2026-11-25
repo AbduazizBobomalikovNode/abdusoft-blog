@@ -9,9 +9,6 @@ import { WindowCard } from "../components/WindowCard.tsx";
 import { useStage } from "../context.tsx";
 import { clamp01, easeInOut, lerp, progress } from "../motion.ts";
 
-const DIM_DARK = 0.34;
-const DIM_LIGHT = 0.5;
-
 export const CodeScene: React.FC<{ scene: CodeSceneData; timing: CodeTiming; t: number; lines: HighlightedLines }> = ({ scene, timing, t, lines }) => {
   const { layout, theme } = useStage();
   const { px, sp } = layout;
@@ -140,7 +137,7 @@ export const CodeScene: React.FC<{ scene: CodeSceneData; timing: CodeTiming; t: 
           {lines.map((tokens, i) => {
             const n = i + 1;
             const dim = cur ? lerp(inRange(prev, n), inRange(cur, n), move) : 1;
-            const opacity = lerp(theme.mode === "dark" ? DIM_DARK : DIM_LIGHT, 1, dim);
+            const opacity = lerp(theme.dim, 1, dim);
             const visible = Math.max(0, Math.min(lens[i] as number, typed - (starts[i] as number)));
             const started = !typing || typed >= (starts[i] as number);
             return (

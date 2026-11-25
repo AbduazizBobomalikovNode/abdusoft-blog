@@ -13,6 +13,9 @@
  * `--sidebar-primary` (blue-violet); it becomes the default accent and is used sparingly.
  * This file has no browser or Node imports so both the bundle and Node can use it.
  */
+import { ensureContrast, parseColor, rotateHue, toHex } from "./color.ts";
+import { PRESET_PALETTES } from "./presets.ts";
+
 export type ThemeMode = "light" | "dark";
 
 /** Every colour variable of globals.css, keyed by variable name without the leading `--`. */
@@ -156,47 +159,85 @@ export interface Theme {
   code: { bg: string; fg: string; header: string; headerFg: string; gutter: string };
   /** Terminal tones, taken from the GitHub shiki palettes so they match the code blocks. */
   tone: { success: string; error: string };
+  /** Style preset the theme was built for. */
+  preset: PresetId;
+  /** Second hue for gradients (derived from the accent unless the preset fixes it). */
+  accent2: string;
+  /** accent2 lightened/darkened to stay legible as text on the background. */
+  accent2Text: string;
+  /** Accent-to-accent2 gradient as a CSS value (fills, bars, big display type). */
+  gradient: string;
+  /** Neon glow colour for text-shadow / box-shadow, or null when the preset has none. */
+  glow: string | null;
+  /** Ambient backdrop description; drawn by the Explainer (nothing for the default preset). */
+  backdrop: { mesh: boolean; grid: { color: string; major: string } | null; ambient: number };
+  /** Opacity of the lines a code scene dims (all code surfaces are the blog's shiki themes). */
+  dim: number;
 }
 
 export const HEX_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 export const isHexColor = (v: string): boolean => HEX_PATTERN.test(v);
 
-export function createTheme(mode: ThemeMode, accentOverride?: string): Theme {
+export function createTheme(mode: ThemeMode, accentOverride?: string, preset: PresetId = "default"): Theme {
   const t = SITE_TOKENS[mode] as Record<string, string>;
   const get = (k: string): string => {
     const v = t[k];
     if (v === undefined) throw new Error(`theme token --${k} missing for ${mode}`);
     return v;
   };
-  const accent = accentOverride ?? DEFAULT_ACCENT;
+  const pal = PRESET_PALETTES[preset]?.[mode] ?? null;
+  const accent = accentOverride ?? pal?.accent ?? DEFAULT_ACCENT;
   const dark = mode === "dark";
   const surface = CODE_SURFACE[mode];
+  const background = pal?.background ?? get("background");
+  const accentHex = toHex(parseColor(accent).rgb);
+  const accent2 = pal?.accent2 && !accentOverride ? pal.accent2 : rotateHue(accentHex, 55);
+  const towards = dark ? "white" : "black";
+  // The default preset keeps the original expressions (pixel-identical to the first release).
+  const accentText = pal === null ? (dark ? `color-mix(in oklab, ${accent} 62%, white)` : `${accent}`) : ensureContrast(accentHex, background, 4.6, towards);
+  const accent2Text = ensureContrast(toHex(parseColor(accent2).rgb), background, 4.6, towards);
+  const mutedForeground = pal?.mutedForeground ?? get("muted-foreground");
   return {
     mode,
-    background: get("background"),
-    foreground: get("foreground"),
-    card: get("card"),
-    muted: get("muted"),
-    mutedForeground: get("muted-foreground"),
-    border: get("border"),
+    background,
+    foreground: pal?.foreground ?? get("foreground"),
+    card: pal?.card ?? get("card"),
+    muted: pal?.muted ?? get("muted"),
+    mutedForeground,
+    border: pal?.border ?? get("border"),
     primary: get("primary"),
     primaryForeground: get("primary-foreground"),
     accent,
-    accentText: dark ? `color-mix(in oklab, ${accent} 62%, white)` : `${accent}`,
+    accentText,
     onAccent: "#ffffff",
     accentWash: `color-mix(in srgb, ${accent} ${dark ? 22 : 14}%, transparent)`,
     code: {
       bg: surface.bg,
       fg: surface.fg,
-      header: get("muted"),
-      headerFg: get("muted-foreground"),
+      header: pal?.muted ?? get("muted"),
+      headerFg: pal?.mutedForeground ?? get("muted-foreground"),
       gutter: dark ? "rgba(225,228,232,0.35)" : "rgba(36,41,46,0.35)",
     },
     tone: dark ? { success: "#85e89d", error: "#f97583" } : { success: "#22863a", error: "#cb2431" },
+    preset,
+    accent2,
+    accent2Text,
+    gradient: `linear-gradient(100deg, ${accent} 0%, ${accent2} 100%)`,
+    glow: pal?.glow ? `color-mix(in srgb, ${accent} 70%, transparent)` : null,
+    backdrop: { mesh: pal?.mesh ?? false, grid: pal?.grid ?? null, ambient: pal?.ambient ?? 0 },
+    dim: dark ? DIM_DARK : DIM_LIGHT,
   };
 }
+
+/** Opacity of the lines a code scene dims (kept from the first release). */
+export const DIM_DARK = 0.34;
+export const DIM_LIGHT = 0.5;
 
 /** Radius in px for a step, given the rem size of the layout (1rem = 16 css px * `remPx / 16`). */
 export function radius(step: RadiusStep, remPx: number): number {
   return Math.round(RADIUS_BASE_REM * RADIUS_SCALE[step] * remPx);
 }
+
+/** Style presets (theme layer); "default" is the blog's own minimal look. Defined in theme/presets.ts. */
+export const PRESETS = ["default", "vivid", "blueprint", "neon"] as const;
+export type PresetId = (typeof PRESETS)[number];
