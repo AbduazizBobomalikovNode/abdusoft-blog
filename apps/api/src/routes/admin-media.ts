@@ -114,6 +114,13 @@ export const adminMediaRoute = new Hono()
       .returning();
 
     if (!created) return c.json({ error: "Yuklab bo'lmadi" }, 500);
+    await recordAuditSafe(actorFromAdminUser(adminUser), {
+      action: "media.upload",
+      entityType: "media",
+      entityId: created.id,
+      summary: "Media fayl yuklandi",
+      meta: { mime: created.mime, size: created.size },
+    });
 
     return c.json(toMediaDto(created), 201);
   })
@@ -137,6 +144,13 @@ export const adminMediaRoute = new Hono()
       .returning();
 
     if (!updated) return c.json({ error: "Topilmadi" }, 404);
+    await recordAuditSafe(actorFromAdminUser(adminUser), {
+      action: "media.update",
+      entityType: "media",
+      entityId: id,
+      summary: "Media fayl tavsifi (alt) o'zgartirildi",
+      meta: { fields: ["alt"] },
+    });
     return c.json(toMediaDto(updated));
   })
   .delete("/:id", async (c) => {

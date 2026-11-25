@@ -191,6 +191,49 @@ describe("audit rows for other admin mutations", () => {
   });
 });
 
+describe("security-relevant admin actions are audited without secrets", () => {
+  const TINY_PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+
+  it("staff invite create / accept / revoke and staff removal", async () => {
+    const created = await post("/admin/staff/invites", admin.cookie, { note: "yangi xodim" });
+    expect(created.status).toBe(201);
+    const { invite, token, url } = (await created.json()) as { invite: { id: string }; token: string; url: string };
+
+    const newcomer = await createTestUser({ role: "user", name: "Yangi" });
+    expect((await post(`/staff/invites/${token}/accept`, newcomer.cookie)).status).toBe(200);
+
+    const second = (await (await post("/admin/staff/invites", admin.cookie, {})).json()) as { invite: { id: string } };
+    expect((await post(`/admin/staff/invites/${second.invite.id}/revoke`, admin.cookie)).status).toBe(200);
+    expect((await del(`/admin/staff/${newcomer.id}`, admin.cookie)).status).toBe(200);
+
+    const inviteRows = await auditRows(invite.id);
+    expect(inviteRows.map((row) => row.action)).toEqual(["staff.invite_create", "staff.invite_accept"]);
+    expect(inviteRows[1]).toMatchObject({ actorUserId: newcomer.id, via: "web" });
+    expect((await auditRows(second.invite.id)).map((row) => row.action)).toEqual(["staff.invite_create", "staff.invite_revoke"]);
+    expect((await auditRows(newcomer.id)).map((row) => row.action)).toEqual(["staff.remove"]);
+
+    const dump = JSON.stringify(await db.select().from(schema.auditLog));
+    expect(dump).not.toContain(token);
+    expect(dump).not.toContain(url);
+    expect(dump).not.toContain("yangi xodim");
+  });
+
+  it("media upload, rename (alt) and delete", async () => {
+    const form = new FormData();
+    form.set("file", new File([new Uint8Array(TINY_PNG)], "t.png", { type: "image/png" }));
+    const uploaded = await app.request("/admin/media", { method: "POST", body: form, headers: { cookie: admin.cookie } });
+    expect(uploaded.status).toBe(201);
+    const media = (await uploaded.json()) as { id: string };
+    expect((await patch(`/admin/media/${media.id}`, admin.cookie, { alt: "Yangi tavsif" })).status).toBe(200);
+    expect((await del(`/admin/media/${media.id}`, admin.cookie)).status).toBe(200);
+    expect((await auditRows(media.id)).map((row) => row.action)).toEqual(["media.upload", "media.update", "media.delete"]);
+    expect(JSON.stringify(await auditRows(media.id))).not.toContain("Yangi tavsif");
+  });
+});
+
 describe("GET /admin/audit", () => {
   it("is admin only", async () => {
     expect((await get("/admin/audit", null)).status).toBe(401);
