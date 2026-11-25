@@ -145,7 +145,7 @@ function connectorMark(mark: Record<string, unknown>, path: string): Record<stri
   const type = mark.type as string;
   const attrs = isObj(mark.attrs) ? mark.attrs : {};
   if (type !== "link") {
-    for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) bad(`${path}: mark ${type} takes no attributes`);
+    for (const v of Object.values(attrs)) if (v !== null && v !== undefined) bad(`${path}: mark ${type} takes no attributes`);
     return { type };
   }
   const href = attrs.href;
