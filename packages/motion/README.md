@@ -37,11 +37,11 @@ Birinchi renderda Remotion Chrome Headless Shell'ni `node_modules/.remotion` ich
 | `validate <file>` | Storyboard'ni tekshiradi. Xatolarda chiqish kodi 1 va aniq, mashina o'qiy oladigan tuzatish takliflari (`--json` bilan JSON). |
 | `timeline <file>` | Sahnalarning boshlanish/tugash kadrlari va umumiy davomiylik (render qilmasdan). |
 | `schema [--out f]` | Storyboard JSON Schema'sini chiqaradi (`storyboard.schema.json` — repoda saqlanadi, test uni yangi ekanini tekshiradi). |
-| `stills <file> --out <dir> [--at 1.5,4,9]` | Kichik JPEG kadrlar. `--at` bo'lmasa har sahnadan eng ma'lumotli lahzada bittadan. |
-| `render <file> --out <f.mp4>` | Ovozsiz H.264 MP4 (`yuv420p`, doimiy 30 fps, CRF 17, `+faststart`). |
-| `gif <file> --out <f.gif> [--from s --to s]` | Faqat qisqa klip: <= 15 s, <= 800 px, 15 fps. Uzunroq bo'lsa MP4 ishlatishni aytuvchi xato. |
+| `stills <file> --out <dir> [--at 1.5,4,9] [--scene id]` | Kichik JPEG kadrlar. `--at` bo'lmasa har sahnadan eng ma'lumotli lahzada bittadan; `--scene` bilan — shu sahnaning boshi / erta / o'rtasi / oxiri (`-start`, `-early`, `-middle`, `-end`). |
+| `render <file> --out <f.mp4> [--scene id]` | Ovozsiz H.264 MP4 (`yuv420p`, doimiy 30 fps, CRF 17, `+faststart`). `--scene` — faqat bitta sahna (tez iteratsiya uchun). |
+| `gif <file> --out <f.gif> [--from s --to s] [--scene id [--loop]]` | Faqat qisqa klip: <= 15 s, <= 800 px, 15 fps. Uzunroq bo'lsa MP4 ishlatishni aytuvchi xato. `--scene id --loop` (faqat `closing`) — oxirgi 2 s "hold": davriy harakat tufayli uzluksiz aylanadi. |
 
-Umumiy: `--theme light\|dark` (storyboard mavzusini bekor qiladi), `--json`, `--cache-dir`, `--browser`, `--concurrency`. Chiqish kodlari: 0 — yaxshi, 1 — storyboard yoki render xatosi, 2 — noto'g'ri foydalanish, 130 — bekor qilindi (`Ctrl+C`: brauzer to'xtatiladi, vaqtinchalik fayllar va yarim tayyor chiqish o'chiriladi).
+Umumiy: `--theme light\|dark` va `--preset default\|vivid\|blueprint\|neon` (storyboard qiymatlarini bekor qiladi), `--scene <id\|n>` (id yoki 1 dan boshlanuvchi raqam), `--json`, `--cache-dir`, `--browser`, `--concurrency`. Chiqish kodlari: 0 — yaxshi, 1 — storyboard yoki render xatosi, 2 — noto'g'ri foydalanish, 130 — bekor qilindi (`Ctrl+C`: brauzer to'xtatiladi, vaqtinchalik fayllar va yarim tayyor chiqish o'chiriladi).
 
 ### Dasturiy API
 
@@ -89,19 +89,99 @@ Barcha obyektlar qat'iy (strict): noma'lum kalit rad etiladi. To'liq sxema — `
 }
 ```
 
-Yuqori daraja: `version` (1), `title`, `theme` (`light` | `dark`), `accent` (ixtiyoriy `#RGB`/`#RRGGBB`; standart — blog'ning yagona xromatik tokeni, dark `--sidebar-primary`), `siteName` (standart `abdusoft`), `format` (hozircha faqat `landscape`: 1920x1080 @ 30 fps), `defaultTransition` (`cut` | `fade` | `slide`, standart `fade`), `scenes`.
+Yuqori daraja: `version` (1), `title`, `theme` (`light` | `dark`), `accent` (ixtiyoriy `#RGB`/`#RRGGBB`; standart — blog'ning yagona xromatik tokeni, dark `--sidebar-primary`; preset tanlansa — presetning o'z rangi), `preset` (ixtiyoriy: `default` | `vivid` | `blueprint` | `neon`, standart `default` = hozirgi minimal ko'rinish), `siteName` (standart `abdusoft`), `format` (hozircha faqat `landscape`: 1920x1080 @ 30 fps), `defaultTransition` (`cut` | `fade` | `slide` | `wipe` | `push` | `zoom`, standart `fade`), `scenes`.
+
+Barcha yangi maydonlar ixtiyoriy yoki yangi sahna turlari: `version: 1` storyboard'lari avvalgidek tekshiruvdan o'tadi va aynan bir xil kadrlar beradi (`src/compat.test.ts` birinchi nashrning vaqt jadvali va tema qiymatlarini qotirib qo'ygan; `default` preset va yangi maydonlarsiz sahnalar piksel-piksel bir xil).
 
 Har sahnada: `id?`, `durationSeconds?` (yo'q bo'lsa mazmundan avtomatik: o'qish va yozish tezligi, min/max bilan; berilsa mazmun talab qiladigan vaqtdan kam bo'la olmaydi), `transition?` (shu sahnaga kirish, birinchi sahnada e'tiborga olinmaydi).
 
+**Sahna turlari**
+
 | `type` | Maydonlar |
 |---|---|
-| `title` | `kicker?`, `title`, `subtitle?`, `tags?` (so'zma-so'z paydo bo'ladi, teglar "pill" shaklida) |
-| `bullets` | `heading`, `items[]` (birin-ketin ochiladi) |
+| `title` | `kicker?`, `title`, `subtitle?`, `tags?` (so'zma-so'z paydo bo'ladi, teglar "pill" shaklida), `layout?` (`left` standart \| `centered` \| `split`: chapda aksent panel) |
+| `bullets` | `heading`, `items[]` (birin-ketin ochiladi), `layout?` (`list` standart \| `centered` \| `split`) |
 | `code` | `language`, `fileName?`, `code`, `steps?[{ lines:{from,to}, label?, durationSeconds? }]`, `typing?` (belgilanmagan qatorlar xiralashadi, belgi silliq ko'chadi, yozishda kursor) |
 | `terminal` | `title?`, `lines[]`: `{ kind:"command", text, waitSeconds? }` (yoziladi) yoki `{ kind:"output", text, tone?, waitSeconds? }` (paydo bo'ladi; `tone`: default/muted/success/error) |
 | `outro` | `siteName?`, `cta`, `url` (faqat matn; hech qachon so'rov yuborilmaydi) |
+| `intro` | `variant?` (`aurora` standart \| `blueprint` \| `constellation` \| `boot` \| `signal` \| `slam`), `kicker?`, `title`, `subtitle?`, `tags?` — videoning ochilishi |
+| `closing` | `variant?` (intro bilan bir xil ro'yxat), `siteName?`, `cta`, `url` — yakun; oxirgi 2 soniyalik "hold" GIF'da uzluksiz aylanadi |
+| `diagram` | `heading?`, `direction?` (`lr` standart \| `tb`), `nodes[]` `{ id, label, detail?, tone? }` (2-8), `edges[]` `{ from, to, label? }` (1-12, ro'yxat tartibida chiziladi), `steps?[]` `{ nodes[], label?, durationSeconds? }` (tugunlarni birin-ketin ajratadi) |
+| `compare` | `heading?`, `mode?` (`versus` standart \| `beforeAfter`), `left` / `right` `{ title, items[] }` (1-5), `verdict?` |
+| `stat` | `heading?`, `stats[]` `{ value, decimals?, prefix?, suffix?, label, note? }` (1-3; raqam 0 dan sanab chiqadi) |
+| `steps` | `heading?`, `layout?` (`horizontal` standart, <= 5 \| `vertical`, <= 6), `items[]` `{ title, detail? }` (2-6; faol qadam oldinga siljiydi) |
+| `quote` | `quote`, `author?`, `role?` |
+| `codeDiff` | `language`, `fileName?`, `diff` (har qator `+`, `-` yoki bo'sh joy bilan boshlanadi), `label?` |
 
 Tillar (`code.language`): typescript, tsx, javascript, jsx, json, bash, python, go, rust, sql, yaml, html, css, markdown, diff, dockerfile, text.
+
+### Ochilish va yakun (`intro` / `closing`)
+
+Oltita variant, har birining ochilishi va unga mos yakuni bor (`variant`): `aurora` (gradient nur maydoni va kinetik tipografiya), `blueprint` (perspektiv chizma to'ri, chiziqlar chizilib sarlavhani yig'adi), `constellation` (deterministik zarrachalar sarlavhaga yig'iladi), `boot` (terminal yuklanish ketma-ketligi sarlavhaga aylanadi), `signal` (skanlayn / xromatik "signal ushlandi" ochilishi), `slam` (niqobli yirik kinetik matn). Hammasi: 3-6 s, ikkala mavzuda va hamma preset'larda ishlaydi, `accent` rangini oladi, matnni xavfsiz zona ichida va telefonda o'qiladigan o'lchamda saqlaydi.
+
+- **Birinchi kadr** (intro) — ijtimoiy tarmoqlar ko'rsatadigan thumbnail: sarlavha 0-kadrdayoq o'qiladi. **Oxirgi kadr** (closing) — cta + url + sayt nomi tayyor plakat.
+- **GIF aylanishi.** `closing` ning oxirgi 2 soniyasi (`LOOP_FRAMES` = 60 kadr) davriy harakatdan iborat, shuning uchun `gif <f> --scene <id> --loop --out x.gif` uzluksiz aylanadi (`timeline --json` da `scenes[i].loop` aniq oraliqni ko'rsatadi).
+- Variantlarning har biri uchun qisqa misol: `fixtures/variants/<variant>.json`; hammasini birlashtirgan ko'rgazma: `fixtures/showcase.json`.
+
+### Uslub presetlari (`preset`)
+
+Tema qatlamida (`src/theme/presets.ts`) amalga oshirilgan, shuning uchun eski va yangi sahnalarning hammasi unga ergashadi; shriftlar va kod bo'yoqlari (shiki `github-light` / `github-dark`) hamma presetda blog'nikidek qoladi.
+
+| preset | ko'rinishi |
+|---|---|
+| `default` | Hozirgi minimal ko'rinish (blog tokenlari), hech narsa o'zgarmaydi. |
+| `vivid` | To'qroq fon: aksent va ikkinchi rang (accent2) aralashmasi (gradient mesh) sekin siljiydi, ilgaklar va progress aksent gradienti bilan. |
+| `blueprint` | Muhandislik chizmasi: ko'k fon (yorug' mavzuda siyano-tip qog'oz), ingichka va asosiy chiziqli to'r, sovuq cyan aksent. |
+| `neon` | Yuqori kontrast: deyarli qora fon, oq matn, cyan/magenta, aksent atrofida nur (yorug' mavzuda — oq-qora va to'q binafsha, nursiz). |
+
+`accent` berilsa preset ranglari ustidan aksent oilasini almashtiradi (matn rangi har doim kontrastga moslab olinadi). Ko'rinish buzilmasligi `src/presets.test.ts` da tekshiriladi: asosiy matn >= 7:1, xira matn va aksent matni >= 4.5:1 (har preset, har mavzu, bir nechta aksent bilan; `default` blog tokenlarini o'zgarishsiz saqlaydi), xiralashtirilgan kod qatorlari birinchi nashrdagidan yomon emas.
+
+### O'tishlar (`transition`)
+
+`cut`, `fade`, `slide` (avvalgidek) va yangilari: `wipe` (kiruvchi sahna chapdan o'ngga ochiladi, chetida aksent chiziq), `push` (kiruvchi sahna chiquvchini itarib chiqaradi), `zoom` ("zoom-through": chiquvchi sahna kameraga uchib keladi, kiruvchisi joylashadi). Brend qatori (sayt nomi, hisoblagich) va progress chizig'i sahnalar ustida turadi: o'tish paytida joyidan siljimaydi.
+
+### Yangi sahnalar: kichik misollar
+
+```json
+{ "type": "intro", "variant": "slam", "kicker": "TypeScript", "title": "Zod bilan chegarani himoyalang", "subtitle": "Bitta sxema: tekshiruv va tur.", "tags": ["zod", "API"] }
+{ "type": "closing", "variant": "slam", "cta": "Toʻliq maqolani oʻqing", "url": "blog.abdusoft.uz" }
+```
+
+`diagram` — tugunlar avtomatik joylashadi (qatlamlar: `lr` da ustunlar, `tb` da qatorlar), yo'llar ro'yxat tartibida chiziladi; orqaga qaytuvchi yo'l yoy bo'lib chiziladi. `steps` — tugunlarni birin-ketin yoritadi (ular orasidagi yo'llar ham yonadi):
+
+```json
+{ "type": "diagram", "direction": "lr", "heading": "Soʻrov yoʻli",
+  "nodes": [{ "id": "client", "label": "Mijoz" }, { "id": "api", "label": "API", "tone": "accent" }, { "id": "db", "label": "Baza", "detail": "Postgres" }],
+  "edges": [{ "from": "client", "to": "api", "label": "JSON" }, { "from": "api", "to": "db" }],
+  "steps": [{ "nodes": ["api", "db"], "label": "Faqat toza maʼlumot bazaga yetadi" }] }
+```
+
+`compare` — ikki ustun (`right` aksent bilan), `beforeAfter` rejimida chapdan o'ngga o'q:
+
+```json
+{ "type": "compare", "mode": "beforeAfter", "left": { "title": "Oldin", "items": ["Qoʻlda if-lar"] }, "right": { "title": "Keyin", "items": ["Bitta sxema"] }, "verdict": "Kod qisqaradi." }
+```
+
+`stat` — 1-3 ta raqam 0 dan sanab chiqiladi; kasr kerak bo'lsa `decimals` ni yozing (aks holda aniq xato: `value 3.14 has more decimals than decimals: 0 can show`):
+
+```json
+{ "type": "stat", "heading": "Natija", "stats": [{ "value": 38, "suffix": "%", "label": "kamroq xato" }, { "value": 99.9, "decimals": 1, "suffix": "%", "label": "uptime", "note": "2025" }] }
+```
+
+`steps` — raqamlangan ketma-ketlik, faol qadam oldinga siljiydi:
+
+```json
+{ "type": "steps", "heading": "Tartib", "items": [{ "title": "Sxemani yozing", "detail": "z.strictObject" }, { "title": "Chegarada tekshiring" }, { "title": "Xatoni qaytaring" }] }
+```
+
+`quote` va `codeDiff` (qatorlar `+` / `-` / bo'sh joy bilan boshlanadi; kod blog'ning kod oynasida, shiki bo'yoqlari bilan):
+
+```json
+{ "type": "quote", "quote": "Chegarada ishonma, ichkarida ishon.", "author": "Abduaziz", "role": "abdusoft blog" }
+{ "type": "codeDiff", "language": "typescript", "fileName": "route.ts", "diff": "-const b = await c.req.json();\n+const b = Post.parse(await c.req.json());", "label": "Bitta sxema" }
+```
+
+`title` va `bullets` uchun joylashuv variantlari — 16:9 da o'ng yarmi bo'sh qolmasligi uchun: `"layout": "centered"` (markazda) yoki `"layout": "split"` (chapda aksent panel, o'ngda matn). Belgilanmasa — avvalgi ko'rinish.
 
 ### Cheklovlar
 
@@ -116,6 +196,13 @@ Hammasi `src/limits.ts` da; xabarlar va README shu yerdan olinadi.
 | Kod | <= 14 qator, qator <= 72 belgi, tab yo'q; <= 8 qadam, `label` <= 80 |
 | Terminal | <= 12 yozuv, qator <= 72 belgi, `title` <= 32 |
 | `cta` / `url` | 60 / 48 belgi |
+| `diagram` | 2-8 tugun, 1-12 yo'l, `label` 24 / `detail` 40 / yo'l yorlig'i 20 belgi, `heading` 60; eng uzun zanjir <= 5 (lr) yoki 4 (tb) qatlam, bir qatlamda <= 4 tugun; <= 6 qadam |
+| `compare` | `heading` 60, ustun `title` 28, 1-5 band (<= 60 belgi), ustunlar farqi <= 2 band, `verdict` 90 |
+| `stat` | 1-3 raqam, `\|value\|` <= 999 999 999, `decimals` 0-2, `prefix`/`suffix` <= 6, `label` 40, `note` 60 |
+| `steps` | 2-6 qadam (gorizontalda <= 5), `title` 40, `detail` 80, `heading` 60 |
+| `quote` | `quote` 200, `author` 40, `role` 60 |
+| `codeDiff` | <= 14 qator, qator <= 72 belgi (belgidan keyin), tab yo'q, kamida bitta `+` yoki `-`; `label` 80 |
+| `intro` / `closing` | `title` 80, `kicker` 32, `subtitle` 120, <= 5 teg (24), `cta` 60, `url` 48, `siteName` 24 (title/outro bilan bir xil) |
 
 Tekshiruv ikki bosqichli: avval tuzilma va maydon limitlari, keyin (tuzilma to'g'ri bo'lsa) vaqt limitlari. Har xato: aniq yo'l (`scenes[2].items[1]`), nima noto'g'ri, chegara va haqiqiy qiymat, tuzatish taklifi:
 
@@ -130,19 +217,22 @@ Tekshiruv ikki bosqichli: avval tuzilma va maydon limitlari, keyin (tuzilma to'g
 
 ```
 src/
-  schema/storyboard.ts   zod 4 sxema (strict) + tur eksportlari
+  schema/storyboard.ts   zod 4 sxema (strict) + tur eksportlari (barcha sahna turlari)
+  diagram-layout.ts      diagram uchun sof avtomatik joylashuv (qatlamlar, orqaga yo'llar)
+  scene-ref.ts           --scene: id yoki raqam bo'yicha sahna tanlash, ko'rib chiqish kadrlari
   schema/issues.ts       zod xatolari -> {path, message, limit, actual, suggestion}
   validate.ts            2 bosqichli tekshiruv, vaqt limitlari
   timeline.ts, timing.ts sof funksiyalar: sahna vaqtlari, yozish jadvali
   layout.ts, fit.ts      format/safe-area abstraksiyasi, matn o'lchami tanlash
-  theme/tokens.ts        blog'ning butun vizual identifikatsiyasi (bitta modul)
+  theme/tokens.ts        blog'ning butun vizual identifikatsiyasi (bitta modul) + createTheme(mode, accent, preset)
+  theme/presets.ts       vivid / blueprint / neon palitralari; theme/color.ts — kontrast va rang aralashmasi
   theme/font-manifest.ts shrift fayllari va unicode-range
   highlight.ts           shiki token ma'lumot turlari
-  bundle/                Remotion bundle: Root, Explainer, scenes/*, fonts.ts
+  bundle/                Remotion bundle: Root, Explainer (o'tishlar), Backdrop (preset foni), scenes/*, showpiece/* (intro/closing variantlari), fonts.ts
   render/                bundle keshi, brauzer, stills/video/gif, bekor qilish, tozalash
   cli.ts                 yupqa CLI
 assets/fonts/            Geist, Geist Mono, U+02BB uchun Noto Sans subset + litsenziyalar
-fixtures/                ikki misol storyboard (o'zbekcha)
+fixtures/                misollar (o'zbekcha): blog-post, repository, showcase (barcha yangi sahnalar), variants/* (har variant uchun)
 storyboard.schema.json   JSON Schema (yaratiladi: pnpm --filter @blog/motion schema)
 ```
 

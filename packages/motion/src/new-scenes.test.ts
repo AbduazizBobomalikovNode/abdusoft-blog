@@ -1,10 +1,12 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { layoutDiagram } from "./diagram-layout.ts";
 import { LIMITS } from "./limits.ts";
 import { type StoryboardIssue } from "./schema/issues.ts";
 import { parseDiff, SHOWPIECE_VARIANTS, storyboardSchema } from "./schema/storyboard.ts";
 import { resolveScene, sceneReviewFrames } from "./scene-ref.ts";
-import { base } from "./test-helpers.ts";
+import { base, PKG } from "./test-helpers.ts";
 import { computeTimeline } from "./timeline.ts";
 import { FPS, LOOP_FRAMES, TRANSITION_FRAMES } from "./timing.ts";
 import { validateStoryboard } from "./validate.ts";
@@ -404,5 +406,18 @@ describe("limits table is the single source of the numbers in messages", () => {
     expect(LIMITS.maxNodes).toBeGreaterThanOrEqual(LIMITS.minNodes);
     expect(LIMITS.maxStepsHorizontal).toBeLessThanOrEqual(LIMITS.maxSteps);
     expect(LIMITS.maxDiffLines).toBeLessThanOrEqual(LIMITS.maxCodeLines);
+  });
+});
+
+describe("README examples", () => {
+  it("every scene example in the README validates", () => {
+    const readme = readFileSync(path.join(PKG, "README.md"), "utf8");
+    const scenes: unknown[] = [];
+    for (const m of readme.matchAll(/```json\n([\s\S]*?)```/g)) {
+      // scene snippets: one object per line starting with `{ "type"` (continuation lines are indented)
+      for (const chunk of (m[1] as string).split(/\n(?=\{ "type")/)) if (chunk.startsWith('{ "type"')) scenes.push(JSON.parse(chunk));
+    }
+    expect(scenes.length).toBeGreaterThanOrEqual(8);
+    for (const scene of scenes) ok([scene]);
   });
 });
