@@ -5,6 +5,7 @@ export * from "./constants.js";
 export * from "./telegram-limits.js";
 export * from "./dto.js";
 export * from "./audit.js";
+export * from "./revisions.js";
 export * from "./channel-length.js";
 export * from "./content-stats.js";
 export * from "./editor-markdown.js";

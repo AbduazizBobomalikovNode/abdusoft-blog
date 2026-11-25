@@ -85,6 +85,13 @@
       "when": 1795607816526,
       "tag": "0011_futuristic_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795608078111,
+      "tag": "0012_perfect_tana_nile",
+      "breakpoints": true
     }
   ]
 }

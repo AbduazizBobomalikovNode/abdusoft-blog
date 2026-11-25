@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   bigint,
+  bigserial,
   boolean,
   date,
   index,
@@ -348,4 +349,37 @@ export const auditLog = pgTable(
     index("audit_log_actor_idx").on(table.actorUserId),
     index("audit_log_action_idx").on(table.action),
   ],
+);
+
+/**
+ * Post tarixi (revision) — o'zgartirishdan OLDINGI holat suratlari. Avtosaqlash har ~1.5 soniyada yozadi,
+ * shu sabab oddiy tahrirlar faqat oraliq (`POST_REVISION_INTERVAL_MINUTES`) o'tganda yoki aktyor/kanal
+ * almashganda suratga olinadi (`lib/posts/revisions.ts`). `seq` — tartib uchun (created_at bir tranzaksiyada teng bo'lishi mumkin).
+ */
+export const postRevisions = pgTable(
+  "post_revisions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    seq: bigserial("seq", { mode: "number" }).notNull(),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    slug: text("slug").notNull(),
+    excerpt: text("excerpt"),
+    contentJson: jsonb("content_json").notNull(),
+    coverUrl: text("cover_url"),
+    /** Surat paytidagi teg slug'lari (tartiblangan). */
+    tagSlugs: jsonb("tag_slugs").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    settings: jsonb("settings").notNull().default({}),
+    /** Surat paytidagi post holati. */
+    status: postStatusEnum("status").notNull(),
+    /** Suratga sabab bo'lgan yozuvni bajargan foydalanuvchi (scheduler/tizim uchun `null`). */
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    via: text("via").notNull(),
+    /** `update` | `publish` | `unpublish` | `archive` | `schedule` | `trash` | `restore-revision`. */
+    reason: text("reason").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("post_revisions_post_seq_idx").on(table.postId, table.seq)],
 );

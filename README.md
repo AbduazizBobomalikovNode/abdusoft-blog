@@ -238,6 +238,7 @@ Quyidagilarning barchasi `.env`da ham, `/admin/sozlamalar`da ham sozlanishi mumk
 | Umami | `UMAMI_API_URL`, `UMAMI_API_KEY` yoki `UMAMI_USERNAME`/`UMAMI_PASSWORD`, `NEXT_PUBLIC_UMAMI_*` |
 | Infratuzilma | `TRUST_PROXY` (faqat ishonchli proksi orqasida `true`), `COOKIE_DOMAIN` |
 | Rate limit (faqat env, admin paneldan sozlanmaydi) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/parol endpoint'lari, IP bo'yicha; `AUTH_RATE_LIMIT_ENABLED` (bo'sh = faqat production'da; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = o'chiq), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` yozuv so'rovlari. Oshsa `429` + `Retry-After` |
+| Post tarixi (faqat env) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = har tahrirdan oldin) — oddiy tahrirlar (avtosaqlash) shu oraliqdan tez-tez suratga olinmaydi (chop etish/arxiv/rejalashtirish/tiklashdan oldin surat doim olinadi); `POST_REVISION_MAX_PER_POST` (`100`) — bitta postda saqlanadigan revision'lar soni, eng eskilari o'chiriladi |
 
 ### 8. Deploy
 
@@ -593,6 +594,7 @@ Every one of these can be set via `.env` or `/admin/sozlamalar` — **a non-empt
 | Umami | `UMAMI_API_URL`, `UMAMI_API_KEY` or `UMAMI_USERNAME`/`UMAMI_PASSWORD`, `NEXT_PUBLIC_UMAMI_*` |
 | Infrastructure | `TRUST_PROXY` (only `true` behind a trusted proxy), `COOKIE_DOMAIN` |
 | Rate limit (env only, not editable in the admin panel) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/password endpoints, per IP; `AUTH_RATE_LIMIT_ENABLED` (empty = production only; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = off), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` write requests. Exceeding returns `429` + `Retry-After` |
+| Post history (env only) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = before every edit) — plain edits (autosave) are not snapshotted more often than this (a snapshot is always taken before publish/archive/schedule/restore); `POST_REVISION_MAX_PER_POST` (`100`) — revisions kept per post, oldest pruned first |
 
 ### 8. Deploy
 
