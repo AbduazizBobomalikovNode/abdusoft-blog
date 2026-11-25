@@ -33,15 +33,44 @@ const cimdFetch: MetadataFetch = (input, init) => (cimdFetchOverride ?? fetchCli
 /** Parol o'zgartirilganda yoki "hamma joydan chiqish" bajarilganda barcha ulangan ilovalar ham uziladi (kirish ma'lumoti almashgan = eski ruxsatlar yaroqsiz). */
 const CREDENTIAL_CHANGE_PATHS = new Set(["/change-password", "/revoke-sessions", "/revoke-other-sessions"]);
 
+/**
+ * Parolni TIKLASH (`POST /reset-password`) ham xuddi shunday hisoblanadi. Bu so'rovda sessiya yo'q — foydalanuvchi
+ * tokendan aniqlanadi; token muvaffaqiyatli ishlatilgach o'chirib yuboriladi, shu sabab id'ni `before` hook'da
+ * (token hali bor) so'rovga bog'lab saqlaymiz va `after` hook'da ishlatamiz.
+ */
+const PASSWORD_RESET_PATH = "/reset-password";
+const resetUserByRequest = new WeakMap<Request, string>();
+
 const revokeConnectorsOnCredentialChange: BetterAuthPlugin = {
   id: "mcp-revoke-on-credential-change",
   hooks: {
+    before: [
+      {
+        matcher: (ctx) => ctx.path === PASSWORD_RESET_PATH,
+        handler: createAuthMiddleware(async (ctx) => {
+          const request = ctx.request;
+          const token = (ctx.body as { token?: unknown } | undefined)?.token ?? (ctx.query as { token?: unknown } | undefined)?.token;
+          if (!request || typeof token !== "string" || token.length === 0) return;
+          try {
+            const found = await ctx.context.internalAdapter.findVerificationValue(`reset-password:${token}`);
+            if (found && found.expiresAt > new Date()) resetUserByRequest.set(request, found.value);
+          } catch {
+            // Aniqlab bo'lmasa — faqat konnektor uzilmaydi; tiklashning o'zi (Better Auth) o'z yo'lida davom etadi.
+          }
+        }),
+      },
+    ],
     after: [
       {
-        matcher: (ctx) => CREDENTIAL_CHANGE_PATHS.has(ctx.path ?? ""),
+        matcher: (ctx) => CREDENTIAL_CHANGE_PATHS.has(ctx.path ?? "") || ctx.path === PASSWORD_RESET_PATH,
         handler: createAuthMiddleware(async (ctx) => {
           if (ctx.context.returned instanceof Error) return; // muvaffaqiyatsiz urinish
-          const userId = ctx.context.session?.user.id ?? ctx.context.newSession?.user.id;
+          const userId =
+            ctx.path === PASSWORD_RESET_PATH
+              ? ctx.request
+                ? resetUserByRequest.get(ctx.request)
+                : undefined
+              : (ctx.context.session?.user.id ?? ctx.context.newSession?.user.id);
           if (!userId) return;
           try {
             await revokeAllConnections({ userId, role: "admin", via: "system" }, userId);
