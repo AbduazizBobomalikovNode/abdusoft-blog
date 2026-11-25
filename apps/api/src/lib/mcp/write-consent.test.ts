@@ -175,6 +175,22 @@ describe("adding permissions always needs a fresh consent; nobody gains power si
   });
 });
 
+describe("connected applications list", () => {
+  it("shows the permissions that were granted and whether the write switch is currently on", async () => {
+    const clientId = await newClient("Ro'yxat");
+    await connect(app, creds(), { clientId, consentScope: "blog:read posts:write offline_access" });
+    const get = () => app.request(`${API}/admin/connections`, { headers: { cookie: admin.cookie } });
+    const on = (await (await get()).json()) as Json;
+    expect(on.writeToolsEnabled).toBe(true);
+    const row = on.items.find((c: Json) => c.clientId === clientId);
+    expect([...row.scopes].sort()).toEqual(["blog:read", "offline_access", "posts:write"]);
+    mutableConfig().MCP_WRITE_TOOLS_ENABLED = false;
+    const off = (await (await get()).json()) as Json;
+    expect(off.writeToolsEnabled).toBe(false);
+    expect(off.items.find((c: Json) => c.clientId === clientId).scopes).toContain("posts:write"); // berilgan, lekin faol emas
+  });
+});
+
 describe("clients registered before the switch was turned on can ask for the new permissions", () => {
   it("widens the client's ceiling (not its consent) on authorize", async () => {
     const clientId = await newClient("Eski");

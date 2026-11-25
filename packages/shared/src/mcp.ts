@@ -189,5 +189,7 @@ export type McpConnection = z.infer<typeof McpConnectionSchema>;
 
 export const McpConnectionsResponseSchema = z.object({
   items: z.array(McpConnectionSchema),
+  /** Serverda yozuv vositalari (`MCP_WRITE_TOOLS_ENABLED`) hozir yoqilganmi. `false` bo'lsa berilgan yozuv ruxsatlari FAOL EMAS. */
+  writeToolsEnabled: z.boolean().optional(),
 });
 export type McpConnectionsResponse = z.infer<typeof McpConnectionsResponseSchema>;
