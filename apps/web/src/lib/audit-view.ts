@@ -55,3 +55,29 @@ export function auditHref(state: AuditQueryState, overrides: Partial<Record<keyo
   return qs ? `${BASE}?${qs}` : BASE;
 }
 
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Jurnal so'rovidagi `entityId` faqat UUID bo'lsa havola/filtr uchun ishlatiladi. */
+export function validEntityId(value: string | undefined | null): string | undefined {
+  const v = value?.trim();
+  return v && UUID_RE.test(v) ? v : undefined;
+}
+
+/**
+ * Jurnal qatorining qisqacha matni: API `summary`si ko'pincha amal nomi bilan boshlanadi ("Post tahrirlandi: ...") —
+ * u alohida ko'rsatilgani uchun takrorlamaymiz. Qolgani bo'sh bo'lsa `null`.
+ */
+export function summaryWithoutAction(summary: string, actionLabel: string): string | null {
+  const s = summary.trim();
+  if (s.toLowerCase().startsWith(actionLabel.toLowerCase())) {
+    const rest = s.slice(actionLabel.length).replace(/^[\s:—-]+/, "");
+    return rest.length > 0 ? rest : null;
+  }
+  return s.length > 0 ? s : null;
+}
+
+/** Bo'sh qismlarsiz ajratgich bilan birlashtiradi (oxirida osilib qolgan "·" bo'lmasin). */
+export function joinMeta(parts: (string | null | undefined | false)[]): string[] {
+  return parts.filter((p): p is string => typeof p === "string" && p.length > 0);
+}

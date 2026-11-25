@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditFieldsText, auditHref, auditTarget } from "./audit-view";
+import { auditFieldsText, auditHref, auditTarget, joinMeta, summaryWithoutAction, validEntityId } from "./audit-view";
 
 describe("auditTarget", () => {
   const posts = new Map([["p1", "Bor post"]]);
@@ -44,5 +44,26 @@ describe("auditHref", () => {
 
   it("is a plain function usable from server components (lives outside the client module)", () => {
     expect(typeof auditHref).toBe("function");
+  });
+});
+
+describe("journal tidy helpers", () => {
+  it("accepts only UUIDs as entityId", () => {
+    expect(validEntityId("0b13238a-1111-4222-8333-444455556666")).toBe("0b13238a-1111-4222-8333-444455556666");
+    expect(validEntityId("../../x")).toBeUndefined();
+    expect(validEntityId("")).toBeUndefined();
+    expect(validEntityId(undefined)).toBeUndefined();
+  });
+
+  it("does not repeat the action label in the summary", () => {
+    expect(summaryWithoutAction('Post tahrirlandi: "Sarlavha"', "Post tahrirlandi")).toBe('"Sarlavha"');
+    expect(summaryWithoutAction("Post tahrirlandi", "Post tahrirlandi")).toBeNull();
+    expect(summaryWithoutAction("Boshqa matn", "Post tahrirlandi")).toBe("Boshqa matn");
+    expect(summaryWithoutAction("   ", "x")).toBeNull();
+  });
+
+  it("joins meta parts without dangling separators", () => {
+    expect(joinMeta(["Admin", "25 noy", null])).toEqual(["Admin", "25 noy"]);
+    expect(joinMeta([false, "", "Faqat"])).toEqual(["Faqat"]);
   });
 });

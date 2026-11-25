@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { requireAdminPage } from "@/lib/admin-guard";
 import { actorName, auditActionLabel, isAutomatedVia, VIA_VALUES } from "@/lib/admin-labels";
 import { getAdminAudit, getAdminPost, getAdminPosts } from "@/lib/api";
-import { auditFieldsText, auditHref, auditTarget, type AuditQueryState } from "@/lib/audit-view";
+import { auditFieldsText, auditHref, auditTarget, joinMeta, summaryWithoutAction, validEntityId, type AuditQueryState } from "@/lib/audit-view";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +35,7 @@ export default async function AdminAuditPage({
   const state: AuditQueryState = {
     via: oneOf(params.via, VIA_VALUES),
     entityType: params.entityType?.trim() || undefined,
-    entityId: params.entityId?.trim() || undefined,
+    entityId: validEntityId(params.entityId),
     action: params.action?.trim() || undefined,
     from: dateOnly(params.from),
     to: dateOnly(params.to),
@@ -127,23 +127,31 @@ export default async function AdminAuditPage({
                     <span className="text-sm font-medium">{auditActionLabel(item.action)}</span>
                     <ViaBadge via={item.via} />
                   </div>
-                  <p className="text-sm break-words">{item.summary}</p>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                    <span>{actorName(item.actor, item.via)}</span>
-                    <span aria-hidden>·</span>
-                    <time dateTime={item.createdAt}>{formatDateTime(item.createdAt)}</time>
-                    <span aria-hidden>·</span>
-                    {target.href ? (
-                      <Link href={target.href} className="text-foreground hover:underline">
-                        {target.kind}: {target.title}
-                      </Link>
-                    ) : (
-                      <span>
-                        {target.kind}
-                        {target.gone ? " (endi yo'q)" : ""}
+                  {summaryWithoutAction(item.summary, auditActionLabel(item.action)) ? (
+                    <p className="text-sm break-words">{summaryWithoutAction(item.summary, auditActionLabel(item.action))}</p>
+                  ) : null}
+                  <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
+                    {joinMeta([actorName(item.actor, item.via), formatDateTime(item.createdAt)]).map((part, index) => (
+                      <span key={part} className="inline-flex items-center gap-1.5">
+                        {index > 0 ? <span aria-hidden>·</span> : null}
+                        {index === 1 ? <time dateTime={item.createdAt}>{part}</time> : part}
                       </span>
-                    )}
-                  </div>
+                    ))}
+                  </p>
+                  {target.href || target.gone || target.kind ? (
+                    <p className="text-xs">
+                      {target.href ? (
+                        <Link href={target.href} className="text-foreground hover:underline">
+                          {target.kind}: {target.title}
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          {target.kind}
+                          {target.gone ? " (endi yo'q)" : ""}
+                        </span>
+                      )}
+                    </p>
+                  ) : null}
                 </li>
               );
             })}
@@ -193,7 +201,7 @@ export default async function AdminAuditPage({
                       <TableCell className="text-xs whitespace-normal text-muted-foreground">
                         <div className="w-72 max-w-72">
                           <span className="line-clamp-2 break-words" title={item.summary}>
-                            {item.summary}
+                            {summaryWithoutAction(item.summary, auditActionLabel(item.action)) ?? ""}
                           </span>
                           {fields ? <span className="mt-0.5 block truncate font-mono text-[0.65rem]">{fields}</span> : null}
                         </div>
