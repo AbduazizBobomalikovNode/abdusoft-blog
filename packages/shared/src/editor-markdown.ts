@@ -168,7 +168,7 @@ function parseInline(src: string, marks: Mark[]): JSONContent[] {
       const target = end > 0 ? parseLinkTarget(src, end + 1) : null;
       if (end > 0 && target && SAFE_URL.test(target.url)) {
         flush();
-        const attrs: Record<string, unknown> = { src: target.url, alt: src.slice(i + 2, end) };
+        const attrs: Record<string, unknown> = { src: target.url, alt: src.slice(i + 2, end).replace(/\\([\\[\]])/g, "$1") };
         if (target.title) attrs.title = target.title;
         out.push({ type: "image", attrs });
         i = target.end;
