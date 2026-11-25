@@ -16,8 +16,8 @@ export interface McpToolAnnotations {
   readOnlyHint: boolean;
   destructiveHint: boolean;
   idempotentHint: boolean;
-  /** Barcha vositalar faqat shu blog bilan ishlaydi (tashqi dunyoga chiqmaydi) — `false`. */
-  openWorldHint: false;
+  /** Odatda `false` (faqat shu blog bilan ishlaydi). Ijtimoiy tarqatish yuborish vositalari jamoat internetiga chiqadi — `true`. */
+  openWorldHint: boolean;
 }
 
 /**

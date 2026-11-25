@@ -1,4 +1,5 @@
 import { config } from "../../../config.js";
+import { DISTRIBUTION_READ_TOOLS, DISTRIBUTION_WRITE_TOOLS } from "./distribution-tools.js";
 import { READ_TOOLS } from "./read-tools.js";
 import type { McpToolDef } from "./types.js";
 import { WRITE_TOOLS, UPLOAD_TOOL_NAME as UPLOAD_NAME } from "./write-tools.js";
@@ -14,8 +15,10 @@ export const UPLOAD_TOOL_NAME = UPLOAD_NAME;
  * Ruxsat, xato, o'lcham va jurnal mantig'i `run.ts`da markazlashgan.
  */
 export function getTools(): McpToolDef[] {
-  if (!config.MCP_WRITE_TOOLS_ENABLED) return TOOLS;
-  return [...TOOLS, ...WRITE_TOOLS.filter((tool) => !tool.requiresPurgeSwitch || config.MCP_PURGE_ENABLED)];
+  // Ijtimoiy tarqatish vositalari FAQAT DISTRIBUTION_ENABLED=true bo'lganda (o'chiq bo'lsa ro'yxat avvalgidek).
+  const dist = config.DISTRIBUTION_ENABLED;
+  if (!config.MCP_WRITE_TOOLS_ENABLED) return dist ? [...TOOLS, ...DISTRIBUTION_READ_TOOLS] : TOOLS;
+  return [...TOOLS, ...(dist ? DISTRIBUTION_READ_TOOLS : []), ...WRITE_TOOLS.filter((tool) => !tool.requiresPurgeSwitch || config.MCP_PURGE_ENABLED), ...(dist ? DISTRIBUTION_WRITE_TOOLS : [])];
 }
 
 export const TOOL_NAME_MAX = 64;
