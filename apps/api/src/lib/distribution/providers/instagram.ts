@@ -1,7 +1,7 @@
 import type { ChannelCheck } from "@blog/shared";
-import { DistributionError } from "../errors.js";
+import { DistributionError, notSupported } from "../errors.js";
 import { asRecord, HostClient, str, type ProviderDeps } from "../http.js";
-import { check, fmtBytes, isPublicHttpsUrl, textCheck } from "../checks.js";
+import { assertPublicHttpsUrl, check, fmtBytes, isPublicHttpsUrl, textCheck } from "../checks.js";
 import { codePointLength, findUrls, fitParts, normalizeUzbekApostrophes, toHashtags } from "../text.js";
 import { getTokenStatus } from "../token-status.js";
 import { DEFAULT_POLL_SCHEDULE_MS, GRAPH_TOKEN_POLICY, graphRefine, pollContainer, toGraphForm, type ContainerState } from "./graph.js";
@@ -16,6 +16,7 @@ import type {
   ProviderContext,
   PublishInput,
   PublishResult,
+  RefreshResult,
   RenderOptions,
 } from "../types.js";
 
@@ -113,7 +114,7 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
 
   const provider: DistributionProvider = {
     id: "instagram",
-    capabilities: { text: true, link: false, image: true, edit: false, delete: false, nativeScheduling: false },
+    capabilities: { text: true, link: false, image: true, edit: false, delete: false, nativeScheduling: false, notes: { delete: "Instagram Graph API postni o'chirishni qo'llamaydi (media reference: not supported)", edit: "Postni tahrirlash API'da yo'q" } },
     limits: { textMax: INSTAGRAM_CAPTION_MAX, textUnit: "characters", imageMaxBytes: INSTAGRAM_IMAGE_MAX_BYTES, imageMimes: ["image/jpeg"] },
     tokenPolicy: GRAPH_TOKEN_POLICY,
     auth: {
@@ -154,13 +155,13 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
         const me = await getJson(http3, deps, instagramUrl("me", { fields: "user_id,username", access_token: longToken }));
         return build(longToken, typeof longRes.expires_in === "number" ? longRes.expires_in : null, me, now);
       },
-      async refresh(deps: ProviderDeps, _creds: ClientCredentials, account: ConnectedAccount): Promise<ConnectedAccount> {
+      async refresh(deps: ProviderDeps, _creds: ClientCredentials, account: ConnectedAccount): Promise<RefreshResult> {
         const now = nowOf(deps);
         const http = new HostClient(deps, INSTAGRAM_HOSTS, [account.accessToken]);
         const res = await getJson(http, deps, `${INSTAGRAM_REFRESH_URL}?${toGraphForm({ grant_type: "ig_refresh_token", access_token: account.accessToken })}`);
         const token = str(res.access_token);
         if (!token) throw new DistributionError({ kind: "validation_rejected", message: "Instagram yangilangan token qaytarmadi" });
-        return build(token, typeof res.expires_in === "number" ? res.expires_in : null, {}, now, account);
+        return { account: build(token, typeof res.expires_in === "number" ? res.expires_in : null, {}, now, account), refreshTokenRotated: false };
       },
     },
 
@@ -211,26 +212,34 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
     async publish(ctx: ProviderContext, input: PublishInput): Promise<PublishResult> {
       const { deps, account } = ctx;
       const token = account.accessToken;
-      if (!input.imageUrl) throw new DistributionError({ kind: "validation_rejected", message: "Instagram uchun ommaviy rasm URL kerak" });
+      assertPublicHttpsUrl(input.post.url, "Maqola havolasi");
+      const resumeId = input.resume?.containerId;
+      if (!input.imageUrl && !resumeId) throw new DistributionError({ kind: "validation_rejected", message: "Instagram uchun ommaviy rasm URL kerak" });
+      const imageUrl = input.imageUrl ? assertPublicHttpsUrl(input.imageUrl, "Rasm URL") : undefined;
       const http = new HostClient(deps, INSTAGRAM_HOSTS, [token]);
       const ref = graphRefine(deps, "Instagram");
       const form = { "Content-Type": "application/x-www-form-urlencoded" };
 
-      const created = await http.request({
-        method: "POST",
-        url: instagramUrl(`${account.externalId}/media`),
-        headers: form,
-        body: toGraphForm(buildInstagramContainerParams({ imageUrl: input.imageUrl, caption: input.text, alt: input.image?.alt, accessToken: token })),
-        mode: "safe_write",
-      });
-      if (created.status < 200 || created.status >= 300) throw http.fail(created, "safe_write", ref);
-      const containerId = str(asRecord(created.json).id);
-      if (!containerId) throw new DistributionError({ kind: "validation_rejected", message: "Instagram konteyner id qaytarmadi" });
+      let containerId = resumeId;
+      if (!containerId) {
+        const created = await http.request({
+          method: "POST",
+          url: instagramUrl(`${account.externalId}/media`),
+          headers: form,
+          body: toGraphForm(buildInstagramContainerParams({ imageUrl: imageUrl as string, caption: input.text, alt: input.image?.alt, accessToken: token })),
+          mode: "safe_write",
+        });
+        if (created.status < 200 || created.status >= 300) throw http.fail(created, "safe_write", ref).with({ step: "container" });
+        containerId = str(asRecord(created.json).id);
+        if (!containerId) throw new DistributionError({ kind: "validation_rejected", step: "container", message: "Instagram konteyner id qaytarmadi" });
+      }
+      const partial = { containerId };
+      const cid = containerId;
 
       const state = await pollContainer(
         deps,
         async (): Promise<ContainerState> => {
-          const j = await getJson(http, deps, instagramUrl(containerId, { fields: "status_code", access_token: token }));
+          const j = await getJson(http, deps, instagramUrl(cid, { fields: "status_code", access_token: token }));
           const code = str(j.status_code);
           if (code === "FINISHED") return "ready";
           if (code === "ERROR" || code === "EXPIRED") throw new DistributionError({ kind: "validation_rejected", message: `Instagram konteyner holati: ${code}` });
@@ -238,28 +247,38 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
           return "pending";
         },
         schedule,
-      );
-      if (state !== "ready") throw new DistributionError({ kind: "transient", message: `Instagram konteyneri tayyor bo'lmadi (kutish tugadi); konteyner id ${containerId}` });
-
-      const pub = await http.request({
-        method: "POST",
-        url: instagramUrl(`${account.externalId}/media_publish`),
-        headers: form,
-        body: toGraphForm({ creation_id: containerId, access_token: token }),
-        mode: "create",
+      ).catch((e: unknown) => {
+        throw e instanceof DistributionError ? e.with({ step: "poll", partial }) : e;
       });
-      if (pub.status < 200 || pub.status >= 300) throw http.fail(pub, "create", ref);
-      const id = str(asRecord(pub.json).id);
-      if (!id) throw new DistributionError({ kind: "outcome_unknown", status: pub.status, message: "Instagram post id qaytarmadi — qayta urinmang, profilni tekshiring" });
+      if (state !== "ready") throw new DistributionError({ kind: "transient", step: "poll", partial, message: `Instagram konteyneri tayyor bo'lmadi (kutish tugadi); resume.containerId=${containerId} bilan davom eting` });
 
-      let url: string | null = null;
       try {
-        const j = await getJson(http, deps, instagramUrl(id, { fields: "permalink", access_token: token }));
-        url = str(j.permalink) ?? null; // UNVERIFIED maydon
-      } catch {
-        url = null;
+        const pub = await http.request({
+          method: "POST",
+          url: instagramUrl(`${account.externalId}/media_publish`),
+          headers: form,
+          body: toGraphForm({ creation_id: containerId, access_token: token }),
+          mode: "create",
+        });
+        if (pub.status < 200 || pub.status >= 300) throw http.fail(pub, "create", ref);
+        const id = str(asRecord(pub.json).id);
+        if (!id) throw new DistributionError({ kind: "outcome_unknown", status: pub.status, message: "Instagram post id qaytarmadi — qayta urinmang, profilni tekshiring" });
+
+        let url: string | null = null;
+        try {
+          const j = await getJson(http, deps, instagramUrl(id, { fields: "permalink", access_token: token }));
+          url = str(j.permalink) ?? null; // UNVERIFIED maydon
+        } catch {
+          url = null;
+        }
+        return { externalId: id, url };
+      } catch (e) {
+        throw e instanceof DistributionError ? e.with({ step: "publish", partial }) : e;
       }
-      return { externalId: id, url };
+    },
+
+    async remove(): Promise<void> {
+      throw notSupported("Instagram postini o'chirish", "API buni qo'llamaydi");
     },
   };
   return provider;

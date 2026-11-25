@@ -34,7 +34,7 @@ describe("Instagram auth", () => {
   });
   it("refresh uses ig_refresh_token", async () => {
     const m = mockFetch(() => json({ access_token: "NEW-TOKEN-12345", expires_in: 5184000 }));
-    const next = await p.auth.refresh!(makeDeps(m.fetch), creds, account);
+    const { account: next } = await p.auth.refresh!(makeDeps(m.fetch), creds, account);
     expect(new URL(m.calls[0]!.url).searchParams.get("grant_type")).toBe("ig_refresh_token");
     expect(next.accessToken).toBe("NEW-TOKEN-12345");
     expect(next.externalId).toBe("IG1");
@@ -78,9 +78,10 @@ describe("Instagram publish", () => {
     const m = mockFetch([() => json({ id: "CT1" }), () => json({ status_code: "FINISHED" }), () => new Error("reset")]);
     await expect(p.publish({ deps: makeDeps(m.fetch), account }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "outcome_unknown" });
   });
-  it("has no remove (API does not support deleting)", () => {
-    expect(p.remove).toBeUndefined();
+  it("remove throws a typed not_supported error (API cannot delete) and says why", async () => {
     expect(p.capabilities.delete).toBe(false);
+    expect(p.capabilities.notes?.delete).toBeTruthy();
+    await expect(p.remove({ deps: makeDeps(mockFetch(() => json({})).fetch), account }, "1")).rejects.toMatchObject({ kind: "not_supported" });
   });
   it("maps Graph errors", async () => {
     const run = (status: number, code: number) =>

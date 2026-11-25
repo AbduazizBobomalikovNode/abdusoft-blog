@@ -1,7 +1,7 @@
 import type { ChannelCheck } from "@blog/shared";
 import { DistributionError } from "../errors.js";
 import { asRecord, HostClient, str, type ProviderDeps } from "../http.js";
-import { check, fmtBytes, isPublicHttpsUrl, textCheck } from "../checks.js";
+import { assertPublicHttpsUrl, check, fmtBytes, isPublicHttpsUrl, textCheck } from "../checks.js";
 import { codePointLength, findUrls, graphemes, normalizeUzbekApostrophes, fitParts, utf8Length } from "../text.js";
 import { getTokenStatus } from "../token-status.js";
 import { DEFAULT_POLL_SCHEDULE_MS, GRAPH_TOKEN_POLICY, graphRefine, pollContainer, toGraphForm, type ContainerState } from "./graph.js";
@@ -16,6 +16,7 @@ import type {
   ProviderContext,
   PublishInput,
   PublishResult,
+  RefreshResult,
   RenderOptions,
 } from "../types.js";
 
@@ -167,13 +168,13 @@ export function createThreadsProvider(options: ThreadsOptions = {}): Distributio
         const me = await fetchMe(deps, longToken, secrets);
         return build(longToken, typeof longRes.expires_in === "number" ? longRes.expires_in : null, me, now);
       },
-      async refresh(deps: ProviderDeps, _creds: ClientCredentials, account: ConnectedAccount): Promise<ConnectedAccount> {
+      async refresh(deps: ProviderDeps, _creds: ClientCredentials, account: ConnectedAccount): Promise<RefreshResult> {
         const now = nowOf(deps);
         const http = new HostClient(deps, THREADS_HOSTS, [account.accessToken]);
         const res = await getJson(http, deps, `${THREADS_REFRESH_URL}?${toGraphForm({ grant_type: "th_refresh_token", access_token: account.accessToken })}`);
         const token = str(res.access_token);
         if (!token) throw new DistributionError({ kind: "validation_rejected", message: "Threads yangilangan token qaytarmadi" });
-        return build(token, typeof res.expires_in === "number" ? res.expires_in : null, {}, now, account);
+        return { account: build(token, typeof res.expires_in === "number" ? res.expires_in : null, {}, now, account), refreshTokenRotated: false };
       },
     },
 
@@ -207,57 +208,72 @@ export function createThreadsProvider(options: ThreadsOptions = {}): Distributio
     async publish(ctx: ProviderContext, input: PublishInput): Promise<PublishResult> {
       const { deps, account } = ctx;
       const token = account.accessToken;
+      // Xavfsizlik: URL'lar preflight'ga bog'liq emas — shu yerda ham tekshiriladi (SSRF/ichki manzillar).
+      const postUrl = assertPublicHttpsUrl(input.post.url, "Maqola havolasi");
+      const imageUrl = input.imageUrl ? assertPublicHttpsUrl(input.imageUrl, "Rasm URL") : undefined;
       const http = new HostClient(deps, THREADS_HOSTS, [token]);
       const ref = graphRefine(deps, "Threads");
       const form = { "Content-Type": "application/x-www-form-urlencoded" };
 
-      // 1) Konteyner (xavfsiz: yetim konteyner 24 soatda tugaydi).
-      const created = await http.request({
-        method: "POST",
-        url: threadsUrl(`${account.externalId}/threads`),
-        headers: form,
-        body: toGraphForm(buildThreadsContainerParams({ text: input.text, linkUrl: input.imageUrl ? undefined : input.post.url, imageUrl: input.imageUrl, accessToken: token })),
-        mode: "safe_write",
-      });
-      if (created.status < 200 || created.status >= 300) throw http.fail(created, "safe_write", ref);
-      const containerId = str(asRecord(created.json).id);
-      if (!containerId) throw new DistributionError({ kind: "validation_rejected", message: "Threads konteyner id qaytarmadi" });
+      // 1) Konteyner (xavfsiz: yetim konteyner 24 soatda tugaydi). `resume.containerId` bo'lsa yangisi yaratilmaydi.
+      let containerId = input.resume?.containerId;
+      if (!containerId) {
+        const created = await http.request({
+          method: "POST",
+          url: threadsUrl(`${account.externalId}/threads`),
+          headers: form,
+          body: toGraphForm(buildThreadsContainerParams({ text: input.text, linkUrl: imageUrl ? undefined : postUrl, imageUrl, accessToken: token })),
+          mode: "safe_write",
+        });
+        if (created.status < 200 || created.status >= 300) throw http.fail(created, "safe_write", ref).with({ step: "container" });
+        containerId = str(asRecord(created.json).id);
+        if (!containerId) throw new DistributionError({ kind: "validation_rejected", step: "container", message: "Threads konteyner id qaytarmadi" });
+      }
+      const partial = { containerId };
+      const cid = containerId;
 
       // 2) Holatni chegaralangan kutish bilan so'rash.
       const state = await pollContainer(
         deps,
         async (): Promise<ContainerState> => {
-          const j = await getJson(http, deps, threadsUrl(containerId, { fields: "status,error_message", access_token: token }));
+          const j = await getJson(http, deps, threadsUrl(cid, { fields: "status,error_message", access_token: token }));
           const status = str(j.status);
           if (status === "FINISHED") return "ready";
           if (status === "ERROR" || status === "EXPIRED") throw new DistributionError({ kind: "validation_rejected", platformMessage: str(j.error_message), message: `Threads konteyner holati: ${status}` });
+          if (status === "PUBLISHED") throw new DistributionError({ kind: "outcome_unknown", message: "Threads konteyneri allaqachon chop etilgan — qayta urinmang, profilni tekshiring" });
           return "pending";
         },
         schedule,
-      );
-      if (state !== "ready") throw new DistributionError({ kind: "transient", message: `Threads konteyneri tayyor bo'lmadi (kutish tugadi); konteyner id ${containerId}` });
+      ).catch((e: unknown) => {
+        throw e instanceof DistributionError ? e.with({ step: "poll", partial }) : e;
+      });
+      if (state !== "ready") throw new DistributionError({ kind: "transient", step: "poll", partial, message: `Threads konteyneri tayyor bo'lmadi (kutish tugadi); resume.containerId=${containerId} bilan davom eting` });
 
       // 3) Chop etish (create).
-      const pub = await http.request({
-        method: "POST",
-        url: threadsUrl(`${account.externalId}/threads_publish`),
-        headers: form,
-        body: toGraphForm({ creation_id: containerId, access_token: token }),
-        mode: "create",
-      });
-      if (pub.status < 200 || pub.status >= 300) throw http.fail(pub, "create", ref);
-      const id = str(asRecord(pub.json).id);
-      if (!id) throw new DistributionError({ kind: "outcome_unknown", status: pub.status, message: "Threads post id qaytarmadi — qayta urinmang, profilni tekshiring" });
-
-      // 4) Havola (permalink) — UNVERIFIED maydon; xato bo'lsa jim o'tkazib yuboriladi (post allaqachon chiqqan).
-      let url: string | null = null;
       try {
-        const j = await getJson(http, deps, threadsUrl(id, { fields: "permalink", access_token: token }));
-        url = str(j.permalink) ?? null;
-      } catch {
-        url = null;
+        const pub = await http.request({
+          method: "POST",
+          url: threadsUrl(`${account.externalId}/threads_publish`),
+          headers: form,
+          body: toGraphForm({ creation_id: containerId, access_token: token }),
+          mode: "create",
+        });
+        if (pub.status < 200 || pub.status >= 300) throw http.fail(pub, "create", ref);
+        const id = str(asRecord(pub.json).id);
+        if (!id) throw new DistributionError({ kind: "outcome_unknown", status: pub.status, message: "Threads post id qaytarmadi — qayta urinmang, profilni tekshiring" });
+
+        // 4) Havola (permalink) — UNVERIFIED maydon; xato bo'lsa jim o'tkazib yuboriladi (post allaqachon chiqqan).
+        let url: string | null = null;
+        try {
+          const j = await getJson(http, deps, threadsUrl(id, { fields: "permalink", access_token: token }));
+          url = str(j.permalink) ?? null;
+        } catch {
+          url = null;
+        }
+        return { externalId: id, url };
+      } catch (e) {
+        throw e instanceof DistributionError ? e.with({ step: "publish", partial }) : e;
       }
-      return { externalId: id, url };
     },
 
     async remove(ctx: ProviderContext, externalId: string): Promise<void> {

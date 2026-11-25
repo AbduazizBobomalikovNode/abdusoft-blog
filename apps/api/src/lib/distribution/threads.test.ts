@@ -36,7 +36,8 @@ describe("Threads auth", () => {
   });
   it("refresh uses th_refresh_token and resets the clock", async () => {
     const m = mockFetch(() => json({ access_token: "LONG-NEW-123456", expires_in: 5184000 }));
-    const next = await p.auth.refresh!(makeDeps(m.fetch), creds, account);
+    const { account: next, refreshTokenRotated } = await p.auth.refresh!(makeDeps(m.fetch), creds, account);
+    expect(refreshTokenRotated).toBe(false);
     const u = new URL(m.calls[0]!.url);
     expect(u.pathname).toBe("/refresh_access_token");
     expect(Object.fromEntries(u.searchParams)).toEqual({ grant_type: "th_refresh_token", access_token: SECRET });
