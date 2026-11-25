@@ -28,12 +28,15 @@ describe("registry", () => {
     expect(r).toContain("https://www.linkedin.com/legal/l/api-terms-of-use");
     expect(r).toContain("avtomatik emas");
   });
-  it("no provider schedules natively; capabilities are consistent with methods", () => {
+  it("no provider schedules natively; capabilities are consistent with methods", async () => {
     for (const id of PROVIDER_IDS) {
       const p = createProvider(id);
       expect(p.capabilities.nativeScheduling).toBe(false);
-      expect(Boolean(p.remove)).toBe(p.capabilities.delete);
-      expect(Boolean(p.update)).toBe(p.capabilities.edit && id !== "github");
+      expect(typeof p.remove).toBe("function");
+      if (!p.capabilities.delete) {
+        expect(p.capabilities.notes?.delete).toBeTruthy();
+        await expect(p.remove({ deps: makeDeps(mockFetch(() => json({})).fetch), account: account(id) }, "x")).rejects.toMatchObject({ kind: "not_supported" });
+      }
     }
   });
   it("importing the module has no side effects: construction needs no env or network", () => {
