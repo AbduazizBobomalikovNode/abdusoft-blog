@@ -1,9 +1,10 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { CHANNEL_MEDIA_POLICY } from "@blog/shared";
 import { config } from "../config.js";
 import { uploadsDir } from "../lib/media/store.js";
+import { SafeFetchError, safeFetchBytes } from "../lib/net/safe-fetch.js";
 
 /**
  * Kanalga yuboriladigan rasmlarni yuklash + JPEG'ga aylantirish. Sender
@@ -67,9 +68,41 @@ export function clearPreparedImageCache(): void {
   cache.clear();
 }
 
-function localKeyFor(url: string): string | null {
-  const localPrefix = `${config.API_ORIGIN}/uploads/`;
-  return url.startsWith(localPrefix) ? url.slice(localPrefix.length) : null;
+/**
+ * `<API_ORIGIN>/uploads/<kalit>` bo'lsa — mahalliy fayl kaliti. URL avval ajratiladi va normallashtiriladi (`..`, `%2e%2e` yo'q
+ * qilinadi), kalit esa `uploadsDir` ICHIDA qolishi shart (`resolveUploadPath` qayta tekshiradi).
+ */
+export function localKeyFor(url: string): string | null {
+  let parsed: URL;
+  let origin: URL;
+  try {
+    parsed = new URL(url);
+    origin = new URL(config.API_ORIGIN);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== origin.origin || !parsed.pathname.startsWith("/uploads/")) return null;
+  try {
+    return decodeURIComponent(parsed.pathname.slice("/uploads/".length));
+  } catch {
+    return null;
+  }
+}
+
+/** Kalitni `uploadsDir` ichidagi mutlaq yo'lga aylantiradi; tashqariga chiqsa (`..`, mutlaq yo'l, NUL, simvolik havola) — `null`. */
+export async function resolveUploadPath(key: string): Promise<string | null> {
+  if (key === "" || key.includes("\0") || key.includes("\\")) return null;
+  const root = path.resolve(uploadsDir);
+  const candidate = path.resolve(root, key);
+  if (candidate === root || !candidate.startsWith(root + path.sep)) return null;
+  try {
+    const [realRoot, realFile] = await Promise.all([realpath(root), realpath(candidate)]);
+    if (!realFile.startsWith(realRoot + path.sep)) return null;
+    return realFile;
+  } catch {
+    // Fayl yo'q — xavfsiz yo'l qaytariladi, chaqiruvchi "topilmadi" deydi.
+    return candidate;
+  }
 }
 
 class FetchError extends Error {
@@ -86,7 +119,8 @@ async function fetchBytes(url: string): Promise<{ buffer: Buffer; validator: str
   const cap = CHANNEL_MEDIA_POLICY.fetchMaxBytes;
   const capMb = Math.round(cap / 1024 / 1024);
   if (key !== null) {
-    const filePath = path.join(uploadsDir, key);
+    const filePath = await resolveUploadPath(key);
+    if (filePath === null) throw new FetchError("Rasm manzili ruxsat etilmagan", "unreachable");
     try {
       const st = await stat(filePath);
       if (st.size > cap) throw new FetchError(`Fayl hajmi ${capMb} MB dan katta`, "too_large");
@@ -97,26 +131,14 @@ async function fetchBytes(url: string): Promise<{ buffer: Buffer; validator: str
     }
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new FetchError(`Rasmga ulanib bo'lmadi (HTTP ${res.status})`, "unreachable");
-    const contentLength = res.headers.get("content-length");
-    if (contentLength && Number(contentLength) > cap) {
-      throw new FetchError(`Fayl hajmi ${capMb} MB dan katta`, "too_large");
-    }
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (buffer.byteLength > cap) throw new FetchError(`Fayl hajmi ${capMb} MB dan katta`, "too_large");
-    return { buffer, validator: res.headers.get("etag") ?? res.headers.get("last-modified") };
+    return await safeFetchBytes(url, { maxBytes: cap, timeoutMs: DOWNLOAD_TIMEOUT_MS });
   } catch (error) {
-    if (error instanceof FetchError) throw error;
-    throw new FetchError(
-      controller.signal.aborted ? "Rasm yuklanishi vaqt chegarasidan oshdi" : "Rasmga ulanib bo'lmadi",
-      "unreachable",
-    );
-  } finally {
-    clearTimeout(timer);
+    if (error instanceof SafeFetchError) {
+      if (error.kind === "too_large") throw new FetchError(`Fayl hajmi ${capMb} MB dan katta`, "too_large");
+      throw new FetchError(error.message, "unreachable");
+    }
+    throw new FetchError("Rasmga ulanib bo'lmadi", "unreachable");
   }
 }
 
@@ -171,8 +193,9 @@ export async function getPreparedImage(url: string): Promise<PreparedImage> {
     const key = localKeyFor(url);
     if (key === null) return cached.value;
     try {
-      const st = await stat(path.join(uploadsDir, key));
-      if (`${st.mtimeMs}:${st.size}` === cached.validator) return cached.value;
+      const filePath = await resolveUploadPath(key);
+      const st = filePath ? await stat(filePath) : null;
+      if (st && `${st.mtimeMs}:${st.size}` === cached.validator) return cached.value;
     } catch {
       // fayl yo'qolgan — qayta urinib ko'ramiz (pastda xato qaytadi).
     }

@@ -129,3 +129,22 @@ describe("pathological Markdown cannot stall the connector", () => {
     expect(r.isError).toBe(false);
   });
 });
+
+describe("connector images and covers must be the blog's own media", () => {
+  it("cover_url and image nodes pointing at foreign hosts, loopback or traversal are refused; own upload URLs are accepted", async () => {
+    const { config } = await import("../../config.js");
+    const created = await callTool(app, token, "create_post_draft", { title: "Rasm manzillari", content_markdown: "## A\n\nmatn matn matn" });
+    const post = (created.json as Json).post;
+    for (const cover_url of ["https://evil.example/c.png", "http://127.0.0.1:9/c.png", "http://169.254.169.254/x.png", `${config.API_ORIGIN}/uploads/../secret.png`]) {
+      const r = await callTool(app, token, "update_post", { id: post.id, expected_updated_at: post.updatedAt, cover_url });
+      expect(r.isError, cover_url).toBe(true);
+      expect((r.json as Json).error.code).toBe("invalid_input");
+    }
+    const image = (src: string) => ({ type: "doc", content: [{ type: "image", attrs: { src, alt: "x" } }, { type: "paragraph", content: [{ type: "text", text: "matn" }] }] });
+    const foreign = await callTool(app, token, "update_post", { id: post.id, expected_updated_at: post.updatedAt, content_document: image("https://evil.example/i.png") });
+    expect(foreign.isError).toBe(true);
+    expect((foreign.json as Json).error.code).toBe("invalid_input");
+    const own = await callTool(app, token, "update_post", { id: post.id, expected_updated_at: post.updatedAt, cover_url: `${config.API_ORIGIN}/uploads/2026/a.webp`, content_document: image(`${config.API_ORIGIN}/uploads/2026/b.webp`) });
+    expect(own.isError, own.text.slice(0, 300)).toBe(false);
+  });
+});

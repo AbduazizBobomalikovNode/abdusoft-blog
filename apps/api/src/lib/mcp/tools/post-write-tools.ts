@@ -9,6 +9,7 @@ import {
 } from "@blog/shared";
 import { config } from "../../../config.js";
 import { validateConnectorDocument } from "../../content/validate.js";
+import { ownMediaMatcher } from "../../media/own-url.js";
 import { renderPost } from "../../content/render.js";
 import {
   approvePost,
@@ -63,7 +64,7 @@ const postId = uuidField("post id from list_posts or get_post").describe("Post i
 const URL_RE = /^(https?:\/\/|\/)\S+$/i;
 const coverFields = {
   cover_media_id: uuidField("media id from list_media or upload_image").nullable().optional().describe("Media-library image to use as the cover (id from list_media / upload_image). null removes the cover. Do not combine with cover_url."),
-  cover_url: z.string().regex(URL_RE, "must be an http(s) URL or a site-relative path").max(2000).nullable().optional().describe("Cover image URL (http(s) or site-relative). null removes the cover. Do not combine with cover_media_id."),
+  cover_url: z.string().regex(URL_RE, "must be an http(s) URL or a site-relative path").max(2000).nullable().optional().describe("Cover image URL - only this blog's own media URLs are accepted (from upload_image / list_media). null removes the cover. Do not combine with cover_media_id."),
 };
 
 const settingsField = PostSettingsSchema.partial()
@@ -82,6 +83,13 @@ async function resolveCover(args: { cover_media_id?: string | null | undefined; 
     const [row] = await db.select({ url: media.url }).from(media).where(eq(media.id, args.cover_media_id)).limit(1);
     if (!row) throw new ToolError("not_found", "No media item with that cover_media_id.", "Use list_media to find an id, or upload_image first.");
     return row.url;
+  }
+  if (args.cover_url !== undefined && args.cover_url !== null && !(await ownMediaMatcher())(args.cover_url)) {
+    throw new ToolError(
+      "invalid_input",
+      "cover_url must be one of this blog's own media URLs (an upload_image result or a list_media item). Arbitrary external addresses are not accepted, because the server downloads cover images when it prepares Telegram posts.",
+      "Upload the image with upload_image and pass its media id as cover_media_id (or the returned url as cover_url).",
+    );
   }
   return args.cover_url;
 }
