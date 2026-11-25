@@ -16,6 +16,10 @@
 # Chiqish kodlari: 0 — muvaffaqiyat; 1 — xato (sayt tegilmagan yoki avtomatik
 # orqaga qaytarilgan); 2 — orqaga qaytarish ham muvaffaqiyatsiz (qo'lda
 # aralashuv kerak); 3 — boshqa deploy ishlayapti (lock); 64 — noto'g'ri argument.
+# Dekodlangan bundle, yuklamalar, snapshot, holat va zaxira fayllari boshqa foydalanuvchilarga o'qilmasin
+# (umumiy server). Live daraxtga tushadigan narsalar (git checkout, tar, pnpm) `umask 022` ichida
+# yaratiladi — ya'ni live daraxt rejimlari qo'lda deploy-vds.sh/rsync bergan bilan bir xil qoladi.
+umask 077
 set -Eeuo pipefail
 trap '' HUP PIPE # SSH ulanishi uzilsa ham deploy yarim yo'lda to'xtamasligi kerak
 export LC_ALL=C GIT_TERMINAL_PROMPT=0
@@ -108,6 +112,29 @@ is_hex() { # is_hex <uzunlik> <qiymat>
   [ "${#2}" -eq "$1" ] && [[ "$2" != *[!0-9a-f]* ]]
 }
 
+# is_out <yo'l>: faqat uchta ma'lum build chiqish yo'lidan biriga AYNAN teng bo'lsa 0.
+is_out() {
+  local o
+  for o in $OUTS; do
+    if [ "$1" = "$o" ]; then return 0; fi
+  done
+  return 1
+}
+
+# clean_out_list <qiymat>: holat faylidan o'qilgan ro'yxatdan faqat ma'lum yo'llarni qoldiradi.
+clean_out_list() {
+  local arr=() w res=""
+  IFS=' ' read -r -a arr <<<"$1" || true
+  for w in ${arr[@]+"${arr[@]}"}; do
+    if is_out "$w"; then
+      res="${res:+$res }$w"
+    else
+      warn "Holat faylidagi noma'lum yo'l e'tiborsiz qoldirildi (build chiqish yo'llariga mos emas)."
+    fi
+  done
+  printf '%s' "$res"
+}
+
 live_build_id() { cat "$LIVE_DIR/apps/web/.next/BUILD_ID" 2>/dev/null || true; }
 
 # ---- holat fayli -----------------------------------------------------------
@@ -119,7 +146,7 @@ state_get() {
 # write_state <kalit=qiymat>... — berilganlarni yangilaydi, qolganlarini saqlaydi.
 write_state() {
   local tmp="$STATE_FILE.tmp.$$"
-  local keys="current_sha current_at previous_sha last_attempt_sha last_attempt_at last_result live_build_id phase swap_cur swap_done"
+  local keys="current_sha current_at previous_sha last_attempt_sha last_attempt_at last_result live_build_id bundle_sha256 phase swap_cur swap_done"
   local k kv v
   : >"$tmp"
   for k in $keys; do
@@ -167,7 +194,7 @@ swap_back() {
       if [ -e "$LIVE_DIR/$rel" ]; then mv "$LIVE_DIR/$rel" "$LIVE_DIR/$rel.failed"; fi
       mv "$LIVE_DIR/$rel.prev" "$LIVE_DIR/$rel"
     else
-      warn "$rel.prev yo'q — $rel qaytarilmadi"
+      info "$rel.prev yo'q — $rel allaqachon qaytarilgan deb hisoblandi"
     fi
   done
   SWAPPED=""
@@ -185,6 +212,7 @@ snapshot_source() {
   rm -rf "${SNAP_CUR:?}" "${SNAP_CUR:?}.tmp"
   mkdir -p "$SNAP_CUR.tmp"
   rsync -a --delete "${RSYNC_EXCLUDES[@]}" "$LIVE_DIR/" "$SNAP_CUR.tmp/"
+  chmod 700 "$SNAP_CUR.tmp"
   mv "$SNAP_CUR.tmp" "$SNAP_CUR" # to'liq nusxa bo'lgandagina tiklash uchun yaroqli
 }
 
@@ -202,18 +230,33 @@ restore_source() {
   fi
   if [ -f "$snap/pnpm-lock.yaml" ] && [ -n "$NEW_LOCK_HASH" ] && [ "$(sha256_of "$snap/pnpm-lock.yaml")" != "$NEW_LOCK_HASH" ]; then
     info "pnpm-lock.yaml farq qildi — bog'liqliklar qayta o'rnatilmoqda (avval oflayn)"
-    run_to "$T_INSTALL" pnpm install --frozen-lockfile --offline ||
-      run_to "$T_INSTALL" pnpm install --frozen-lockfile ||
+    (umask 022; run_to "$T_INSTALL" pnpm install --frozen-lockfile --offline) ||
+      (umask 022; run_to "$T_INSTALL" pnpm install --frozen-lockfile) ||
       warn "Qayta install muvaffaqiyatsiz — node_modules'ni qo'lda tekshiring."
   fi
   rm -rf "${snap:?}"
 }
 
 # ---- xizmatlar -------------------------------------------------------------
+service_pids() {
+  local svc
+  for svc in $SERVICES; do
+    systemctl show -p MainPID --value "$svc" 2>/dev/null || echo unknown
+  done | tr '\n' ' '
+}
+
+# Haqiqatan qayta ishga tushganini isbotlaydi: `systemctl restart` natijasi VA har xizmatning MainPID'i o'zgargan.
 restart_services() {
+  local before after
+  before="$(service_pids)"
   # SERVICES bo'sh joy bilan ajratilgan, shuning uchun ataylab so'zlarga bo'linadi.
   # shellcheck disable=SC2086
-  run_to "$T_RESTART" sudo -n systemctl restart $SERVICES
+  run_to "$T_RESTART" sudo -n systemctl restart $SERVICES || return 1
+  after="$(service_pids)"
+  if [ "$before" = "$after" ] && [[ "$before" != *unknown* ]]; then
+    warn "Xizmatlar MainPID'i o'zgarmadi ($SERVICES) — qayta ishga tushmagan ko'rinadi."
+    return 1
+  fi
 }
 
 wait_http() { # <nom> <url>
@@ -304,6 +347,19 @@ do_rollback() {
 # Hech qachon *.prev'ni allaqachon almashgan build bilan ustiga yozmaydi.
 recover_interrupted() {
   local ph
+  # Holat fayli bor-u, o'qib bo'lmasa (bo'sh/buzilgan): sukut bilan o'tkazib yubormaymiz.
+  if [ -f "$STATE_FILE" ] && { [ ! -s "$STATE_FILE" ] || ! grep -q '^phase=' "$STATE_FILE" || grep -qv '^[a-z0-9_]*=' "$STATE_FILE"; }; then
+    warn "Holat fayli ($STATE_FILE) bo'sh yoki o'qib bo'lmaydi — oldingi holat NOMA'LUM. Yarim qolgan deploy izlari (*.prev, src.cur) tekshiriladi."
+    NEW_LOCK_HASH="$(sha256_of "$LIVE_DIR/pnpm-lock.yaml" 2>/dev/null || true)"
+    cleanup_stage
+    if [ -d "$SNAP_CUR" ]; then
+      info "Yarim qolgan snapshot topildi — manba shundan tiklanadi"
+      restore_source "$SNAP_CUR" || true
+    fi
+    : >"$STATE_FILE"
+    write_state "phase=idle"
+    return 0
+  fi
   ph="$(state_get phase)"
   case "$ph" in
     "" | idle) return 0 ;;
@@ -316,13 +372,17 @@ recover_interrupted() {
     source)
       cleanup_stage
       restore_source "$SNAP_CUR" || true
-      write_state "phase=idle" "swap_cur=" "swap_done=" "live_build_id=$(live_build_id)" "last_result=recovered"
+      write_state "phase=idle" "swap_cur=" "swap_done=" "live_build_id=$(live_build_id)" "bundle_sha256=" "last_result=recovered"
       warn "Manba tiklandi, build o'zgarmagan. So'rovingizni qayta yuboring."
       exit 1
       ;;
     swapping | restarting)
       cur="$(state_get swap_cur)"
-      sdone="$(state_get swap_done)"
+      if [ -n "$cur" ] && ! is_out "$cur"; then
+        warn "Holat faylidagi swap_cur noma'lum yo'l — e'tiborsiz qoldirildi."
+        cur=""
+      fi
+      sdone="$(clean_out_list "$(state_get swap_done)")"
       SWAPPED="$sdone"
       if [ -n "$cur" ]; then
         # Almashtirish o'rtasida o'ldirilgan papka
@@ -334,16 +394,21 @@ recover_interrupted() {
         fi
       fi
       for rel in $SWAPPED; do
-        [ -e "$LIVE_DIR/$rel.prev" ] || { warn "$rel.prev yo'q — avtomatik tiklab bo'lmaydi. Qo'lda: ./scripts/deploy-vds.sh"; write_state "last_result=rollback_failed"; exit 2; }
+        # .prev yo'q-u, live papka bor: oldingi (o'ldirilgan) rollback uni allaqachon qaytargan. Ikkalasi ham yo'q — rad etamiz.
+        if [ ! -e "$LIVE_DIR/$rel.prev" ] && [ ! -e "$LIVE_DIR/$rel" ]; then
+          warn "$rel ham, $rel.prev ham yo'q — avtomatik tiklab bo'lmaydi. Qo'lda: ./scripts/deploy-vds.sh"
+          write_state "last_result=rollback_failed"
+          exit 2
+        fi
       done
       cleanup_stage
       if do_rollback "yarim qolgan deploy tiklanmoqda" "$SNAP_CUR"; then
         write_state "phase=idle" "swap_cur=" "swap_done=" "current_sha=" "previous_sha=" \
-          "live_build_id=$(live_build_id)" "last_result=recovered"
+          "live_build_id=$(live_build_id)" "bundle_sha256=" "last_result=recovered"
         warn "Oldingi deploy yarim qolgan edi; sayt oldingi build'ga qaytarildi. So'rovingizni qayta yuboring."
         exit 1
       fi
-      write_state "last_result=rollback_failed"
+      write_state "phase=idle" "swap_cur=" "swap_done=" "live_build_id=$(live_build_id)" "bundle_sha256=" "last_result=rollback_failed"
       warn "TIKLASH MUVAFFAQIYATSIZ — QO'LDA ARALASHING (journalctl -u abdusoft-blog-api -u abdusoft-blog-web; zaxira: ./scripts/deploy-vds.sh)."
       exit 2
       ;;
@@ -357,6 +422,7 @@ recover_interrupted() {
 # ---- boshlang'ich tayyorgarlik ---------------------------------------------
 setup_logging_and_lock() {
   mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR" # holat, log, yuklamalar va snapshot'lar shu yerda — boshqalarga yopiq
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
     echo "XATO: boshqa deploy hozir ishlayapti (lock band). Tugashini kuting va qayta urinib ko'ring." >&2
@@ -379,6 +445,8 @@ setup_logging_and_lock() {
 }
 
 cleanup_leftovers() {
+  # Tiklash bosqichidan keyin phase=idle: qolgan snapshot'lar yetim (to'liq bo'lmagan yoki eskirgan).
+  rm -rf "${SNAP_CUR:?}" "${SNAP_CUR:?}.tmp"
   local rel
   for rel in $OUTS; do rm -rf "${LIVE_DIR:?}/$rel.failed"; done
   cleanup_stage
@@ -386,8 +454,8 @@ cleanup_leftovers() {
 
 check_key_file() {
   local mode
-  if [ ! -f "$BUNDLE_KEY_FILE" ] || [ ! -s "$BUNDLE_KEY_FILE" ]; then
-    warn "Bundle shifrlash kaliti topilmadi yoki bo'sh: $BUNDLE_KEY_FILE (docs/deploy.md). Hech narsa o'zgartirilmadi."
+  if [ ! -f "$BUNDLE_KEY_FILE" ] || [ "$(tr -d '[:space:]' <"$BUNDLE_KEY_FILE" | wc -c | tr -d ' ')" -lt 32 ]; then
+    warn "Bundle shifrlash kaliti topilmadi, bo'sh yoki juda qisqa (kamida 32 belgi): $BUNDLE_KEY_FILE (docs/deploy.md). Hech narsa o'zgartirilmadi."
     return 1
   fi
   mode="$(stat -c %a "$BUNDLE_KEY_FILE" 2>/dev/null || stat -f %Lp "$BUNDLE_KEY_FILE" 2>/dev/null || echo unknown)"
@@ -514,7 +582,7 @@ deploy() {
   done < <(tar -tzf "$dl/bundle.tar.gz")
   rm -rf "${STAGE_DIR:?}"
   mkdir -p "$STAGE_DIR"
-  tar -xzf "$dl/bundle.tar.gz" -C "$STAGE_DIR" --no-same-owner --no-same-permissions
+  (umask 022; tar -xzf "$dl/bundle.tar.gz" -C "$STAGE_DIR" --no-same-owner --no-same-permissions)
   if [ -n "$(find "$STAGE_DIR" ! -type f ! -type d -print -quit)" ]; then
     warn "Arxivda oddiy bo'lmagan fayl (symlink/maxsus): rad etildi"
     return 1
@@ -539,10 +607,9 @@ deploy() {
   warn_public_env_drift "$m"
 
   # Bog'liqliklarni OLDINDAN yuklab olamiz (tarmoq xavfli lahzadan oldin; live daraxt hali tegilmagan).
-  git -C "$SRC_DIR" checkout --quiet --force --detach "$SHA"
-  git -C "$SRC_DIR" clean -fdxq
+  (umask 022; git -C "$SRC_DIR" checkout --quiet --force --detach "$SHA" && git -C "$SRC_DIR" clean -fdxq)
   info "pnpm fetch (bog'liqliklar do'konga)"
-  (cd "$SRC_DIR" && run_to "$T_FETCH" pnpm fetch)
+  (umask 022; cd "$SRC_DIR" && run_to "$T_FETCH" pnpm fetch)
 
   local rel
   for rel in $OUTS; do
@@ -556,7 +623,7 @@ deploy() {
   snapshot_source
   write_state "phase=source"
   sync_source
-  run_to "$T_INSTALL" pnpm install --frozen-lockfile --offline
+  (umask 022; run_to "$T_INSTALL" pnpm install --frozen-lockfile --offline)
   local want="$WANT_NEXT" have
   have="$(cd "$LIVE_DIR/apps/web" && node -p 'require("next/package.json").version')"
   [ "$want" = "$have" ] || { warn "Next.js versiyasi mos emas (bundle: $want, serverda o'rnatilgan: $have)"; return 1; }
@@ -566,7 +633,7 @@ deploy() {
   run_to "$T_BACKUP" bash "$BACKUP_SCRIPT" --db-only
 
   step "[7/9] Migratsiya"
-  run_to "$T_MIGRATE" pnpm api:migrate
+  (umask 022; run_to "$T_MIGRATE" pnpm api:migrate)
 
   step "[8/9] Build almashtirilmoqda va xizmatlar qayta ishga tushirilmoqda"
   PHASE="almashtirildi"
@@ -584,19 +651,19 @@ deploy() {
     trap - ERR
     if do_rollback "yangi build health check'dan o'tmadi" "$SNAP_CUR"; then
       write_state "phase=idle" "swap_cur=" "swap_done=" "current_sha=$PREV_SHA" "current_at=$(now)" "previous_sha=" \
-        "live_build_id=$(live_build_id)" "last_attempt_sha=$SHA" "last_attempt_at=$(now)" "last_result=rolled_back"
+        "live_build_id=$(live_build_id)" "bundle_sha256=" "last_attempt_sha=$SHA" "last_attempt_at=$(now)" "last_result=rolled_back"
       warn "DEPLOY MUVAFFAQIYATSIZ: ${SHA:0:12} qaytarildi, ishlayotgan versiya: ${PREV_SHA:-$UNK}"
       exit 1
     fi
     # builds allaqachon qaytarilgan (faqat health o'tmadi) — keyingi so'rov yarim holat deb tiklashga urinmasin
-    write_state "phase=idle" "swap_cur=" "swap_done=" "current_sha=$PREV_SHA" "previous_sha=" "live_build_id=$(live_build_id)" \
+    write_state "phase=idle" "swap_cur=" "swap_done=" "current_sha=$PREV_SHA" "previous_sha=" "live_build_id=$(live_build_id)" "bundle_sha256=" \
       "last_attempt_sha=$SHA" "last_attempt_at=$(now)" "last_result=rollback_failed"
     warn "ORQAGA QAYTARISH HAM MUVAFFAQIYATSIZ — QO'LDA ARALASHING (journalctl -u abdusoft-blog-api -u abdusoft-blog-web; zaxira: ./scripts/deploy-vds.sh)."
     exit 2
   fi
 
   write_state "phase=idle" "swap_cur=" "swap_done=" "current_sha=$SHA" "current_at=$(now)" "previous_sha=$PREV_SHA" \
-    "live_build_id=$(live_build_id)" "last_attempt_sha=$SHA" "last_attempt_at=$(now)" "last_result=ok"
+    "live_build_id=$(live_build_id)" "bundle_sha256=$EXPECT_SHA256" "last_attempt_sha=$SHA" "last_attempt_at=$(now)" "last_result=ok"
   rm -rf "${SNAP_PREV:?}"
   mv "$SNAP_CUR" "$SNAP_PREV"
   for rel in $OUTS; do rm -rf "${LIVE_DIR:?}/$rel.failed"; done
@@ -618,26 +685,40 @@ rollback_cmd() {
   NEW_LOCK_HASH="$(sha256_of "$LIVE_DIR/pnpm-lock.yaml")"
   if do_rollback "qo'lda so'raldi" "$SNAP_PREV"; then
     write_state "phase=idle" "current_sha=$PREV_SHA" "current_at=$(now)" "previous_sha=" \
-      "live_build_id=$(live_build_id)" "last_attempt_sha=$PREV_SHA" "last_attempt_at=$(now)" "last_result=ok"
+      "live_build_id=$(live_build_id)" "bundle_sha256=" "last_attempt_sha=$PREV_SHA" "last_attempt_at=$(now)" "last_result=ok"
     step "Orqaga qaytarildi."
     return 0
   fi
-  write_state "phase=idle" "current_sha=$PREV_SHA" "previous_sha=" "live_build_id=$(live_build_id)" \
+  write_state "phase=idle" "current_sha=$PREV_SHA" "previous_sha=" "live_build_id=$(live_build_id)" "bundle_sha256=" \
     "last_attempt_at=$(now)" "last_result=rollback_failed"
   warn "ORQAGA QAYTARISH MUVAFFAQIYATSIZ — qo'lda aralashing."
   exit 2
 }
 
-# Xuddi shu commit allaqachon ishlayotgan bo'lsa — arzon no-op (restart/backup sikli bo'lmasin).
+# Xuddi shu commit VA xuddi shu bundle allaqachon ishlayotgan bo'lsa — arzon no-op (restart/backup
+# sikli bo'lmasin), lekin faqat health check o'tsagina. Bundle hashi boshqa bo'lsa (qayta build qilingan:
+# ochiq o'zgaruvchi yoki kalit o'zgargan) — haqiqiy deploy. Xizmatlar ishlamayotgan bo'lsa — jim muvaffaqiyat
+# emas: qayta ishga tushirish va health check, natija aniq aytiladi.
 noop_if_current() {
   [ "$FORCE" -eq 0 ] || return 0
   local actual
   actual="$(live_build_id)"
   if [ "$(state_get current_sha)" = "$SHA" ] && [ "$(state_get last_result)" = ok ] &&
+    [ "$(state_get bundle_sha256)" = "$EXPECT_SHA256" ] &&
     [ -n "$actual" ] && [ "$(state_get live_build_id)" = "$actual" ]; then
-    step "Commit ${SHA:0:12} allaqachon deploy qilingan va ishlayapti — hech narsa qilinmadi."
-    info "Majburan qayta deploy: serverda qo'lda 'abdusoft-blog-deploy-entry --force <sha> <sha256>'."
-    exit 0
+    step "Commit ${SHA:0:12} va shu bundle allaqachon deploy qilingan — health tekshirilmoqda"
+    if (HEALTH_TRIES=2; health_check); then
+      step "Hech narsa qilinmadi: xuddi shu bundle ishlayapti va sog'lom."
+      info "Majburan qayta deploy: serverda qo'lda 'abdusoft-blog-deploy-entry --force <sha> <sha256>'."
+      exit 0
+    fi
+    warn "Xuddi shu bundle deploy qilingan, lekin health check o'tmadi — xizmatlar qayta ishga tushirilmoqda."
+    if restart_services && sleep 1 && health_check; then
+      warn "Xizmatlar qayta ishga tushirilib tiklandi (build o'zgarmagan)."
+      exit 0
+    fi
+    warn "Xizmatlar qayta ishga tushirilgandan keyin ham sog'lom emas — qo'lda tekshiring (journalctl -u abdusoft-blog-api -u abdusoft-blog-web; zaxira: ./scripts/deploy-vds.sh)."
+    exit 1
   fi
 }
 

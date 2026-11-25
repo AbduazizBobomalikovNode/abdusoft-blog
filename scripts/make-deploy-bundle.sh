@@ -32,8 +32,8 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 
 KEY_FILE="${BUNDLE_KEY_FILE:-}"
-if [ -z "$KEY_FILE" ] || [ ! -s "$KEY_FILE" ]; then
-  echo "XATO: BUNDLE_KEY_FILE berilmagan yoki bo'sh — bundle shifrlanmasdan yuklanmaydi." >&2
+if [ -z "$KEY_FILE" ] || [ ! -f "$KEY_FILE" ] || [ "$(tr -d '[:space:]' <"$KEY_FILE" | wc -c | tr -d ' ')" -lt 32 ]; then
+  echo "XATO: BUNDLE_KEY_FILE berilmagan, bo'sh yoki juda qisqa (kamida 32 belgi) — bundle shifrlanmasdan yuklanmaydi." >&2
   exit 1
 fi
 
