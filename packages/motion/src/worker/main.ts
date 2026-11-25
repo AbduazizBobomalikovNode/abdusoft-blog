@@ -69,6 +69,20 @@ async function main(): Promise<number> {
   process.on("SIGINT", onSignal);
   process.on("SIGHUP", onSignal);
 
+  // The parent (API) may be killed without being able to signal us (SIGKILL, crash, OOM): stop when it is gone.
+  const parentArg = process.argv.indexOf("--parent-pid");
+  const parentPid = parentArg > 0 ? Number(process.argv[parentArg + 1]) : 0;
+  if (parentPid > 0) {
+    setInterval(() => {
+      try {
+        process.kill(parentPid, 0);
+      } catch {
+        abort.abort();
+        setTimeout(() => process.exit(143), 5000).unref();
+      }
+    }, 2000).unref();
+  }
+
   const { MotionRenderer, MotionError } = await import("../render/index.ts");
   const { isolateBrowserSignals } = await import("../render/cli-signals.ts");
   let renderer: Awaited<ReturnType<typeof MotionRenderer.create>> | null = null;

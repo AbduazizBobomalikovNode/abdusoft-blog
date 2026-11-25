@@ -82,6 +82,16 @@ export function startScheduler(): Cron[] {
     );
   }
 
+  // Video render xizmati: faqat VIDEO_ENABLED=true; o'chiq bo'lsa modul yuklanmaydi va hech narsa ro'yxatga olinmaydi.
+  // Render o'zi API jarayonida EMAS — navbatni kuzatish va alohida ishchi jarayonni ishga tushirish shu yerda boshlanadi.
+  if (config.VIDEO_ENABLED) {
+    void import("./video/lifecycle.js")
+      .then(async (video) => {
+        jobs.push(...(await video.startVideo()));
+      })
+      .catch((error: unknown) => console.error("Video xizmatini ishga tushirib bo'lmadi:", error));
+  }
+
   return jobs;
 }
 
