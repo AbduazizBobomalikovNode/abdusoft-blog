@@ -1,10 +1,29 @@
+import { layoutDiagram } from "./diagram-layout.ts";
 import { FORMATS } from "./layout.ts";
-import type { BulletsScene, CodeScene, OutroScene, Scene, Storyboard, TerminalScene, TitleScene } from "./schema/storyboard.ts";
-import { codeLines } from "./schema/storyboard.ts";
+import type {
+  BulletsScene,
+  ClosingScene,
+  CodeDiffScene,
+  CodeScene,
+  CompareScene,
+  DiagramScene,
+  IntroScene,
+  OutroScene,
+  QuoteScene,
+  Scene,
+  ShowpieceVariant,
+  StatScene,
+  Storyboard,
+  StepsScene,
+  TerminalScene,
+  TitleScene,
+} from "./schema/storyboard.ts";
+import { codeLines, parseDiff } from "./schema/storyboard.ts";
 import {
   CODE_TYPE_CPS,
   CODE_TYPE_MAX_SECONDS,
   FPS,
+  LOOP_FRAMES,
   readFrames,
   sec,
   TERMINAL_TYPE_CPS,
@@ -17,7 +36,7 @@ const ANIM = 18;
 /** Shortest beat a finished scene holds before it may be cut off. */
 const MIN_HOLD = sec(0.5);
 
-export type TransitionKind = "cut" | "fade" | "slide";
+export type TransitionKind = "cut" | "fade" | "slide" | "wipe" | "push" | "zoom";
 
 /** Content timelines. All frames are relative to the scene's content clock (local frame minus `leadFrames`). */
 export interface TitleTiming {
@@ -61,7 +80,84 @@ export interface OutroTiming {
   ctaAt: number;
   urlAt: number;
 }
-export type ContentTiming = TitleTiming | BulletsTiming | CodeTiming | TerminalTiming | OutroTiming;
+export interface IntroTiming {
+  type: "intro";
+  variant: ShowpieceVariant;
+  kickerAt: number;
+  titleAt: number;
+  wordStep: number;
+  subtitleAt: number;
+  tagAt: number[];
+}
+export interface ClosingTiming {
+  type: "closing";
+  variant: ShowpieceVariant;
+  markAt: number;
+  ctaAt: number;
+  urlAt: number;
+  /** Ambient motion period in frames; the final hold is one period long. */
+  loopFrames: number;
+}
+export interface DiagramTiming {
+  type: "diagram";
+  headingAt: number;
+  /** Per node (storyboard order): frame it appears. */
+  nodeAt: number[];
+  /** Per edge (storyboard order): frame its line starts to draw, and how long drawing takes. */
+  edgeAt: number[];
+  edgeFrames: number;
+  steps: Array<{ start: number; end: number; nodes: string[] }>;
+}
+export interface CompareTiming {
+  type: "compare";
+  headingAt: number;
+  leftTitleAt: number;
+  rightTitleAt: number;
+  leftItemAt: number[];
+  rightItemAt: number[];
+  verdictAt: number;
+}
+export interface StatTiming {
+  type: "stat";
+  headingAt: number;
+  statAt: number[];
+  countFrames: number;
+}
+export interface StepsTiming {
+  type: "steps";
+  headingAt: number;
+  /** Frame step i becomes the active one (it stays active until step i+1 takes over). */
+  activeAt: number[];
+}
+export interface QuoteTiming {
+  type: "quote";
+  quoteAt: number;
+  wordStep: number;
+  authorAt: number;
+}
+export interface CodeDiffTiming {
+  type: "codeDiff";
+  cardAt: number;
+  /** Frame the removed lines get their red mark. */
+  removeAt: number;
+  /** Per line: frame an added line slides in (null for other lines). */
+  addAt: Array<number | null>;
+  labelAt: number;
+}
+export type ContentTiming =
+  | TitleTiming
+  | BulletsTiming
+  | CodeTiming
+  | TerminalTiming
+  | OutroTiming
+  | IntroTiming
+  | ClosingTiming
+  | DiagramTiming
+  | CompareTiming
+  | StatTiming
+  | StepsTiming
+  | QuoteTiming
+  | CodeDiffTiming;
 
 export interface SceneTiming {
   index: number;
@@ -85,6 +181,8 @@ export interface SceneTiming {
   content: ContentTiming;
   /** Absolute frame of the best still for a preview of this scene. */
   previewFrame: number;
+  /** Closing scenes: the last LOOP_FRAMES frames of the settled hold; a GIF of exactly this range loops seamlessly. */
+  loop: { startFrame: number; frames: number } | null;
 }
 
 export interface Timeline {
@@ -256,6 +354,163 @@ function planOutro(_s: OutroScene): ContentPlan {
   };
 }
 
+
+function planIntro(s: IntroScene): ContentPlan {
+  const words = s.title.split(/\s+/).length;
+  const kickerAt = 6;
+  const titleAt = 14;
+  const wordStep = 4;
+  const titleDone = titleAt + words * wordStep + 22;
+  const subtitleAt = titleDone - 6;
+  let t = s.subtitle ? subtitleAt + 22 : titleDone - 4;
+  const tagAt: number[] = [];
+  for (let i = 0; i < (s.tags?.length ?? 0); i++) tagAt.push(t + i * 5);
+  t = (tagAt.at(-1) ?? t) + 18;
+  const done = Math.max(78, t);
+  const read = readFrames(s.title.length + (s.subtitle?.length ?? 0));
+  return {
+    content: { type: "intro", variant: s.variant ?? "aurora", kickerAt, titleAt, wordStep, subtitleAt, tagAt },
+    doneAt: done,
+    hold: Math.max(sec(1.2), read - done + sec(0.6)),
+    clampSeconds: [3.5, 8],
+    previewAt: done + 4,
+  };
+}
+
+function planClosing(s: ClosingScene): ContentPlan {
+  const done = 76;
+  return {
+    content: { type: "closing", variant: s.variant ?? "aurora", markAt: 0, ctaAt: 16, urlAt: 46, loopFrames: LOOP_FRAMES },
+    doneAt: done,
+    hold: LOOP_FRAMES,
+    clampSeconds: [3.5, 8],
+    previewAt: done + 8,
+  };
+}
+
+/** Frames a diagram edge takes to draw. */
+const EDGE_FRAMES = 20;
+
+function planDiagram(s: DiagramScene): ContentPlan {
+  const lay = layoutDiagram(s.nodes, s.edges);
+  const edgeAt: number[] = [];
+  s.edges.forEach((_e, i) => edgeAt.push(18 + i * 22));
+  const nodeAt = s.nodes.map((n) => {
+    const incoming = s.edges.map((e, i) => (e.to === n.id && !lay.backEdges.includes(i) ? i : -1)).filter((i) => i >= 0);
+    if (incoming.length === 0) return 4 + (lay.place[n.id]?.slot ?? 0) * 4;
+    return Math.min(...incoming.map((i) => (edgeAt[i] as number) + EDGE_FRAMES - 4));
+  });
+  const drawn = (edgeAt.at(-1) ?? 0) + EDGE_FRAMES + 10;
+  let t = drawn;
+  const steps: DiagramTiming["steps"] = [];
+  for (const st of s.steps ?? []) {
+    const dur = st.durationSeconds !== undefined ? sec(st.durationSeconds) : Math.min(sec(7), Math.max(sec(2.2), sec(1.4) + readFrames(st.label?.length ?? 0)));
+    steps.push({ start: t, end: t + dur, nodes: st.nodes });
+    t += dur;
+  }
+  const done = t;
+  return {
+    content: { type: "diagram", headingAt: 0, nodeAt, edgeAt, edgeFrames: EDGE_FRAMES, steps },
+    doneAt: done,
+    hold: steps.length > 0 ? 0 : sec(1.8) + sec(0.1) * s.edges.length,
+    clampSeconds: [4, 30],
+    previewAt: steps.length > 0 ? (steps[Math.floor((steps.length - 1) / 2)] as (typeof steps)[number]).start + 24 : done + 6,
+  };
+}
+
+function planCompare(s: CompareScene): ContentPlan {
+  const n = Math.max(s.left.items.length, s.right.items.length);
+  const leftTitleAt = 8;
+  const rightTitleAt = 18;
+  const leftItemAt: number[] = [];
+  const rightItemAt: number[] = [];
+  for (let i = 0; i < n; i++) {
+    leftItemAt.push(34 + i * 22);
+    rightItemAt.push(34 + i * 22 + 11);
+  }
+  const lastItem = Math.max(leftItemAt[s.left.items.length - 1] ?? 0, rightItemAt[s.right.items.length - 1] ?? 0);
+  const verdictAt = lastItem + 26;
+  const done = (s.verdict ? verdictAt : lastItem) + ANIM + 4;
+  return {
+    content: { type: "compare", headingAt: 0, leftTitleAt, rightTitleAt, leftItemAt, rightItemAt, verdictAt },
+    doneAt: done,
+    hold: Math.max(sec(1.6), readFrames(s.verdict?.length ?? 24)),
+    clampSeconds: [4, 20],
+    previewAt: done + 6,
+  };
+}
+
+/** Frames a stat number takes to count up. */
+const COUNT_FRAMES = 54;
+
+function planStat(s: StatScene): ContentPlan {
+  const statAt = s.stats.map((_x, i) => 14 + i * 16);
+  const done = (statAt.at(-1) ?? 0) + COUNT_FRAMES + 8;
+  return {
+    content: { type: "stat", headingAt: 0, statAt, countFrames: COUNT_FRAMES },
+    doneAt: done,
+    hold: sec(1.8),
+    clampSeconds: [4, 12],
+    previewAt: done + 4,
+  };
+}
+
+function planSteps(s: StepsScene): ContentPlan {
+  const activeAt: number[] = [];
+  let t = 20;
+  s.items.forEach((it) => {
+    activeAt.push(t);
+    t += Math.min(100, Math.max(48, readFrames(it.title.length + (it.detail?.length ?? 0)) + 24));
+  });
+  const last = s.items.at(-1);
+  const done = (activeAt.at(-1) ?? 0) + 26;
+  return {
+    content: { type: "steps", headingAt: 0, activeAt },
+    doneAt: done,
+    hold: Math.max(sec(1.4), Math.round(readFrames((last?.title.length ?? 0) + (last?.detail?.length ?? 0)) * 0.8)),
+    clampSeconds: [4, 24],
+    previewAt: (activeAt[Math.floor((activeAt.length - 1) / 2)] ?? 0) + 24,
+  };
+}
+
+function planQuote(s: QuoteScene): ContentPlan {
+  const words = s.quote.split(/\s+/).length;
+  const quoteAt = 10;
+  const wordStep = 2;
+  const wordsDone = quoteAt + words * wordStep + 20;
+  const authorAt = wordsDone - 6;
+  const done = authorAt + (s.author ?? s.role ? ANIM + 6 : 0) + 6;
+  return {
+    content: { type: "quote", quoteAt, wordStep, authorAt },
+    doneAt: Math.max(done, wordsDone),
+    hold: Math.max(sec(1.6), Math.round(readFrames(s.quote.length) * 0.7)),
+    clampSeconds: [4, 14],
+    previewAt: Math.max(done, wordsDone) + 4,
+  };
+}
+
+function planCodeDiff(s: CodeDiffScene): ContentPlan {
+  const parsed = parseDiff(s.diff);
+  const cardAt = 0;
+  const removeAt = parsed.some((l) => l.op === "remove") ? 40 : 28;
+  let t = parsed.some((l) => l.op === "remove") ? removeAt + 30 : removeAt;
+  const addAt = parsed.map((l) => {
+    if (l.op !== "add") return null;
+    const at = t;
+    t += 9;
+    return at;
+  });
+  const labelAt = t + 6;
+  const done = (s.label ? labelAt + ANIM : t + ANIM) + 6;
+  return {
+    content: { type: "codeDiff", cardAt, removeAt, addAt, labelAt },
+    doneAt: done,
+    hold: sec(1.8) + sec(0.1) * parsed.length + (s.label ? readFrames(s.label.length) : 0),
+    clampSeconds: [4, 20],
+    previewAt: done,
+  };
+}
+
 export function planScene(scene: Scene): ContentPlan {
   switch (scene.type) {
     case "title":
@@ -268,12 +523,35 @@ export function planScene(scene: Scene): ContentPlan {
       return planTerminal(scene);
     case "outro":
       return planOutro(scene);
+    case "intro":
+      return planIntro(scene);
+    case "closing":
+      return planClosing(scene);
+    case "diagram":
+      return planDiagram(scene);
+    case "compare":
+      return planCompare(scene);
+    case "stat":
+      return planStat(scene);
+    case "steps":
+      return planSteps(scene);
+    case "quote":
+      return planQuote(scene);
+    case "codeDiff":
+      return planCodeDiff(scene);
   }
 }
 
 function enterKindOf(sb: Storyboard, i: number): TransitionKind {
   if (i === 0) return "cut";
   return (sb.scenes[i] as Scene).transition ?? sb.defaultTransition;
+}
+
+function loopRange(content: ContentTiming, startFrame: number, lead: number, doneAt: number, endFrame: number, exit: number): SceneTiming["loop"] {
+  if (content.type !== "closing") return null;
+  const frames = content.loopFrames;
+  const from = endFrame - exit - frames;
+  return from >= startFrame + lead + doneAt ? { startFrame: from, frames } : null;
 }
 
 /**
@@ -316,6 +594,7 @@ export function computeTimeline(sb: Storyboard): Timeline {
       explicit,
       content: plan.content,
       previewFrame: Math.max(startFrame, previewFrame),
+      loop: loopRange(plan.content, startFrame, leadFrames, plan.doneAt, endFrame, exitFrames),
     });
     prevEnd = endFrame;
   });

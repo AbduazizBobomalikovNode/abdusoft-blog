@@ -16,7 +16,10 @@ export const sec = (s: number): number => Math.round(s * FPS);
 export const readFrames = (chars: number): number => Math.round((chars / READ_CPS) * FPS);
 
 /** Transition overlap in frames: both scenes are on screen while it runs. */
-export const TRANSITION_FRAMES = { cut: 0, fade: 15, slide: 18 } as const;
+export const TRANSITION_FRAMES = { cut: 0, fade: 15, slide: 18, wipe: 20, push: 22, zoom: 24 } as const;
+
+/** Ambient motion in a closing scene repeats every LOOP_FRAMES, so its final hold loops seamlessly as a GIF. */
+export const LOOP_FRAMES = 60;
 
 /** Deterministic pseudo-random in [0, 1) from an integer: typing jitter must be identical every render. */
 export function hash01(n: number): number {

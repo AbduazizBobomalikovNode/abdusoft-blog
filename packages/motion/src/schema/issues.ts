@@ -2,11 +2,24 @@ import type { z } from "zod";
 import { LIMITS } from "../limits.ts";
 import {
   bulletsSceneSchema,
+  closingSceneSchema,
+  codeDiffSceneSchema,
   codeSceneSchema,
   codeStepSchema,
+  compareSceneSchema,
+  diagramEdgeSchema,
+  diagramNodeSchema,
+  diagramSceneSchema,
+  diagramStepSchema,
+  introSceneSchema,
   LANGUAGE_ALIASES,
   outroSceneSchema,
+  quoteSceneSchema,
   SCENE_TYPES,
+  statItemSchema,
+  statSceneSchema,
+  stepItemSchema,
+  stepsSceneSchema,
   storyboardSchema,
   terminalSceneSchema,
   titleSceneSchema,
@@ -86,6 +99,14 @@ const SCENE_SCHEMAS = {
   code: codeSceneSchema,
   terminal: terminalSceneSchema,
   outro: outroSceneSchema,
+  intro: introSceneSchema,
+  closing: closingSceneSchema,
+  diagram: diagramSceneSchema,
+  compare: compareSceneSchema,
+  stat: statSceneSchema,
+  steps: stepsSceneSchema,
+  quote: quoteSceneSchema,
+  codeDiff: codeDiffSceneSchema,
 } as const;
 
 /** Keys the strict object at `segments` accepts, so "unknown key" errors can list them. */
@@ -97,7 +118,15 @@ function allowedKeys(segments: ReadonlyArray<PropertyKey>, input: unknown): stri
     const sch = sceneType && sceneType in SCENE_SCHEMAS ? SCENE_SCHEMAS[sceneType as keyof typeof SCENE_SCHEMAS] : undefined;
     return sch ? Object.keys(sch.shape) : undefined;
   }
-  if (norm === "scenes.[].steps.[]") return Object.keys(codeStepSchema.shape);
+  if (norm === "scenes.[].steps.[]") {
+    if (sceneType === "diagram") return Object.keys(diagramStepSchema.shape);
+    return Object.keys(codeStepSchema.shape);
+  }
+  if (norm === "scenes.[].nodes.[]") return Object.keys(diagramNodeSchema.shape);
+  if (norm === "scenes.[].edges.[]") return Object.keys(diagramEdgeSchema.shape);
+  if (norm === "scenes.[].stats.[]") return Object.keys(statItemSchema.shape);
+  if (norm === "scenes.[].items.[]" && sceneType === "steps") return Object.keys(stepItemSchema.shape);
+  if (norm === "scenes.[].left" || norm === "scenes.[].right") return ["title", "items"];
   if (norm === "scenes.[].steps.[].lines") return ["from", "to"];
   if (norm === "scenes.[].lines.[]") {
     const kind = at(input, segments) as { kind?: string } | undefined;
@@ -111,6 +140,8 @@ function fieldName(segments: ReadonlyArray<PropertyKey>): string {
   const last = segments.at(-1);
   const prev = segments.at(-2);
   if (typeof last === "number") {
+    const side = segments.find((x) => x === "left" || x === "right");
+    if (side !== undefined && prev === "items") return `${String(side)} item ${last + 1}`;
     const base = String(prev ?? "item").replace(/s$/, "");
     return `${base === "item" ? "bullet" : base} ${last + 1}`;
   }
@@ -136,6 +167,18 @@ const SUGGESTIONS: Record<string, string> = {
   steps: `Merge steps; at most ${LIMITS.maxCodeSteps} highlight steps.`,
   scenes: `Merge or drop scenes; at most ${LIMITS.maxScenes} scenes and ${LIMITS.maxTotalSeconds} s in total.`,
   command: `Shorten the command (max ${LIMITS.maxLineChars} chars) or break it with line continuations.`,
+  quote: "Cut the quotation to its key sentence (max 200 chars); the rest can go in a bullets scene.",
+  author: "Use the name only; put the role or source into 'role'.",
+  role: "Keep the role or source short.",
+  verdict: "State the conclusion in one short line.",
+  detail: "Keep it to one short line; move more detail into a bullets scene.",
+  prefix: "Use a currency or sign of at most 6 characters, e.g. \"$\".",
+  suffix: "Use a unit of at most 6 characters, e.g. \"%\", \"ms\", \"x\".",
+  note: "Keep the note to one short line.",
+  nodes: "Keep at most 8 nodes; group related services into one node.",
+  edges: "Keep at most 12 arrows; show only the main flow.",
+  stats: "Keep at most 3 numbers per scene; use another stat scene for more.",
+  diff: "Show only the changed lines plus a little context.",
   durationSeconds: `Use a value between ${LIMITS.minSceneSeconds} and ${LIMITS.maxSceneSeconds}, or omit it for automatic timing.`,
 };
 
@@ -146,6 +189,7 @@ function suggestionFor(segments: ReadonlyArray<PropertyKey>): string | undefined
   if (isItem && last === "items") return SUGGESTIONS.bullet;
   if (isItem && last === "tags") return SUGGESTIONS.tag;
   if (isItem && last === "lines") return SUGGESTIONS.lines;
+  if (isItem && last === "items" && (keys.includes("left") || keys.includes("right"))) return "Rewrite as a short phrase, or split it into two points.";
   return last ? SUGGESTIONS[last] : undefined;
 }
 

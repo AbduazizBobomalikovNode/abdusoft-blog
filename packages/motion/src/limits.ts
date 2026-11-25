@@ -35,6 +35,53 @@ export const LIMITS = {
 
   cta: 60,
   url: 48,
+
+  /** diagram */
+  diagramHeading: 60,
+  minNodes: 2,
+  maxNodes: 8,
+  nodeLabel: 24,
+  nodeDetail: 40,
+  maxEdges: 12,
+  edgeLabel: 20,
+  maxDiagramSteps: 6,
+  diagramStepLabel: 60,
+  /** Longest chain of nodes (columns in a left-to-right diagram) and widest layer. */
+  maxDiagramLayers: 5,
+  maxNodesPerLayer: 4,
+
+  /** compare */
+  compareHeading: 60,
+  compareTitle: 28,
+  compareItem: 60,
+  maxCompareItems: 5,
+  verdict: 90,
+
+  /** stat */
+  statHeading: 60,
+  maxStats: 3,
+  statLabel: 40,
+  statNote: 60,
+  statAffix: 6,
+  statMaxAbs: 999_999_999,
+  maxStatDecimals: 2,
+
+  /** steps */
+  stepsHeading: 60,
+  minSteps: 2,
+  maxSteps: 6,
+  maxStepsHorizontal: 5,
+  stepTitle: 40,
+  stepDetail: 80,
+
+  /** quote */
+  quote: 200,
+  quoteAuthor: 40,
+  quoteRole: 60,
+
+  /** codeDiff */
+  maxDiffLines: 14,
+  diffLabel: 80,
 } as const;
 
 /** GIF is for short clips only; anything longer must be an MP4. */

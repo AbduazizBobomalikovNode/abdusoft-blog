@@ -26,6 +26,16 @@
       "type": "string",
       "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
     },
+    "preset": {
+      "description": "Style preset: default | vivid | blueprint | neon (default = the blog's own minimal look). Every scene follows it; fonts and code colours stay the blog's",
+      "type": "string",
+      "enum": [
+        "default",
+        "vivid",
+        "blueprint",
+        "neon"
+      ]
+    },
     "siteName": {
       "default": "abdusoft",
       "description": "Wordmark shown in the corner; default 'abdusoft'",
@@ -48,7 +58,10 @@
       "enum": [
         "cut",
         "fade",
-        "slide"
+        "slide",
+        "wipe",
+        "push",
+        "zoom"
       ]
     },
     "scenes": {
@@ -81,7 +94,10 @@
                 "enum": [
                   "cut",
                   "fade",
-                  "slide"
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
                 ]
               },
               "kicker": {
@@ -111,6 +127,15 @@
                   "minLength": 1,
                   "maxLength": 24
                 }
+              },
+              "layout": {
+                "description": "left (default) | centered | split (accent panel with the kicker on the left, title on the right)",
+                "type": "string",
+                "enum": [
+                  "left",
+                  "centered",
+                  "split"
+                ]
               }
             },
             "required": [
@@ -143,7 +168,10 @@
                 "enum": [
                   "cut",
                   "fade",
-                  "slide"
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
                 ]
               },
               "heading": {
@@ -162,6 +190,15 @@
                   "maxLength": 80
                 },
                 "description": "1-6 bullets revealed one by one, each max 80 chars"
+              },
+              "layout": {
+                "description": "list (default) | centered (heading above a centred column) | split (heading on an accent panel, bullets on the right)",
+                "type": "string",
+                "enum": [
+                  "list",
+                  "centered",
+                  "split"
+                ]
               }
             },
             "required": [
@@ -195,7 +232,10 @@
                 "enum": [
                   "cut",
                   "fade",
-                  "slide"
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
                 ]
               },
               "language": {
@@ -317,7 +357,10 @@
                 "enum": [
                   "cut",
                   "fade",
-                  "slide"
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
                 ]
               },
               "title": {
@@ -428,7 +471,10 @@
                 "enum": [
                   "cut",
                   "fade",
-                  "slide"
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
                 ]
               },
               "siteName": {
@@ -454,6 +500,735 @@
               "type",
               "cta",
               "url"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "intro"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "variant": {
+                "description": "Look of the opener: aurora | blueprint | constellation | boot | signal | slam (default aurora)",
+                "type": "string",
+                "enum": [
+                  "aurora",
+                  "blueprint",
+                  "constellation",
+                  "boot",
+                  "signal",
+                  "slam"
+                ]
+              },
+              "kicker": {
+                "description": "Small label above the title, max 32 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "Main title, max 80 chars"
+              },
+              "subtitle": {
+                "description": "One supporting sentence, max 120 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "tags": {
+                "description": "Up to 5 short pills, each max 24 chars",
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 24
+                }
+              }
+            },
+            "required": [
+              "type",
+              "title"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "closing"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "variant": {
+                "description": "Look of the closer: aurora | blueprint | constellation | boot | signal | slam (default aurora)",
+                "type": "string",
+                "enum": [
+                  "aurora",
+                  "blueprint",
+                  "constellation",
+                  "boot",
+                  "signal",
+                  "slam"
+                ]
+              },
+              "siteName": {
+                "description": "Defaults to the storyboard's siteName",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24
+              },
+              "cta": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "description": "Call to action, max 60 chars"
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 48,
+                "description": "URL shown as text (never fetched or linked), max 48 chars"
+              }
+            },
+            "required": [
+              "type",
+              "cta",
+              "url"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "diagram"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "heading": {
+                "description": "Heading above the diagram, max 60 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "direction": {
+                "description": "lr = left to right (default), tb = top to bottom",
+                "type": "string",
+                "enum": [
+                  "lr",
+                  "tb"
+                ]
+              },
+              "nodes": {
+                "minItems": 2,
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,23}$",
+                      "description": "Unique node id used by edges and steps"
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 24,
+                      "description": "Node title, max 24 chars"
+                    },
+                    "detail": {
+                      "description": "Second line under the label, max 40 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40
+                    },
+                    "tone": {
+                      "description": "default | accent | muted | success | error",
+                      "type": "string",
+                      "enum": [
+                        "default",
+                        "accent",
+                        "muted",
+                        "success",
+                        "error"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "2-8 nodes; placed automatically"
+              },
+              "edges": {
+                "minItems": 1,
+                "maxItems": 12,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,23}$",
+                      "description": "Source node id"
+                    },
+                    "to": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,23}$",
+                      "description": "Target node id"
+                    },
+                    "label": {
+                      "description": "Short label on the arrow, max 20 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "1-12 arrows, drawn in the order given"
+              },
+              "steps": {
+                "description": "Up to 6 highlight steps shown in order",
+                "maxItems": 6,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "nodes": {
+                      "minItems": 1,
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]{0,23}$"
+                      },
+                      "description": "Node ids highlighted in this step; edges between highlighted nodes light up too"
+                    },
+                    "label": {
+                      "description": "Caption while this step is active, max 60 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60
+                    },
+                    "durationSeconds": {
+                      "description": "Omit for automatic timing",
+                      "type": "number",
+                      "minimum": 1,
+                      "maximum": 10
+                    }
+                  },
+                  "required": [
+                    "nodes"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "type",
+              "nodes",
+              "edges"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "compare"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "heading": {
+                "description": "Heading above the columns, max 60 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "mode": {
+                "description": "versus (A vs B, default) | beforeAfter (left becomes right)",
+                "type": "string",
+                "enum": [
+                  "versus",
+                  "beforeAfter"
+                ]
+              },
+              "left": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 28,
+                    "description": "Column title, max 28 chars"
+                  },
+                  "items": {
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60
+                    },
+                    "description": "1-5 short points, each max 60 chars"
+                  }
+                },
+                "required": [
+                  "title",
+                  "items"
+                ],
+                "additionalProperties": false,
+                "description": "Left column (A / before)"
+              },
+              "right": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 28,
+                    "description": "Column title, max 28 chars"
+                  },
+                  "items": {
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60
+                    },
+                    "description": "1-5 short points, each max 60 chars"
+                  }
+                },
+                "required": [
+                  "title",
+                  "items"
+                ],
+                "additionalProperties": false,
+                "description": "Right column (B / after); drawn with the accent"
+              },
+              "verdict": {
+                "description": "One-line conclusion shown last, max 90 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 90
+              }
+            },
+            "required": [
+              "type",
+              "left",
+              "right"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "stat"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "heading": {
+                "description": "Heading above the numbers, max 60 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "stats": {
+                "minItems": 1,
+                "maxItems": 3,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": -999999999,
+                      "maximum": 999999999,
+                      "description": "Number counted up from 0, |value| <= 999999999"
+                    },
+                    "decimals": {
+                      "description": "Digits after the decimal point, 0-2 (default 0)",
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2
+                    },
+                    "prefix": {
+                      "description": "Shown before the number (e.g. \"$\"), max 6 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 6
+                    },
+                    "suffix": {
+                      "description": "Shown after the number (e.g. \"%\", \"ms\", \"x\"), max 6 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 6
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40,
+                      "description": "What the number is, max 40 chars"
+                    },
+                    "note": {
+                      "description": "Small supporting line, max 60 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "label"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "1-3 numbers that count up side by side"
+              }
+            },
+            "required": [
+              "type",
+              "stats"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "steps"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "heading": {
+                "description": "Heading above the sequence, max 60 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "layout": {
+                "description": "horizontal timeline (default, up to 5 steps) | vertical list",
+                "type": "string",
+                "enum": [
+                  "horizontal",
+                  "vertical"
+                ]
+              },
+              "items": {
+                "minItems": 2,
+                "maxItems": 6,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40,
+                      "description": "Step title, max 40 chars"
+                    },
+                    "detail": {
+                      "description": "One short sentence, max 80 chars",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  },
+                  "required": [
+                    "title"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "2-6 numbered steps; the active one advances"
+              }
+            },
+            "required": [
+              "type",
+              "items"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "quote"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "The quotation without quote marks, max 200 chars"
+              },
+              "author": {
+                "description": "Who said it, max 40 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "role": {
+                "description": "Author's role or source, max 60 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              }
+            },
+            "required": [
+              "type",
+              "quote"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "codeDiff"
+              },
+              "id": {
+                "description": "Optional stable name for this scene; used in messages and still file names",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              "durationSeconds": {
+                "description": "Omit for an automatic duration derived from the content (reading and typing speed). Set only to hold a scene longer; it can never be shorter than the content needs (1-30 s)",
+                "type": "number",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "transition": {
+                "description": "How this scene comes in from the previous one; defaults to the storyboard's defaultTransition. Ignored on the first scene",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "fade",
+                  "slide",
+                  "wipe",
+                  "push",
+                  "zoom"
+                ]
+              },
+              "language": {
+                "type": "string",
+                "enum": [
+                  "typescript",
+                  "tsx",
+                  "javascript",
+                  "jsx",
+                  "json",
+                  "bash",
+                  "python",
+                  "go",
+                  "rust",
+                  "sql",
+                  "yaml",
+                  "html",
+                  "css",
+                  "markdown",
+                  "diff",
+                  "dockerfile",
+                  "text"
+                ],
+                "description": "Syntax highlighting language"
+              },
+              "fileName": {
+                "description": "Shown in the block header, max 48 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 48
+              },
+              "diff": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Unified-style lines: '+' added, '-' removed, ' ' (space) unchanged. Max 14 lines of max 72 chars after the marker; use spaces, not tabs"
+              },
+              "label": {
+                "description": "Caption under the diff, max 80 chars",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            },
+            "required": [
+              "type",
+              "language",
+              "diff"
             ],
             "additionalProperties": false
           }

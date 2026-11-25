@@ -51,7 +51,7 @@ describe("storyboard rejection: exact, actionable messages", () => {
     const i = only(base([{ type: "title", title: "A", subtitel: "b" }]));
     expect(i.path).toBe("scenes[0]");
     expect(i.message).toBe(
-      'unknown key "subtitel"; allowed keys: type, id, durationSeconds, transition, kicker, title, subtitle, tags',
+      'unknown key "subtitel"; allowed keys: type, id, durationSeconds, transition, kicker, title, subtitle, tags, layout',
     );
     expect(i.suggestion).toBe('Did you mean "subtitel" -> "subtitle"? Remove keys the schema does not define.');
   });
@@ -98,7 +98,7 @@ describe("storyboard rejection: exact, actionable messages", () => {
   it("rejects an unknown scene type with a suggestion", () => {
     const i = only(base([{ type: "bulets", heading: "H", items: ["a"] }]));
     expect(i.path).toBe("scenes[0].type");
-    expect(i.message).toBe('unknown scene type "bulets"; supported types: title, bullets, code, terminal, outro');
+    expect(i.message).toBe('unknown scene type "bulets"; supported types: title, bullets, code, terminal, outro, intro, closing, diagram, compare, stat, steps, quote, codeDiff');
     expect(i.suggestion).toBe('Did you mean "bullets"?');
   });
 

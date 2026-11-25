@@ -2,7 +2,7 @@ import type { BundledLanguage, HighlighterGeneric } from "shiki";
 import { createHighlighter } from "shiki";
 import type { Highlights, Token } from "../highlight.ts";
 import type { RenderProps } from "../props.ts";
-import { codeLines, type CodeLanguage, type Storyboard } from "../schema/storyboard.ts";
+import { codeLines, parseDiff, type CodeLanguage, type Storyboard } from "../schema/storyboard.ts";
 import { CODE_THEMES } from "../theme/tokens.ts";
 
 type Highlighter = HighlighterGeneric<BundledLanguage, "github-light" | "github-dark">;
@@ -60,6 +60,12 @@ export async function computeHighlights(sb: Storyboard): Promise<Highlights> {
   for (const [i, scene] of sb.scenes.entries()) {
     if (scene.type === "code") {
       const text = codeLines(scene.code).join("\n");
+      out.code[String(i)] = await tokenize(h, text, SHIKI_LANG[scene.language], theme);
+    } else if (scene.type === "codeDiff") {
+      // One tokenization of the whole snippet (markers stripped) so context lines colour correctly.
+      const text = parseDiff(scene.diff)
+        .map((l) => l.text)
+        .join("\n");
       out.code[String(i)] = await tokenize(h, text, SHIKI_LANG[scene.language], theme);
     } else if (scene.type === "terminal") {
       const perEntry: Record<string, Token[]> = {};
