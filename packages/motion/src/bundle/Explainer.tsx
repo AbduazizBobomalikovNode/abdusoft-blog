@@ -24,8 +24,8 @@ import { plainLines } from "../highlight.ts";
 import { parseDiff } from "../schema/storyboard.ts";
 
 /**
- * Backdrop clock: identity, except that with a loop window (closing scene at the end) the clock slows down
- * over the 60 frames before it (velocity 1 -> 0, C1-smooth) and stands still from there on.
+ * Backdrop clock: identity, except that when the storyboard ends on a closing scene the clock slows down over
+ * the 60 frames before the scene has settled (velocity 1 -> 0, C1-smooth) and stands still from there on.
  */
 export function backdropClock(frame: number, loopStart: number | null): number {
   if (loopStart === null) return frame;
@@ -103,14 +103,15 @@ export const Explainer: React.FC<RenderProps> = ({ storyboard, highlights }) => 
     ? interpolate(frame, [outro.startFrame + outro.leadFrames, outro.startFrame + outro.leadFrames + 12], [OG_CARD.wordmarkOpacity, 0], clamp)
     : OG_CARD.wordmarkOpacity;
   const current = timeline.scenes.reduce((acc, s) => (frame >= s.startFrame + s.leadFrames ? s.index : acc), 0);
-  // A storyboard that ends on a closing scene reaches 100% when the seamless loop window starts and stays there,
-  // so a GIF of that window never shows the hairline creeping.
-  const endLoop = timeline.scenes.at(-1)?.loop ?? null;
-  const progressEnd = endLoop ? endLoop.startFrame : timeline.totalFrames - 1;
+  // A storyboard that ends on a closing scene reaches 100% when that scene has settled and stays there, so a
+  // GIF of its hold never shows the hairline creeping.
+  const lastScene = timeline.scenes.at(-1);
+  const settleFrame = lastScene?.loop ? lastScene.startFrame + lastScene.leadFrames + lastScene.doneAt : null;
+  const progressEnd = settleFrame ?? timeline.totalFrames - 1;
   const progress = Math.min(1, frame / Math.max(1, progressEnd));
   // The preset backdrop drifts slowly; it decelerates smoothly to rest one loop period before the closing loop
   // window, so the loop window itself is static (seamless) under every preset.
-  const bdFrame = (f: number): number => backdropClock(f, endLoop?.startFrame ?? null);
+  const bdFrame = (f: number): number => backdropClock(f, settleFrame);
 
   return (
     <StageProvider value={{ layout, theme, siteName: storyboard.siteName }}>
