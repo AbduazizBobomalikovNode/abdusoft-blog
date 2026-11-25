@@ -101,6 +101,7 @@ export const MAIN_ROUTE_TABLE: readonly string[] = [
   "GET /admin/staff",
   "POST /admin/staff/invites",
   "POST /admin/staff/invites/:id/revoke",
+  "POST /admin/staff/:userId/password-reset-link",
   "DELETE /admin/staff/:userId",
   "ALL /admin/audit/*",
   "GET /admin/audit",
