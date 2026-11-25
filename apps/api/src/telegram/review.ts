@@ -5,7 +5,7 @@ import { config } from "../config.js";
 import { db } from "../db/index.js";
 import { channelPostVersions, posts } from "../db/schema.js";
 import { events, type PostSubmittedEventPayload } from "../lib/events.js";
-import { approvePost, requestPostChanges } from "../lib/post-review.js";
+import { approvePost, requestPostChanges, type Actor } from "../lib/posts/index.js";
 import { getSettings } from "../lib/settings.js";
 import { setPendingReply } from "../lib/site-settings.js";
 import { bot } from "./client.js";
@@ -22,6 +22,11 @@ import { findAdminUser } from "./comments.js";
 import { parseStoredChoice, resolveChannelChoice } from "./channel-choice.js";
 import { escapeHtml, escapeHtmlAttr, stripHtml, truncate } from "./format.js";
 import type { ChannelPreflightResponse } from "@blog/shared";
+
+/** Telegram admin chat orqali bajariladigan amallar (tasdiqlash/qaytarish) — `via: "telegram"`. */
+function telegramActor(userId: string): Actor {
+  return { userId, role: "admin", via: "telegram" };
+}
 
 const EXCERPT_LIMIT = 500;
 /** Tasdiqlash oqimida ko'rsatiladigan maxsus versiyalar soni (eng yangilari). */
@@ -278,10 +283,10 @@ export async function handleReviewNoteReply(
   }
 
   const note = ctx.message.text.trim();
-  const result = await requestPostChanges(postId, adminUser.id, note);
+  const result = await requestPostChanges(telegramActor(adminUser.id), postId, note);
 
   if (!result.ok) {
-    const message = result.reason === "not_in_review" ? "Post allaqachon ko'rib chiqilgan." : "Post topilmadi.";
+    const message = result.error.kind === "conflict" ? "Post allaqachon ko'rib chiqilgan." : "Post topilmadi.";
     await ctx.reply(message);
     return;
   }
@@ -399,18 +404,18 @@ export function registerReviewHandlers(): void {
         return;
       }
 
-      const result = await approvePost(postId, adminUser.id);
+      const result = await approvePost(telegramActor(adminUser.id), postId);
       if (!result.ok) {
         await ctx.answerCallbackQuery({
-          text: result.reason === "not_in_review" ? "Post allaqachon ko'rib chiqilgan" : "Topilmadi",
+          text: result.error.kind === "conflict" ? "Post allaqachon ko'rib chiqilgan" : "Topilmadi",
         });
         return;
       }
 
       await ctx.answerCallbackQuery({ text: "✅ Chop etildi" });
       if (message) {
-        const url = `${config.WEB_ORIGIN}/${result.post.slug}`;
-        const statusLine = `✅ Chop etildi: <a href="${escapeHtmlAttr(url)}">${escapeHtml(result.post.title)}</a>`;
+        const url = `${config.WEB_ORIGIN}/${result.data.slug}`;
+        const statusLine = `✅ Chop etildi: <a href="${escapeHtmlAttr(url)}">${escapeHtml(result.data.title)}</a>`;
         await editOriginalMessage(message.chat.id, message.message_id, originalText, statusLine);
 
         // Kanalga yuborish ENDI avtomatik EMAS — shu yerda rejim+uzunlik so'raymiz.
@@ -418,7 +423,7 @@ export function registerReviewHandlers(): void {
         try {
           await bot!.api.sendMessage(
             message.chat.id,
-            `Kanalga yuborish uchun rejim va uzunlikni tanlang: <b>${escapeHtml(result.post.title)}</b>`,
+            `Kanalga yuborish uchun rejim va uzunlikni tanlang: <b>${escapeHtml(result.data.title)}</b>`,
             {
               parse_mode: "HTML",
               link_preview_options: { is_disabled: true },
