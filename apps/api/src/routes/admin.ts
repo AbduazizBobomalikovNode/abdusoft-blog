@@ -46,3 +46,9 @@ export const adminRoute = new Hono()
 
 // "Ulangan ilovalar" (Claude konnektori) — faqat MCP_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut yo'q.
 if (config.MCP_ENABLED) adminRoute.route("/connections", adminConnectionsRoute);
+
+// Ijtimoiy tarqatish — faqat DISTRIBUTION_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut ham, modul ham yuklanmaydi.
+if (config.DISTRIBUTION_ENABLED) {
+  const { adminDistributionRoute } = await import("./admin-distribution.js");
+  adminRoute.route("/distribution", adminDistributionRoute);
+}
