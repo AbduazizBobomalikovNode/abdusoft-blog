@@ -94,6 +94,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "staff.password_link_create": "Xodim uchun parol havolasi yaratildi",
   "auth.password_reset_request": "Parolni tiklash so'ralindi",
   "auth.password_reset_complete": "Parol tiklandi",
+  "auth.password_reset_server": "Parol serverda tiklandi",
   "settings.update": "Sozlamalar o'zgardi",
   "site.update": "Sayt ma'lumotlari o'zgardi",
 };
