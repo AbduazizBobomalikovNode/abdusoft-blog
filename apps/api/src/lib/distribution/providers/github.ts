@@ -1,7 +1,7 @@
 import type { ChannelCheck } from "@blog/shared";
-import { DistributionError } from "../errors.js";
+import { DistributionError, notSupported } from "../errors.js";
 import { asRecord, HostClient, str, type HttpResponse, type ProviderDeps } from "../http.js";
-import { check, isPublicHttpsUrl } from "../checks.js";
+import { assertPublicHttpsUrl, check, isPublicHttpsUrl } from "../checks.js";
 import { codePointLength } from "../text.js";
 import { DAY_MS, getTokenStatus, type TokenPolicy } from "../token-status.js";
 import type {
@@ -91,7 +91,8 @@ function fmtDate(d: Date): string {
 }
 
 export function renderReadmeItem(post: DistributionPost): string {
-  const url = post.url.replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+  // Havola tahlil qilingan `href` dan quriladi: yangi qator/bo'shliq bilan ro'yxat elementidan "chiqib ketish" mumkin emas.
+  const url = assertPublicHttpsUrl(post.url, "Maqola havolasi").replace(/\(/g, "%28").replace(/\)/g, "%29");
   return `- [${mdEscape(post.title)}](${url})${post.publishedAt ? ` — ${fmtDate(post.publishedAt)}` : ""}`;
 }
 
@@ -175,7 +176,14 @@ function parseExpiry(headers: Headers, fallbackNow: Date): Date | null {
   return Number.isNaN(t) ? null : t > fallbackNow.getTime() - 365 * DAY_MS ? new Date(t) : null;
 }
 
-export function createGithubProvider(options: GithubOptions = {}): DistributionProvider {
+/** GitHub uchun `publish` kirishi: `latestPosts` MAJBURIY (bo'sh bo'lmagan) — aks holda blok bitta postga qisqarib qolardi. */
+export type GithubPublishInput = PublishInput & { latestPosts: readonly DistributionPost[] };
+
+export interface GithubProvider extends DistributionProvider {
+  publish(ctx: ProviderContext, input: GithubPublishInput): Promise<PublishResult>;
+}
+
+export function createGithubProvider(options: GithubOptions = {}): GithubProvider {
   const startMarker = options.startMarker ?? GITHUB_DEFAULT_START_MARKER;
   const endMarker = options.endMarker ?? GITHUB_DEFAULT_END_MARKER;
   const limit = options.limit ?? 5;
@@ -208,9 +216,9 @@ export function createGithubProvider(options: GithubOptions = {}): DistributionP
     return { owner, repo };
   }
 
-  const provider: DistributionProvider = {
+  const provider: GithubProvider = {
     id: "github",
-    capabilities: { text: false, link: true, image: false, edit: true, delete: false, nativeScheduling: false },
+    capabilities: { text: false, link: true, image: false, edit: true, delete: false, nativeScheduling: false, notes: { delete: "Provider faqat README blokini yangilaydi; o'chirish yo'q" } },
     limits: { textMax: null, textUnit: "none", imageMaxBytes: null, imageMimes: [] },
     tokenPolicy: GITHUB_TOKEN_POLICY,
     auth: {
@@ -268,13 +276,17 @@ export function createGithubProvider(options: GithubOptions = {}): DistributionP
       return out;
     },
 
-    async publish(ctx: ProviderContext, input: PublishInput): Promise<PublishResult> {
+    async publish(ctx: ProviderContext, input: GithubPublishInput): Promise<PublishResult> {
       const { deps, account } = ctx;
+      if (!Array.isArray(input.latestPosts) || input.latestPosts.length === 0) {
+        throw new DistributionError({ kind: "validation_rejected", message: "GitHub README uchun latestPosts (bo'sh bo'lmagan ro'yxat) majburiy" });
+      }
       const token = account.accessToken;
       const http = new HostClient(deps, GITHUB_HOSTS, [token]);
       const ref = refine(deps);
       const { owner, repo } = target(account);
-      const posts = input.latestPosts ?? [input.post];
+      const posts = input.latestPosts;
+      const list = renderReadmeList(posts, limit); // havolalar so'rovdan OLDIN tekshiriladi
       const headers = githubHeaders(token);
 
       const attempt = async (): Promise<PublishResult | "conflict"> => {
@@ -287,7 +299,7 @@ export function createGithubProvider(options: GithubOptions = {}): DistributionP
           throw new DistributionError({ kind: "validation_rejected", message: "README o'qib bo'lmadi (1 MB dan katta yoki kodlash base64 emas)" });
         }
         const original = Buffer.from(g.content.replace(/\n/g, ""), "base64");
-        const spliced = spliceMarkedBlock(original, renderReadmeList(posts, limit), { startMarker, endMarker, createAt: options.createMarkersAt });
+        const spliced = spliceMarkedBlock(original, list, { startMarker, endMarker, createAt: options.createMarkersAt });
         if (!spliced.changed) return { externalId: sha, url: `https://github.com/${owner}/${repo}` };
         const put = await http.request({
           method: "PUT",
@@ -314,6 +326,10 @@ export function createGithubProvider(options: GithubOptions = {}): DistributionP
       const second = await attempt();
       if (second !== "conflict") return second;
       throw new DistributionError({ kind: "transient", status: 409, message: "README bir vaqtda o'zgartirilmoqda (sha ziddiyati) — keyinroq urining" });
+    },
+
+    async remove(): Promise<void> {
+      throw notSupported("GitHub README blokini o'chirish", "provider faqat blokni yangilaydi");
     },
   };
   return provider;
