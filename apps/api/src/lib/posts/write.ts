@@ -11,6 +11,7 @@ import {
 import { db } from "../../db/index.js";
 import { postRevisions, postTags, posts, tags } from "../../db/schema.js";
 import { renderPost } from "../content/render.js";
+import { validatePanelDocument } from "../content/validate.js";
 import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { announceUpdated } from "./effects.js";
 import { preparePlan } from "./plan.js";
@@ -142,6 +143,8 @@ export async function createDraft(actor: Actor, input: CreateDraftInput): Promis
   } else {
     slug = await findFreeDraftSlug(input.title);
   }
+  const docCheck = validatePanelDocument(input.contentJson);
+  if (!docCheck.ok) return fail("bad_request", `Hujjat qabul qilinmadi: ${docCheck.message}`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tiptap JSONContent
   const rendered = await renderPost(input.contentJson as any);
   const tagRows = input.tagSlugs && input.tagSlugs.length > 0 ? await resolveTagIds(input.tagSlugs) : [];
@@ -278,6 +281,8 @@ export async function updatePost(
   let renderedExcerpt: string | null = null;
 
   if (data.contentJson !== undefined) {
+    const docCheck = validatePanelDocument(data.contentJson);
+    if (!docCheck.ok) return fail("bad_request", `Hujjat qabul qilinmadi: ${docCheck.message}`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tiptap JSONContent, avoids extra dep in API layer
     const rendered = await renderPost(data.contentJson as any);
     update.contentJson = data.contentJson;

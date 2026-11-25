@@ -7,6 +7,7 @@ import {
   type ContentNode,
 } from "@blog/shared";
 import { config } from "../../../config.js";
+import { validateConnectorDocument } from "../../content/validate.js";
 import { renderPost } from "../../content/render.js";
 import {
   approvePost,
@@ -100,21 +101,30 @@ async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
 }
 
 async function validatedDocument(doc: unknown): Promise<ContentNode> {
-  const text = JSON.stringify(doc);
+  const text = JSON.stringify(doc) ?? "";
   if (text.length > CONTENT_MAX_CHARS * 5) {
     throw new ToolError("invalid_input", "The structured document is too large.", `Keep it under ${CONTENT_MAX_CHARS * 5} characters of JSON.`);
   }
+  // Renderdan OLDIN: chegaralar, atribut ruxsat ro'yxati, xavfsiz URL, o'z rasmlari, kontent modeli (hech narsa render qilinmaydi).
+  const checked = await validateConnectorDocument(doc);
+  if (!checked.ok) {
+    throw new ToolError(
+      "invalid_input",
+      `The structured document was rejected: ${checked.message}.`,
+      "Use only: paragraph, heading (level 2-4), bulletList, orderedList, listItem, blockquote, codeBlock, horizontalRule, image (blog's own uploaded images only), table/tableRow/tableHeader/tableCell, hardBreak, text with bold/italic/strike/code/underline/link marks (link: href only). Or send content_markdown.",
+    );
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tiptap JSONContent
-    await renderPost(doc as any);
+    await renderPost(checked.doc as any);
   } catch (error) {
     throw new ToolError(
       "invalid_input",
       `The structured document does not match the editor's schema: ${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}.`,
-      "Use only: paragraph, heading (level 2-3), bulletList, orderedList, listItem, blockquote, codeBlock, horizontalRule, image, table/tableRow/tableHeader/tableCell, hardBreak, text with bold/italic/strike/code/link marks. Or send content_markdown.",
+      "Use only the node and mark types listed in the tool description, or send content_markdown.",
     );
   }
-  return doc as ContentNode;
+  return checked.doc as ContentNode;
 }
 
 function checklistFor(post: PostRow, tagCount: number): ChecklistItem[] {
