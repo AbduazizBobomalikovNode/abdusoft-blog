@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { auth } from "../lib/auth.js";
+import { recordAuditSafe } from "../lib/audit.js";
+import { actorFromAdminUser } from "../lib/posts/types.js";
 import { acceptStaffInvite, findInviteByToken } from "../lib/staff-invites.js";
 
 /**
@@ -18,7 +20,9 @@ export const staffInvitesRoute = new Hono()
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (!session) return c.json({ error: "Tizimga kirish talab qilinadi" }, 401);
 
-    const result = await acceptStaffInvite(c.req.param("token"), session.user.id);
+    const token = c.req.param("token");
+    const lookup = await findInviteByToken(token);
+    const result = await acceptStaffInvite(token, session.user.id);
     if (!result.ok) {
       const messages: Record<string, string> = {
         not_found: "Taklif topilmadi",
@@ -28,6 +32,15 @@ export const staffInvitesRoute = new Hono()
       };
       return c.json({ error: messages[result.reason] ?? "Taklifni qabul qilib bo'lmadi" }, 409);
     }
+
+    // Faqat taklif id'si va rol — token jurnalga tushmaydi.
+    await recordAuditSafe(actorFromAdminUser({ id: session.user.id, role: result.role }), {
+      action: "staff.invite_accept",
+      entityType: "staff_invite",
+      entityId: lookup?.row.id ?? null,
+      summary: `Xodim taklifi qabul qilindi (rol: ${result.role})`,
+      meta: { userId: session.user.id, role: result.role },
+    });
 
     return c.json({ ok: true, role: result.role });
   });
