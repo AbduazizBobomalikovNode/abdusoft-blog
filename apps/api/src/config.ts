@@ -113,6 +113,12 @@ const EnvSchema = z.object({
   // `/mcp` so'rovlari: IP bo'yicha oynada ko'pi bilan MAX (0 — o'chirilgan).
   MCP_RATE_LIMIT_MAX: intEnv(300, 0),
   MCP_RATE_LIMIT_WINDOW_SECONDS: intEnv(60, 1),
+  // Klient `offline_access`ni so'ramasa ham refresh token berilishi uchun /oauth2/authorize'ga uni qo'shadi (default true).
+  MCP_FORCE_OFFLINE_ACCESS: z
+    .string()
+    .optional()
+    .default("true")
+    .transform((v) => !(v === "false" || v === "0")),
   // Hech qachon rozilik berilmagan ro'yxatdan o'tgan klientlar shu soatdan keyin tozalanadi.
   MCP_UNUSED_CLIENT_TTL_HOURS: intEnv(24, 1),
   // Bitta vosita javobining maksimal uzunligi (belgi). Claude ~150 000 belgigacha qabul qiladi.

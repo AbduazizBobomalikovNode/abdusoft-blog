@@ -3,6 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { config, isProduction } from "../config.js";
 import { db, fullSchema } from "../db/index.js";
 import { buildAuthAdvanced, buildAuthRateLimit } from "./auth-options.js";
+import { buildMcpPlugins } from "./mcp/plugins.js";
 import { getSettings } from "./settings.js";
 
 // GitHub OAuth provider'ni betterAuth BOOT vaqtida ro'yxatga oladi (better-auth
@@ -53,6 +54,8 @@ export const auth = betterAuth({
   // Rate limit: IP faqat `lib/auth-handler.ts` qo'yadigan header'dan olinadi (TRUST_PROXY hisobga olinadi).
   rateLimit: buildAuthRateLimit(),
   advanced: buildAuthAdvanced(isProduction),
+  // Claude konnektori (MCP): faqat MCP_ENABLED=true bo'lganda. O'chiq bo'lsa plagin'lar ro'yxatga olinmaydi.
+  ...(config.MCP_ENABLED ? { plugins: buildMcpPlugins() } : {}),
 });
 
 export type Auth = typeof auth;

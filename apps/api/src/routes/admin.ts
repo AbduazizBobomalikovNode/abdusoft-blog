@@ -4,6 +4,7 @@ import { rateLimitWrites } from "../lib/rate-limit-middleware.js";
 import { requireRole } from "../lib/require-admin.js";
 import { adminAuditRoute } from "./admin-audit.js";
 import { adminBansRoute, adminCommentsRoute } from "./admin-comments.js";
+import { adminConnectionsRoute } from "./admin-connections.js";
 import { adminMediaRoute } from "./admin-media.js";
 import { adminPostsRoute } from "./admin-posts.js";
 import { adminSettingsRoute } from "./admin-settings.js";
@@ -42,3 +43,6 @@ export const adminRoute = new Hono()
   .route("/settings", adminSettingsRoute)
   .route("/staff", adminStaffRoute)
   .route("/audit", adminAuditRoute);
+
+// "Ulangan ilovalar" (Claude konnektori) — faqat MCP_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut yo'q.
+if (config.MCP_ENABLED) adminRoute.route("/connections", adminConnectionsRoute);
