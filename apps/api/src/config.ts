@@ -1,6 +1,13 @@
 import "dotenv/config";
 import { z } from "zod";
 
+/** Bo'sh yoki yo'q qiymat — `fallback`; aks holda butun son (`min`dan kam bo'lmagan). `FOO=` kabi bo'sh qator 0 deb o'qilmasin. */
+const intEnv = (fallback: number, min: number) =>
+  z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(min).default(fallback),
+  );
+
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   API_ORIGIN: z.url().default("http://localhost:4000"),
@@ -61,6 +68,27 @@ const EnvSchema = z.object({
     .optional()
     .default("false")
     .transform((v) => v === "true" || v === "1"),
+  // --- Autentifikatsiya (Better Auth) va admin yozuv marshrutlari uchun rate limit ---
+  // AUTH_RATE_LIMIT_ENABLED: bo'sh (default) — Better Auth o'zi hal qiladi (faqat NODE_ENV=production'da
+  // yoqiladi); "true"/"1" — doim yoqilgan; "false"/"0" — butunlay o'chirilgan.
+  AUTH_RATE_LIMIT_ENABLED: z
+    .string()
+    .optional()
+    .default("")
+    .transform((v): boolean | undefined => {
+      const s = v.trim().toLowerCase();
+      if (s === "true" || s === "1") return true;
+      if (s === "false" || s === "0") return false;
+      return undefined;
+    }),
+  // Sign-in / sign-up / parol endpoint'lari: har bir endpoint uchun IP bo'yicha shu oynada ko'pi bilan MAX so'rov.
+  // Default: 10 so'rov / 600 soniya (10 daqiqa).
+  AUTH_RATE_LIMIT_MAX: intEnv(10, 1),
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: intEnv(600, 1),
+  // /admin/* yozuv so'rovlari (POST/PUT/PATCH/DELETE): IP bo'yicha oynada ko'pi bilan MAX. 0 — o'chirilgan.
+  // Default: 300 so'rov / 60 soniya (avtosaqlash va ommaviy amallarga yetarli).
+  ADMIN_WRITE_RATE_LIMIT_MAX: intEnv(300, 0),
+  ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS: intEnv(60, 1),
   NODE_ENV: z
     .union([z.literal("development"), z.literal("production"), z.literal("test")])
     .default("development"),

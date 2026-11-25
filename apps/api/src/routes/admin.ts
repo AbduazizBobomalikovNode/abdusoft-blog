@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { config } from "../config.js";
+import { rateLimitWrites } from "../lib/rate-limit-middleware.js";
 import { requireRole } from "../lib/require-admin.js";
 import { adminBansRoute, adminCommentsRoute } from "./admin-comments.js";
 import { adminMediaRoute } from "./admin-media.js";
@@ -11,6 +13,16 @@ import { adminTagsRoute } from "./admin-tags.js";
 import { adminTelegramRoute } from "./admin-telegram.js";
 
 export const adminRoute = new Hono()
+  // Yozuv so'rovlari (POST/PUT/PATCH/DELETE) IP bo'yicha cheklanadi — sessiya tekshiruvidan OLDIN,
+  // shunda avtorizatsiyasiz urinishlar ham hisoblanadi. GET'lar cheklanmaydi.
+  .use(
+    "*",
+    rateLimitWrites({
+      name: "admin-write",
+      limit: config.ADMIN_WRITE_RATE_LIMIT_MAX,
+      windowSeconds: config.ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS,
+    }),
+  )
   // Staff ham o'zini tekshirishi kerak (admin panel shell'i rolga qarab
   // navigatsiyani filtrlaydi) — shu sabab "/me" admin+staff uchun ochiq,
   // qolgan hamma marshrut alohida rollarni o'zi belgilaydi.
