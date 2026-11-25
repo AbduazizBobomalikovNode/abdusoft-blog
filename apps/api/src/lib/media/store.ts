@@ -1,4 +1,5 @@
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { copyFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { S3Client } from "@aws-sdk/client-s3";
@@ -149,11 +150,11 @@ export async function processImage(input: Buffer, mime: string): Promise<Process
   return { buffer: data, ext: "webp", mime: "image/webp", width: info.width, height: info.height };
 }
 
-function buildKey(ext: string): string {
+function buildKey(ext: string, prefix = ""): string {
   const now = new Date();
   const yyyy = String(now.getUTCFullYear());
   const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
-  return `${yyyy}/${mm}/${nanoid()}.${ext}`;
+  return `${prefix}${yyyy}/${mm}/${nanoid()}.${ext}`;
 }
 
 let cachedClient: { client: S3Client; accountId: string; accessKeyId: string; secretAccessKey: string } | null = null;
@@ -230,4 +231,52 @@ export async function deleteStoredFile(key: string): Promise<void> {
   await unlink(filePath).catch(() => {
     // Fayl allaqachon yo'q bo'lishi mumkin — e'tiborsiz qoldiramiz.
   });
+}
+
+/**
+ * Video natijalari (MP4, GIF, ko'rik kadrlari) uchun: fayl XOTIRAGA to'liq o'qilmaydi — mahalliy nusxalanadi yoki R2'ga oqim (stream) bilan
+ * yuboriladi. Kalit `video/` prefiksi ostida (rasmlar kutubxonasidan alohida "tur"), URL esa rasmlardagi kabi saqlash qatlamidan keladi.
+ * Hajm chegarasini TEKSHIRISH chaqiruvchining ishi.
+ */
+export async function storeFileFromPath(input: { path: string; ext: string; mime: string; keyPrefix?: string }): Promise<{ key: string; url: string; size: number }> {
+  const key = buildKey(input.ext, input.keyPrefix ?? "video/");
+  const { size } = await stat(input.path);
+  const { r2 } = await getSettings();
+
+  if (r2.enabled) {
+    const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+    const client = await getS3Client(r2);
+    await client.send(
+      new PutObjectCommand({
+        Bucket: r2.bucket,
+        Key: key,
+        Body: createReadStream(input.path),
+        ContentLength: size,
+        ContentType: input.mime,
+      }),
+    );
+    return { key, url: `${r2.publicUrl}/${key}`, size };
+  }
+
+  const filePath = path.join(uploadsDir, key);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await copyFile(input.path, filePath);
+  return { key, url: `${config.API_ORIGIN}/uploads/${key}`, size };
+}
+
+/** Saqlangan faylni o'qiydi (R2 yoki mahalliy): kichik fayllar uchun (masalan ko'rik kadrlarini vosita javobiga qo'shish). */
+export async function readStoredFile(key: string): Promise<Buffer | null> {
+  const { r2 } = await getSettings();
+  try {
+    if (r2.enabled) {
+      const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+      const client = await getS3Client(r2);
+      const res = await client.send(new GetObjectCommand({ Bucket: r2.bucket, Key: key }));
+      const bytes = await res.Body?.transformToByteArray();
+      return bytes ? Buffer.from(bytes) : null;
+    }
+    return await readFile(path.join(uploadsDir, key));
+  } catch {
+    return null;
+  }
 }
