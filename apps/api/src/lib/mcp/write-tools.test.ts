@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { markdownToDoc } from "@blog/shared";
+import { markdownToDoc, PostConflictResponseSchema } from "@blog/shared";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { createTestUser, TEST_USER_PASSWORD, type TestUser } from "../../test/auth-test-helpers.js";
 import { API, callTool, connect, mcpCall, type Json } from "../../test/mcp-harness.js";
@@ -217,6 +217,59 @@ describe("posts: create, read as Markdown, edit", () => {
     expect(e.hint).toMatch(/Re-read/);
     expect((await postRow(draftId)).title).toBe("Veb orqali o'zgartirildi");
     draftToken = e.currentUpdatedAt;
+  });
+
+  it("a connector edit stamps via=mcp, so a web editor holding the older token gets the 409 body it expects (who + via what)", async () => {
+    const created = await ok("create_post_draft", { title: "Veb va yordamchi", content_markdown: "## A\n\nmatn matn matn" });
+    const id = created.post.id as string;
+    const webToken = created.post.updatedAt as string; // the web editor loaded the post here
+    const edit = await ok("update_post", { id, expected_updated_at: webToken, content_markdown: "## A\n\nyangi matn matn" });
+    const row = await postRow(id);
+    expect(row.updatedVia).toBe("mcp");
+    expect(row.updatedBy).toBe(admin.id);
+
+    // Web editor autosave with its OLD token: exactly the shape PostConflictResponseSchema (panel banner) parses.
+    const res = await adminApi(`/admin/posts/${id}`, { method: "PATCH", body: { title: "Veb yozdi", expectedUpdatedAt: webToken } });
+    expect(res.status).toBe(409);
+    const body = PostConflictResponseSchema.parse(await res.json());
+    expect(body.updatedAt).toBe(edit.post.updatedAt);
+    expect(body.updatedBy).toEqual({ id: admin.id, name: "Owner" });
+    expect(body.via).toBe("mcp");
+    expect((await postRow(id)).title).toBe("Veb va yordamchi");
+
+    // The panel's detail endpoint reports the assistant as the source too (history/journal rows carry via=mcp).
+    const detail = (await (await adminApi(`/admin/posts/${id}`)).json()) as Json;
+    expect(detail.updatedVia).toBe("mcp");
+    const revs = await revisions(id);
+    expect(revs[0]!.via).toBe("mcp");
+    expect((await auditRows("post.update", id)).every((a) => a.via === "mcp")).toBe(true);
+  });
+
+  it("connector snapshots and the panel's 'overwrite' snapshot neither double up nor starve each other", async () => {
+    const created = await ok("create_post_draft", { title: "Snapshot tartibi", content_markdown: "## A\n\nmatn matn matn" });
+    const id = created.post.id as string;
+    const edit = await ok("update_post", { id, expected_updated_at: created.post.updatedAt, title: "Snapshot tartibi 2" });
+    // Exactly one snapshot for the connector edit (forced one; the overwrite path is not involved, reason is plain "update").
+    let revs = await revisions(id);
+    expect(revs).toHaveLength(1);
+    expect(revs[0]).toMatchObject({ via: "mcp", reason: "update" });
+
+    // Panel "replace with mine" (overwrite, no token) right after: still gets its own snapshot of the assistant's version ...
+    const first = await adminApi(`/admin/posts/${id}`, { method: "PATCH", body: { title: "Veb 1", overwrite: true } });
+    expect(first.status).toBe(200);
+    revs = await revisions(id);
+    expect(revs).toHaveLength(2);
+    expect(revs[0]).toMatchObject({ via: "web", reason: "overwrite", title: "Snapshot tartibi 2" });
+    // ... a repeat inside the rate-limit window adds none ...
+    expect((await adminApi(`/admin/posts/${id}`, { method: "PATCH", body: { title: "Veb 2", overwrite: true } })).status).toBe(200);
+    expect(await revisions(id)).toHaveLength(2);
+    // ... and a later connector edit is still snapshotted (the window does not starve the connector's rule).
+    const token = ((await (await adminApi(`/admin/posts/${id}`)).json()) as Json).updatedAt as string;
+    await ok("update_post", { id, expected_updated_at: token, title: "Snapshot tartibi 3" });
+    revs = await revisions(id);
+    expect(revs).toHaveLength(3);
+    expect(revs[0]).toMatchObject({ via: "mcp", reason: "update", title: "Veb 2" });
+    expect(edit.changed).toEqual(["title"]);
   });
 
   it("every mutating post tool returns the conflict on a stale token and changes nothing", async () => {
