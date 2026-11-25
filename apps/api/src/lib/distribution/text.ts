@@ -55,7 +55,8 @@ function xCharWeight(cp: number): number {
   return 2;
 }
 
-export function xWeightedLength(text: string): number {
+export function xWeightedLength(raw: string): number {
+  const text = raw.normalize("NFC"); // twitter-text ham NFC ga keltiradi
   const urls = findUrls(text);
   let total = 0;
   let cursor = 0;
@@ -122,18 +123,31 @@ export function toHashtags(tags: readonly string[], max: number): string[] {
 
 // --- Sig'dirish ---
 
-/** Matnni `counter(...) <= limit` bo'lguncha oxiridan "…" bilan qisqartiradi (grapheme chegarasida). */
+/**
+ * Matnni `counter(...) <= limit` bo'lguncha oxiridan "…" bilan qisqartiradi (grapheme chegarasida). URL-aware:
+ * kesish URL ichiga tushsa, URL boshlanishidan oldin kesiladi (URL hech qachon bo'laklanmaydi).
+ */
 export function truncateTo(text: string, limit: number, counter: (s: string) => number): string {
   if (counter(text) <= limit) return text;
   const gs = graphemes(text);
+  const build = (n: number) => {
+    let prefix = gs.slice(0, n).join("");
+    for (const u of findUrls(text)) {
+      if (u.start < prefix.length && prefix.length < u.end) {
+        prefix = text.slice(0, u.start);
+        break;
+      }
+    }
+    return `${prefix.trimEnd()}…`;
+  };
   let lo = 0;
   let hi = gs.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if (counter(`${gs.slice(0, mid).join("").trimEnd()}…`) <= limit) lo = mid;
+    if (counter(build(mid)) <= limit) lo = mid;
     else hi = mid - 1;
   }
-  return lo === 0 ? "" : `${gs.slice(0, lo).join("").trimEnd()}…`;
+  return lo === 0 ? "" : build(lo);
 }
 
 export interface TextParts {

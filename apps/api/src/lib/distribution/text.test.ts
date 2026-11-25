@@ -17,6 +17,10 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("日本")).toBe(4);
     expect(xWeightedLength("oʻzbek gʻoya maʼno")).toBe("oʻzbek gʻoya maʼno".length);
   });
+  it("normalises to NFC before counting (decomposed é counts as one unit)", () => {
+    expect(xWeightedLength("e\u0301")).toBe(1);
+    expect(xWeightedLength("\u00e9")).toBe(1);
+  });
   it("is at the limit at exactly 280 and over at 281", () => {
     expect(xWeightedLength("a".repeat(280))).toBe(280);
     expect(xWeightedLength("a".repeat(281))).toBe(281);
@@ -76,6 +80,12 @@ describe("fitting", () => {
   it("keeps everything when it fits", () => {
     const out = fitParts({ title: "A", optional: [{ key: "e", text: "B" }, { key: "t", text: "#C" }] }, 100, codePointLength);
     expect(out).toBe("A\n\nB\n\n#C");
+  });
+  it("truncateTo never cuts inside a URL", () => {
+    const text = "see https://example.com/" + "p".repeat(60) + " tail";
+    const out = truncateTo(text, 40, codePointLength);
+    expect(out).toBe("see…");
+    expect(truncateTo("short", 40, codePointLength)).toBe("short");
   });
   it("truncateTo respects grapheme boundaries", () => {
     const out = truncateTo("😀😀😀😀", 3, codePointLength);
