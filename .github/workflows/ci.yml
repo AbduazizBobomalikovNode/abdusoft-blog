@@ -51,3 +51,22 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:4000
           NEXT_PUBLIC_SITE_URL: http://localhost:3000
           NEXT_PUBLIC_SITE_NAME: abdusoft
+
+  # Deploy skriptlari (scripts/server-deploy*.sh, make-deploy-bundle.sh) va ularning
+  # lokal simulyatsiyasi — haqiqiy server/systemd/tarmoqsiz.
+  deploy-scripts:
+    name: Deploy scripts (shellcheck, simulation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck
+        run: shellcheck -s bash scripts/server-deploy.sh scripts/server-deploy-entry.sh scripts/make-deploy-bundle.sh scripts/tests/server-deploy-sim.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Simulation
+        run: ./scripts/tests/server-deploy-sim.sh

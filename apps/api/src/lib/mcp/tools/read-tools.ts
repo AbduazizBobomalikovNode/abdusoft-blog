@@ -128,7 +128,7 @@ export const getPost = defineTool({
   title: "Get a post",
   description:
     U + "Read one post in full: metadata, settings, tags, review state, Telegram channel status and its content. " +
-    "'updatedAt' is the concurrency token that future edit tools require - pass it back unchanged. " +
+    "'updatedBy' and 'updatedVia' (web panel, telegram, scheduler, assistant...) say who/what changed it last. 'updatedAt' is the concurrency token that future edit tools require - pass it back unchanged. " +
     "Content comes as readable plain text ('content') and as the exact Tiptap JSON ('document'); use include to receive only one of them.",
   scope: "blog:read",
   inputSchema: {

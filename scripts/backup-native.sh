@@ -10,7 +10,24 @@
 #
 # Cron bilan rejalashtirish (har kuni soat 03:00'da):
 #   0 3 * * * /home/abdusoft/abdusoft-blog/scripts/backup-native.sh >> /home/abdusoft/backups/abdusoft-blog/backup.log 2>&1
+#
+# Ixtiyoriy flag (cron'dagi default xatti-harakat O'ZGARMAGAN):
+#   --db-only   faqat blog bazasining dumpi (uploads arxivi va umami'siz), alohida
+#               nom (blog_predeploy_*) va alohida qisqa saqlash (oxirgi PREDEPLOY_KEEP
+#               ta, default 5). Deploy pipeline migratsiyadan oldin shuni ishlatadi,
+#               shunda har deploy diskni to'ldirmaydi.
 set -euo pipefail
+
+DB_ONLY=false
+for arg in "$@"; do
+  case "$arg" in
+    --db-only) DB_ONLY=true ;;
+    *)
+      echo "Noma'lum argument: $arg" >&2
+      exit 64
+      ;;
+  esac
+done
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$REPO_DIR/apps/api/.env}"
@@ -35,6 +52,26 @@ DB_FILE="$BACKUP_DIR/blog_db_${DATE}.sql.gz"
 UPLOADS_FILE="$BACKUP_DIR/blog_uploads_${DATE}.tar.gz"
 
 mkdir -p "$BACKUP_DIR"
+
+if [ "$DB_ONLY" = true ]; then
+  PRE_FILE="$BACKUP_DIR/blog_predeploy_${DATE}.sql.gz"
+  PREDEPLOY_KEEP="${PREDEPLOY_KEEP:-5}"
+  echo "[backup] (--db-only) $DB_NAME bazasi $PRE_FILE fayliga zaxiralanmoqda..."
+  if ! PGPASSWORD="${POSTGRES_PASSWORD:-}" pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" | gzip > "$PRE_FILE.tmp"; then
+    rm -f "$PRE_FILE.tmp"
+    echo "[backup] XATO: pg_dump muvaffaqiyatsiz." >&2
+    exit 1
+  fi
+  mv "$PRE_FILE.tmp" "$PRE_FILE"
+  echo "[backup] Tayyor: $PRE_FILE ($(du -h "$PRE_FILE" | cut -f1))"
+  # Eng yangi PREDEPLOY_KEEP tasidan boshqasini o'chirish
+  # shellcheck disable=SC2012
+  ls -1t "$BACKUP_DIR"/blog_predeploy_*.sql.gz 2>/dev/null | tail -n "+$((PREDEPLOY_KEEP + 1))" | while IFS= read -r old; do
+    echo "[backup] eskisi o'chirilmoqda: $old"
+    rm -f "$old"
+  done
+  exit 0
+fi
 
 echo "[backup] $DB_NAME bazasi $DB_FILE fayliga zaxiralanmoqda..."
 PGPASSWORD="${POSTGRES_PASSWORD:-}" pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" | gzip > "$DB_FILE"

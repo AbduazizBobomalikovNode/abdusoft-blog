@@ -319,7 +319,7 @@ export async function submitPostForReview(
   actor: Actor,
   id: string,
   opts: ConcurrencyOptions = {},
-): Promise<ServiceResult<{ id: string; status: PostRow["status"]; submittedAt: Date | null }>> {
+): Promise<ServiceResult<{ id: string; status: PostRow["status"]; submittedAt: Date | null; updatedAt: Date }>> {
   const result = await transition(actor, id, {
     guard: (post) => {
       if (!actor.userId || post.createdBy !== actor.userId) {
@@ -349,7 +349,7 @@ export async function submitPostForReview(
     authorName: author?.name || author?.email || "Xodim",
   });
 
-  return ok({ id: fresh.id, status: fresh.status, submittedAt: fresh.submittedAt });
+  return ok({ id: fresh.id, status: fresh.status, submittedAt: fresh.submittedAt, updatedAt: fresh.updatedAt });
 }
 
 /** `in_review -> changes_requested` — admin izohi (`reviewNote`) xodimga admin panelda ko'rinadi. */

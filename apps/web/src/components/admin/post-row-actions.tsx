@@ -54,11 +54,11 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
   async function handleDelete() {
     try {
       await adminApi.deletePost(post.id);
-      toast.success("Post o'chirildi");
+      toast.success("Post savatga ko'chirildi");
       setDeleteOpen(false);
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof AdminApiError ? error.message : "O'chirib bo'lmadi");
+      toast.error(error instanceof AdminApiError ? error.message : "Savatga ko'chirib bo'lmadi");
     }
   }
 
@@ -161,7 +161,7 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}>
                 <Trash2 />
-                O&apos;chirish
+                Savatga ko&apos;chirish
               </DropdownMenuItem>
             </>
           ) : null}
@@ -172,15 +172,15 @@ export function PostRowActions({ post, isAdmin = true }: { post: AdminPostListIt
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Postni o&apos;chirish</AlertDialogTitle>
+            <AlertDialogTitle>Postni savatga ko&apos;chirish</AlertDialogTitle>
             <AlertDialogDescription>
-              &quot;{post.title}&quot; butunlay o&apos;chiriladi. Bu amalni ortga qaytarib bo&apos;lmaydi.
+              &quot;{post.title}&quot; savatga ko&apos;chiriladi va saytdan yo&apos;qoladi. Uni keyinroq Savat bo&apos;limidan tiklash mumkin.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Bekor qilish</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              O&apos;chirish
+              Savatga ko&apos;chirish
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
