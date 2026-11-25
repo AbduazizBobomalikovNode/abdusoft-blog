@@ -90,7 +90,11 @@ export const Explainer: React.FC<RenderProps> = ({ storyboard, highlights }) => 
     ? interpolate(frame, [outro.startFrame + outro.leadFrames, outro.startFrame + outro.leadFrames + 12], [OG_CARD.wordmarkOpacity, 0], clamp)
     : OG_CARD.wordmarkOpacity;
   const current = timeline.scenes.reduce((acc, s) => (frame >= s.startFrame + s.leadFrames ? s.index : acc), 0);
-  const progress = Math.min(1, frame / Math.max(1, timeline.totalFrames - 1));
+  // A storyboard that ends on a closing scene reaches 100% when the seamless loop window starts and stays there,
+  // so a GIF of that window never shows the hairline creeping.
+  const endLoop = timeline.scenes.at(-1)?.loop ?? null;
+  const progressEnd = endLoop ? endLoop.startFrame : timeline.totalFrames - 1;
+  const progress = Math.min(1, frame / Math.max(1, progressEnd));
 
   return (
     <StageProvider value={{ layout, theme, siteName: storyboard.siteName }}>

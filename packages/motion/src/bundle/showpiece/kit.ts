@@ -1,7 +1,10 @@
 import type { ClosingScene, IntroScene } from "../../schema/storyboard.ts";
 import type { ClosingTiming, IntroTiming } from "../../timeline.ts";
 
-/** Props every intro variant receives. `t` is the scene's content clock in frames (0 = first frame of the scene's own animation). */
+/**
+ * Props every intro variant receives. `t` is the scene's content clock in frames (0 = first frame of the scene's own animation).
+ * NOTE: `t` can be NEGATIVE while the scene is fading/wiping in over the previous one: clamp before indexing arrays or repeating strings.
+ */
 export interface IntroProps {
   scene: IntroScene;
   timing: IntroTiming;
