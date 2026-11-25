@@ -239,6 +239,7 @@ Quyidagilarning barchasi `.env`da ham, `/admin/sozlamalar`da ham sozlanishi mumk
 | Infratuzilma | `TRUST_PROXY` (faqat ishonchli proksi orqasida `true`), `COOKIE_DOMAIN` |
 | Rate limit (faqat env, admin paneldan sozlanmaydi) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/parol endpoint'lari, IP bo'yicha; `AUTH_RATE_LIMIT_ENABLED` (bo'sh = faqat production'da; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = o'chiq), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` yozuv so'rovlari. Oshsa `429` + `Retry-After` |
 | Post tarixi (faqat env) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = har tahrirdan oldin) — oddiy tahrirlar (avtosaqlash) shu oraliqdan tez-tez suratga olinmaydi (chop etish/arxiv/rejalashtirish/tiklashdan oldin surat doim olinadi); `POST_REVISION_MAX_PER_POST` (`100`) — bitta postda saqlanadigan revision'lar soni, eng eskilari o'chiriladi |
+| Migratsiya (faqat env) | `MIGRATE_LOCK_TIMEOUT_MS` (default `15000`, `0` = o'chiq) — `pnpm api:migrate` Postgres sessiyasida `lock_timeout`: band jadvalda `ALTER TABLE` lock kutib qolsa migratsiya xato bilan to'xtaydi (deploy restart'gacha to'xtaydi, sayt eski kodda ishlayveradi) |
 
 ### 8. Deploy
 
@@ -595,6 +596,7 @@ Every one of these can be set via `.env` or `/admin/sozlamalar` — **a non-empt
 | Infrastructure | `TRUST_PROXY` (only `true` behind a trusted proxy), `COOKIE_DOMAIN` |
 | Rate limit (env only, not editable in the admin panel) | `AUTH_RATE_LIMIT_MAX` (default `10`), `AUTH_RATE_LIMIT_WINDOW_SECONDS` (`600`) — sign-in/sign-up/password endpoints, per IP; `AUTH_RATE_LIMIT_ENABLED` (empty = production only; `true`/`false`); `ADMIN_WRITE_RATE_LIMIT_MAX` (`300`, `0` = off), `ADMIN_WRITE_RATE_LIMIT_WINDOW_SECONDS` (`60`) — `/admin/*` write requests. Exceeding returns `429` + `Retry-After` |
 | Post history (env only) | `POST_REVISION_INTERVAL_MINUTES` (default `10`, `0` = before every edit) — plain edits (autosave) are not snapshotted more often than this (a snapshot is always taken before publish/archive/schedule/restore); `POST_REVISION_MAX_PER_POST` (`100`) — revisions kept per post, oldest pruned first |
+| Migration (env only) | `MIGRATE_LOCK_TIMEOUT_MS` (default `15000`, `0` = off) — `lock_timeout` for the `pnpm api:migrate` Postgres session: if an `ALTER TABLE` cannot get its lock in time the migration fails fast (the deploy stops before the restart and the site keeps running on the old code) |
 
 ### 8. Deploy
 
