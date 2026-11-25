@@ -23,13 +23,20 @@ export type FlushOutcome =
   | { kind: "empty" }
   | { kind: "saved"; updatedAt: string }
   | { kind: "conflict" }
+  /** Jimgina tenglashtirildi, lekin server holati (chop etilgan/rejalashtirilgan/arxiv) boshqa joyda o'zgargan — muharrirni qayta qurish kerak. */
+  | { kind: "stale" }
   | { kind: "offline" }
   | { kind: "error"; message: string; retry: boolean };
 
 /** Holat o'tishi oldidan matnni saqlab bo'lmadi (oflayn, 5xx) — o'tish bajarilmaydi, matn zaxirada qoladi. */
 export class PendingNotSavedError extends Error {
   constructor(public outcome: FlushOutcome) {
-    super("Matn hali saqlanmadi — aloqa yoki server muammosi. Matn saqlab qo'yildi, qayta urinib ko'ring.");
+    // Server o'z xabarini bergan bo'lsa (masalan 400 tekshiruv xatosi) — uni ko'rsatamiz, nima tuzatilishi kerakligi ma'lum bo'lsin.
+    super(
+      outcome.kind === "error" && outcome.message
+        ? `Matn saqlanmadi: ${outcome.message}. Matn saqlab qo'yildi — xatoni tuzatib, qayta urinib ko'ring.`
+        : "Matn hali saqlanmadi — aloqa yoki server muammosi. Matn saqlab qo'yildi, qayta urinib ko'ring.",
+    );
     this.name = "PendingNotSavedError";
   }
 }
@@ -39,6 +46,23 @@ export interface EngineApi {
   getPost(id: string): Promise<AdminPostDetail>;
 }
 
+export interface ManagedState {
+  status?: string;
+  scheduledAt?: string | null;
+  publishedAt?: string | null;
+}
+
+const sameInstant = (a: string | null | undefined, b: string | null | undefined) =>
+  (a ? Date.parse(a) : null) === (b ? Date.parse(b) : null);
+
+/** Server boshqaradigan holat kuzatilgan holatdan farq qiladimi (faqat kuzatilayotgan kalitlar). */
+export function managedChanged(known: ManagedState, server: Pick<AdminPostDetail, "status" | "scheduledAt" | "publishedAt">): boolean {
+  if (known.status !== undefined && known.status !== server.status) return true;
+  if (known.scheduledAt !== undefined && !sameInstant(known.scheduledAt, server.scheduledAt)) return true;
+  if (known.publishedAt !== undefined && !sameInstant(known.publishedAt, server.publishedAt)) return true;
+  return false;
+}
+
 export interface EngineOptions {
   postId: string;
   sync: PostSync;
@@ -46,6 +70,8 @@ export interface EngineOptions {
   storage: StorageLike | null;
   initialUpdatedAt: string;
   initialLocal: LocalFields;
+  /** Serverdagi holat (status va sanalar) — jimgina tenglashtirishda boshqa joyda o'zgargan-o'zgarmaganini bilish uchun. */
+  initialManaged?: ManagedState;
   /** Joriy foydalanuvchi — o'z `409`ini aniqlash uchun. */
   meId?: string;
   /** `false` (faqat o'qish) — zaxira yozilmaydi. */
@@ -93,6 +119,9 @@ export class AutosaveEngine {
   editCount = 0;
 
   private local: LocalFields;
+  /** Serverda ma'lum bo'lgan oxirgi maydonlar holati (yuklangan nusxa + muvaffaqiyatli yozuvlar). */
+  private known: LocalFields;
+  private managed: ManagedState;
   private pending: UpdatePostBody = {};
   private inflight: UpdatePostBody = {};
   private baseUpdatedAt: string;
@@ -106,6 +135,8 @@ export class AutosaveEngine {
 
   constructor(private opts: EngineOptions) {
     this.local = { ...opts.initialLocal };
+    this.known = { ...opts.initialLocal };
+    this.managed = { ...(opts.initialManaged ?? {}) };
     this.baseUpdatedAt = opts.initialUpdatedAt;
     this.lastSavedAt = opts.initialUpdatedAt;
     this.enabled = opts.enabled ?? true;
@@ -189,7 +220,15 @@ export class AutosaveEngine {
         if (outcome.kind === "offline" || outcome.kind === "error") throw new PendingNotSavedError(outcome);
         if (!this.hasPending) break;
       }
-      return this.opts.sync.run(op);
+      const result = await this.opts.sync.run(op);
+      // Holat o'tishi javobi (status/sanalar) — kuzatilayotgan server holatini yangilaydi.
+      const r = result as unknown as ManagedState;
+      if (r && typeof r === "object") {
+        if (typeof r.status === "string") this.managed.status = r.status;
+        if ("scheduledAt" in r && this.managed.scheduledAt !== undefined) this.managed.scheduledAt = r.scheduledAt ?? null;
+        if ("publishedAt" in r && this.managed.publishedAt !== undefined) this.managed.publishedAt = r.publishedAt ?? null;
+      }
+      return result;
     });
   }
 
@@ -213,6 +252,7 @@ export class AutosaveEngine {
         this.opts.api.updatePost(this.opts.postId, token ? { ...payload, expectedUpdatedAt: token } : payload),
       );
       this.inflight = {};
+      this.known = { ...this.known, ...payload };
       this.baseUpdatedAt = result.updatedAt;
       this.lastSavedAt = result.updatedAt;
       this.state = "saved";
@@ -222,10 +262,11 @@ export class AutosaveEngine {
       return { kind: "saved", updatedAt: result.updatedAt };
     } catch (error) {
       // Saqlanmaganlar qaytariladi — yangiroqlari ustun.
+      const newer = this.pending;
       this.pending = { ...payload, ...this.pending };
       this.inflight = {};
       this.writeBackup();
-      if (isConflictFailure(error)) return await this.handleConflict(error);
+      if (isConflictFailure(error)) return await this.handleConflict(error, payload, newer);
       if (isSlugConflict(error) && this.pending.slug !== undefined) {
         // Band slug butun so'rovni rad etardi — matnni yo'qotmaslik uchun slug'siz qayta saqlaymiz.
         const { slug: _dropped, ...rest } = this.pending;
@@ -251,26 +292,43 @@ export class AutosaveEngine {
   }
 
   /**
-   * `409`: server nusxasi muharrir ushlab turgan HAMMA narsaga teng bo'lsagina (javobi yo'qolgan o'z so'rovimiz yoki
-   * aynan bir xil holatni yozgan ikkinchi tab) jimgina tokenni yangilaymiz. Aks holda — banner.
+   * `409`. Konflikt "meniki" (jimgina tenglashtiriladi) faqat shunda: 409 aynan shu foydalanuvchining veb-yozuvidan va server
+   * nusxasi = (ma'lum server holati + yo'qolgan so'rov yuki) — ya'ni so'rov serverga yetgan, faqat javobi yo'qolgan.
+   * Shundan keyin yozilgan yangi harflar (`newer`) tokenni yangilab, odatdagidek yuboriladi. Server boshqa narsaga ega
+   * bo'lsa (ikkinchi tab, yordamchi) — banner.
    */
-  private async handleConflict(error: unknown): Promise<FlushOutcome> {
+  private async handleConflict(error: unknown, payload: UpdatePostBody, newer: UpdatePostBody): Promise<FlushOutcome> {
     const info = asPostConflict(error) ?? this.opts.sync.conflict;
     const { meId } = this.opts;
     if (info && meId && info.updatedBy?.id === meId && info.via === "web") {
       this.reconciling = true;
       try {
         const fresh = await this.opts.api.getPost(this.opts.postId);
-        if (localMatchesServer(this.local, fresh)) {
+        const { expectedUpdatedAt: _e, overwrite: _o, ...fields } = payload;
+        void _e;
+        void _o;
+        const expected: LocalFields = { ...this.known, ...(fields as LocalFields) };
+        if (localMatchesServer(expected, fresh)) {
           this.opts.sync.resolve(fresh.updatedAt);
+          this.known = expected;
           this.baseUpdatedAt = fresh.updatedAt;
           this.lastSavedAt = fresh.updatedAt;
-          this.pending = {};
-          clearBackup(this.opts.storage, this.opts.postId);
-          this.state = "saved";
-          this.error = null;
+          this.pending = newer;
           this.conflict = null;
-          return { kind: "saved", updatedAt: fresh.updatedAt };
+          this.error = null;
+          if (managedChanged(this.managed, fresh)) {
+            // Shu foydalanuvchi postni boshqa joyda chop etgan/arxivlagan/rejalashtirgan — tugmalar eskirgan: qayta qurish kerak.
+            this.state = "idle";
+            return { kind: "stale" };
+          }
+          if (Object.keys(newer).length === 0) {
+            clearBackup(this.opts.storage, this.opts.postId);
+            this.state = "saved";
+            return { kind: "saved", updatedAt: fresh.updatedAt };
+          }
+          // Yo'qolgan so'rovdan keyin yozilganlar yangi token bilan yuboriladi.
+          this.reconciling = false;
+          return await this.flushOnce();
         }
       } catch {
         // Tekshirib bo'lmadi — ehtiyotkorlik bilan to'qnashuv sifatida ko'rsatamiz.
@@ -364,7 +422,10 @@ export class AutosaveEngine {
         this.state = "saved";
         this.error = null;
         this.conflict = null;
-        clearBackup(this.opts.storage, this.opts.postId);
+        this.known = { ...this.known, ...this.fullPayload() };
+        // So'rov davomida yozilgan matn bo'lsa, u 1.5 s avtosaqlashgacha faqat xotirada qolmasin — zaxira yoziladi.
+        if (this.hasPending) this.writeBackup();
+        else clearBackup(this.opts.storage, this.opts.postId);
         return true;
       } catch (error) {
         this.pending = { ...previous, ...this.pending };

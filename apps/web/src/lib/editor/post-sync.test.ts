@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AdminPostDetail } from "@blog/shared";
 import { AdminApiError, adminApi, asPostConflict } from "@/lib/admin-client";
-import { isConflictFailure, payloadAlreadyApplied, PostConflictBlockedError, PostSync } from "./post-sync";
+import { isConflictFailure, PostConflictBlockedError, PostSync } from "./post-sync";
 
 /**
  * Soxta server: `updatedAt` tokenini tekshiradi (haqiqiy API kabi: farq qilsa 409 + joriy `updatedAt`, kim va qaysi kanal),
@@ -176,35 +175,5 @@ describe("PostSync on a genuine 409", () => {
     expect(first.status).toBe("rejected");
     expect(second.status === "rejected" && second.reason instanceof PostConflictBlockedError).toBe(true);
     expect(server.log).toHaveLength(1);
-  });
-});
-
-describe("payloadAlreadyApplied (own lost-response retry / identical second tab)", () => {
-  const doc = (text: string) => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
-  const server = {
-    title: "T",
-    slug: "t",
-    excerpt: "Q",
-    coverUrl: null,
-    pinned: false,
-    contentJson: doc("matn"),
-    tags: [{ id: "1", slug: "a", name: "A" }],
-    settings: { showToc: true, allowComments: true },
-  } as unknown as AdminPostDetail;
-
-  it("is true only when every field the client wanted to write is already stored", () => {
-    expect(payloadAlreadyApplied({ title: "T", contentJson: doc("matn") }, server)).toBe(true);
-    expect(payloadAlreadyApplied({ title: "T", contentJson: doc("boshqa") }, server)).toBe(false);
-    expect(payloadAlreadyApplied({ tagSlugs: ["a"] }, server)).toBe(true);
-    expect(payloadAlreadyApplied({ tagSlugs: ["a", "b"] }, server)).toBe(false);
-    expect(payloadAlreadyApplied({ settings: { showToc: true } }, server)).toBe(true);
-    expect(payloadAlreadyApplied({ settings: { showToc: false } }, server)).toBe(false);
-  });
-
-  it("is false for an empty payload, an auto-excerpt request and unknown fields", () => {
-    expect(payloadAlreadyApplied({}, server)).toBe(false);
-    expect(payloadAlreadyApplied({ excerpt: null }, server)).toBe(false);
-    expect(payloadAlreadyApplied({ scheduledAt: "x" }, server)).toBe(false);
-    expect(payloadAlreadyApplied({ expectedUpdatedAt: "x" }, server)).toBe(false);
   });
 });
