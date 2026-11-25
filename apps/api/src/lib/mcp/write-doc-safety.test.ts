@@ -82,3 +82,50 @@ describe("check-stored-docs reports counts and ids only", () => {
     expect(JSON.stringify(after)).not.toContain("SECRETTITLE");
   });
 });
+
+describe("pathological Markdown cannot stall the connector", () => {
+  const evil = "**a ".repeat(20_000); // 80 000 characters: quadratic in the old parser (~12 s)
+  const nested = "> ".repeat(30_000) + "x";
+
+  it("a stale token is refused before any Markdown work is done", async () => {
+    const created = await callTool(app, token, "create_post_draft", { title: "Eskirgan token", content_markdown: "## A\n\nmatn matn matn" });
+    const id = (created.json as Json).post.id as string;
+    const started = performance.now();
+    const r = await callTool(app, token, "update_post", { id, expected_updated_at: "2001-01-01T00:00:00.000Z", content_markdown: evil });
+    expect(r.isError).toBe(true);
+    expect((r.json as Json).error.code).toBe("conflict");
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  it("adversarial Markdown with a fresh token is processed quickly and deep nesting is a clear invalid_input", async () => {
+    const created = await callTool(app, token, "create_post_draft", { title: "Zararli markdown", content_markdown: "## A\n\nmatn matn matn" });
+    const id = (created.json as Json).post.id as string;
+    const t0 = performance.now();
+    const ok = await callTool(app, token, "update_post", { id, expected_updated_at: (created.json as Json).post.updatedAt, content_markdown: evil });
+    expect(performance.now() - t0).toBeLessThan(8000);
+    expect(ok.isError, ok.text.slice(0, 200)).toBe(false);
+
+    const fresh = await callTool(app, token, "create_post_draft", { title: "Chuqur iqtibos", content_markdown: "## A\n\nmatn matn matn" });
+    const t1 = performance.now();
+    const deep = await callTool(app, token, "update_post", { id: (fresh.json as Json).post.id, expected_updated_at: (fresh.json as Json).post.updatedAt, content_markdown: nested });
+    expect(performance.now() - t1).toBeLessThan(8000);
+    expect(deep.isError).toBe(true);
+    expect((deep.json as Json).error.code).toBe("invalid_input");
+    expect((deep.json as Json).error.message).toMatch(/structural limit/);
+  });
+
+  it("reading a stored pathological body as Markdown is bounded in time", async () => {
+    const created = await callTool(app, token, "create_post_draft", { title: "Uzun o'qish", content_markdown: "## A\n\nmatn" });
+    const id = (created.json as Json).post.id as string;
+    const text = "**a ".repeat(20_000);
+    const doc = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] };
+    const { db } = await import("../../db/index.js");
+    const { posts } = await import("../../db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    await db.update(posts).set({ contentJson: doc }).where(eq(posts.id, id));
+    const started = performance.now();
+    const r = await callTool(app, token, "get_post", { id, include: "markdown" });
+    expect(performance.now() - started).toBeLessThan(8000);
+    expect(r.isError).toBe(false);
+  });
+});

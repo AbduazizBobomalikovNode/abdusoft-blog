@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   PostSettingsSchema,
   buildPublishChecklist,
+  MARKDOWN_LIMITS,
   markdownToDoc,
   type ChecklistItem,
   type ContentNode,
@@ -89,7 +90,14 @@ async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
   if (markdown.length > CONTENT_MAX_CHARS) {
     throw new ToolError("invalid_input", `content_markdown is ${markdown.length} characters; the limit is ${CONTENT_MAX_CHARS}.`, "Shorten the text or split it into several posts.");
   }
-  const { title, doc } = markdownToDoc(markdown);
+  const { title, doc, limited } = markdownToDoc(markdown);
+  if (limited) {
+    throw new ToolError(
+      "invalid_input",
+      `content_markdown exceeds a structural limit (${limited.join(", ")}): nesting deeper than ${MARKDOWN_LIMITS.maxBlockDepth} levels (quotes, lists, links, emphasis) or a table wider than ${MARKDOWN_LIMITS.maxTableColumns} columns / larger than ${MARKDOWN_LIMITS.maxTableCells} cells. Nothing was written.`,
+      "Flatten the structure or split the content; the limits are far above what normal articles need.",
+    );
+  }
   if (title !== null) {
     throw new ToolError(
       "invalid_input",
@@ -199,21 +207,21 @@ export const createPostDraft = defineTool({
       throw new ToolError("invalid_input", "Pass either content_markdown or content_document, not both.");
     }
     return withIdempotency(ctx, "create_post_draft", args.idempotency_key, args, async () => {
+      if (args.tags) await assertTagsExist(args.tags);
+      const coverUrlChecked = await resolveCover(args);
       const doc =
         args.content_document !== undefined
           ? await validatedDocument(args.content_document)
           : args.content_markdown !== undefined && args.content_markdown.trim() !== ""
             ? await documentFromMarkdown(args.content_markdown)
             : ({ type: "doc", content: [{ type: "paragraph" }] } as ContentNode);
-      if (args.tags) await assertTagsExist(args.tags);
-      const coverUrl = await resolveCover(args);
       const created = await unwrapPost(
         await createDraft(ctx.actor, {
           title: args.title,
           ...(args.slug !== undefined ? { slug: args.slug } : {}),
           ...(args.excerpt !== undefined ? { excerpt: args.excerpt } : {}),
           contentJson: doc,
-          ...(coverUrl !== undefined ? { coverUrl } : {}),
+          ...(coverUrlChecked !== undefined ? { coverUrl: coverUrlChecked } : {}),
           ...(args.tags ? { tagSlugs: args.tags } : {}),
           ...(args.settings ? { settings: args.settings } : {}),
         }),
@@ -263,6 +271,8 @@ export const updatePostTool = defineTool({
       throw new ToolError("invalid_input", "Pass either content_markdown or content_document, not both.");
     }
     const post = await livePost(args.id);
+    // Arzon tekshiruvlar (token) qimmat ishlovdan (Markdown/hujjat) OLDIN: eskirgan so'rov hech qanday og'ir ish qildirmasin.
+    await assertFreshToken(post, args.expected_updated_at);
     if (args.slug !== undefined && (post.status === "published" || post.status === "scheduled") && args.slug !== post.slug) {
       throw new ToolError("invalid_input", "The slug of a published or scheduled post cannot be changed here: it would break its public URL.", "Change the slug in the web editor, or unpublish the post first.");
     }
