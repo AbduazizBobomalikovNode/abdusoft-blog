@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "title": "Zod bilan API chegarasi: yangi sahnalar ko'rgazmasi",
+  "theme": "dark",
+  "preset": "vivid",
+  "siteName": "abdusoft",
+  "defaultTransition": "fade",
+  "scenes": [
+    {
+      "type": "intro",
+      "id": "intro",
+      "variant": "aurora",
+      "kicker": "abdusoft blog · TypeScript",
+      "title": "API chegarasini Zod bilan himoyalang",
+      "subtitle": "Kiruvchi maʼlumotga ishonmang: uni chegarada tekshiring.",
+      "tags": [
+        "zod",
+        "API",
+        "xavfsizlik"
+      ]
+    },
+    {
+      "type": "bullets",
+      "id": "why",
+      "layout": "split",
+      "heading": "Nega chegarada?",
+      "items": [
+        "Tashqi maʼlumot gumonli",
+        "Turlar ish vaqtida yoʻq",
+        "Bitta sxema — ikki vazifa"
+      ],
+      "transition": "push"
+    },
+    {
+      "type": "diagram",
+      "id": "flow",
+      "heading": "Soʻrov yoʻli",
+      "nodes": [
+        {
+          "id": "client",
+          "label": "Mijoz",
+          "detail": "brauzer / ilova"
+        },
+        {
+          "id": "api",
+          "label": "API",
+          "detail": "Hono",
+          "tone": "accent"
+        },
+        {
+          "id": "zod",
+          "label": "Zod",
+          "detail": "strictObject",
+          "tone": "success"
+        },
+        {
+          "id": "db",
+          "label": "Maʼlumotlar bazasi",
+          "detail": "Postgres",
+          "tone": "muted"
+        }
+      ],
+      "edges": [
+        {
+          "from": "client",
+          "to": "api",
+          "label": "JSON"
+        },
+        {
+          "from": "api",
+          "to": "zod",
+          "label": "parse"
+        },
+        {
+          "from": "zod",
+          "to": "db",
+          "label": "toza maʼlumot"
+        }
+      ],
+      "steps": [
+        {
+          "nodes": [
+            "api",
+            "zod"
+          ],
+          "label": "Tekshiruv chegarada bajariladi"
+        }
+      ],
+      "transition": "wipe"
+    },
+    {
+      "type": "compare",
+      "id": "before-after",
+      "heading": "Tekshiruvdan oldin va keyin",
+      "mode": "beforeAfter",
+      "left": {
+        "title": "Oldin",
+        "items": [
+          "Qoʻlda if-lar",
+          "Xato matnlari har xil",
+          "Turlar sxemadan alohida"
+        ]
+      },
+      "right": {
+        "title": "Keyin",
+        "items": [
+          "Bitta sxema",
+          "Aniq xato yoʻli",
+          "Tur sxemadan olinadi"
+        ]
+      },
+      "verdict": "Kod qisqaradi, xatolar aniqlashadi.",
+      "transition": "zoom"
+    },
+    {
+      "type": "stat",
+      "id": "numbers",
+      "heading": "Natija",
+      "stats": [
+        {
+          "value": 38,
+          "suffix": "%",
+          "label": "kamroq xato",
+          "note": "birinchi oyda"
+        },
+        {
+          "value": 12,
+          "suffix": "ms",
+          "label": "tekshiruv vaqti"
+        },
+        {
+          "value": 100,
+          "suffix": "%",
+          "label": "chegara qamrovi"
+        }
+      ]
+    },
+    {
+      "type": "steps",
+      "id": "how",
+      "heading": "Joriy qilish tartibi",
+      "items": [
+        {
+          "title": "Sxemani yozing",
+          "detail": "z.strictObject bilan"
+        },
+        {
+          "title": "Chegarada tekshiring",
+          "detail": "safeParse natijasini oling"
+        },
+        {
+          "title": "Xatoni qaytaring",
+          "detail": "yoʻl va tuzatish bilan"
+        }
+      ],
+      "transition": "push"
+    },
+    {
+      "type": "codeDiff",
+      "id": "diff",
+      "language": "typescript",
+      "fileName": "route.ts",
+      "diff": " app.post(\"/posts\", async (c) => {\n-  const body = await c.req.json();\n-  if (!body.title) return c.text(\"xato\", 400);\n+  const body = Post.safeParse(await c.req.json());\n+  if (!body.success) return c.json(body.error, 400);\n   return c.json(await save(body.data));\n });",
+      "label": "Qoʻlda tekshiruv oʻrniga bitta sxema"
+    },
+    {
+      "type": "quote",
+      "id": "quote",
+      "quote": "Chegarada ishonma, ichkarida ishon.",
+      "author": "Abduaziz",
+      "role": "abdusoft blog"
+    },
+    {
+      "type": "closing",
+      "id": "closing",
+      "variant": "aurora",
+      "cta": "Toʻliq maqolani oʻqing",
+      "url": "blog.abdusoft.uz"
+    }
+  ]
+}

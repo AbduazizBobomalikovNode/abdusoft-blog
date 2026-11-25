@@ -80,12 +80,12 @@ describe("intro and closing", () => {
     expect(only(base([{ type: "closing", cta: "c", url: "a.uz", subtitle: "x" }])).message).toContain("allowed keys: type, id, durationSeconds, transition, variant, siteName, cta, url");
   });
 
-  it("have a 3.5-8 s automatic length, and the closing holds one loop period", () => {
+  it("have a 3.5-6 s automatic length (plus the transition overlap), and the closing holds one loop period", () => {
     const r = ok([{ type: "intro", title: "Salom dunyo" }, { type: "closing", cta: "Oʻqing", url: "abdusoft.uz" }], { defaultTransition: "fade" });
     const [a, b] = r.timeline.scenes;
     for (const s of [a, b]) {
       expect((s?.durationFrames ?? 0) / FPS).toBeGreaterThanOrEqual(3.5);
-      expect((s?.durationFrames ?? 0) / FPS).toBeLessThanOrEqual(8);
+      expect((s?.durationFrames ?? 0) / FPS).toBeLessThanOrEqual(6.5);
     }
     expect(a?.loop).toBeNull();
     expect(b?.loop).toEqual({ startFrame: (b?.endFrame ?? 0) - LOOP_FRAMES, frames: LOOP_FRAMES });

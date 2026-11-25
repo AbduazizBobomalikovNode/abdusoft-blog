@@ -362,17 +362,18 @@ function planIntro(s: IntroScene): ContentPlan {
   const wordStep = 4;
   const titleDone = titleAt + words * wordStep + 22;
   const subtitleAt = titleDone - 6;
-  let t = s.subtitle ? subtitleAt + 22 : titleDone - 4;
+  const tagStart = s.subtitle ? subtitleAt + 12 : titleDone - 4;
   const tagAt: number[] = [];
-  for (let i = 0; i < (s.tags?.length ?? 0); i++) tagAt.push(t + i * 5);
-  t = (tagAt.at(-1) ?? t) + 18;
-  const done = Math.max(78, t);
+  for (let i = 0; i < (s.tags?.length ?? 0); i++) tagAt.push(tagStart + i * 4);
+  const settled = Math.max(titleDone + 12, s.subtitle ? subtitleAt + 24 : 0, (tagAt.at(-1) ?? 0) + 16);
+  const done = Math.max(78, settled);
   const read = readFrames(s.title.length + (s.subtitle?.length ?? 0));
   return {
     content: { type: "intro", variant: s.variant ?? "aurora", kickerAt, titleAt, wordStep, subtitleAt, tagAt },
     doneAt: done,
-    hold: Math.max(sec(1.2), read - done + sec(0.6)),
-    clampSeconds: [3.5, 8],
+    // reading time asks for more, but an opener never drags: 1-2 s after it settles
+    hold: Math.min(sec(2), Math.max(sec(1), read - done + sec(0.6))),
+    clampSeconds: [3.5, 6],
     previewAt: done + 4,
   };
 }
