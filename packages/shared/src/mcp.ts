@@ -26,6 +26,9 @@ export interface McpScopeInfo {
   english: string;
 }
 
+/** Video render ruxsati: faqat `VIDEO_ENABLED` YOQILGANDA (va yozuv kaliti ham yoqilgan bo'lsa) beriladi. */
+export const MCP_VIDEO_SCOPE_ID = "video:render";
+
 export const MCP_SCOPES: readonly McpScopeInfo[] = [
   {
     id: "blog:read",
@@ -48,6 +51,13 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     label: "Media yuklash",
     description: "Rasmlarni media kutubxonasiga yuklash va ularning alt matnini o'zgartirish.",
     english: "Upload images to the media library and edit their alt text.",
+  },
+  {
+    id: MCP_VIDEO_SCOPE_ID,
+    group: "write",
+    label: "Video yaratish",
+    description: "Qisqa animatsiyali tushuntirish videosini (storyboard asosida) tayyorlash: ko'rik kadrlari, MP4 va GIF render qilish, ularni ro'yxatlash, bekor qilish va o'chirish. Hech narsani chop etmaydi.",
+    english: "Make short animated explainer videos from a storyboard: render preview frames, MP4 and GIF files, list, cancel and delete them. Publishes nothing.",
   },
   {
     id: "posts:publish",
@@ -97,17 +107,18 @@ export const MCP_REQUIRED_SCOPE_ID = "blog:read";
  * `true` — barcha yozuv ruxsatlari ham. Mavjud (faqat o'qish) rozilik o'z-o'zidan kengaymaydi: yangi ruxsat so'ralsa
  * server yangi rozilik talab qiladi.
  */
-export function grantableScopeIds(writeEnabled = false): readonly string[] {
-  return writeEnabled ? MCP_SCOPE_IDS : MCP_GRANTABLE_SCOPE_IDS;
+export function grantableScopeIds(writeEnabled = false, videoEnabled = false): readonly string[] {
+  if (!writeEnabled) return MCP_GRANTABLE_SCOPE_IDS;
+  return videoEnabled ? MCP_SCOPE_IDS : MCP_SCOPE_IDS.filter((id) => id !== MCP_VIDEO_SCOPE_ID);
 }
 
-export function grantableOAuthScopes(writeEnabled = false): readonly string[] {
-  return [...grantableScopeIds(writeEnabled), MCP_OFFLINE_SCOPE];
+export function grantableOAuthScopes(writeEnabled = false, videoEnabled = false): readonly string[] {
+  return [...grantableScopeIds(writeEnabled, videoEnabled), MCP_OFFLINE_SCOPE];
 }
 
 /** `scope` ro'yxatini berilishi mumkin bo'lganlarga qisqartiradi (takrorlarsiz, tartib saqlanadi). */
-export function clampToGrantable(scopes: readonly string[], writeEnabled = false): string[] {
-  const allowed = grantableOAuthScopes(writeEnabled);
+export function clampToGrantable(scopes: readonly string[], writeEnabled = false, videoEnabled = false): string[] {
+  const allowed = grantableOAuthScopes(writeEnabled, videoEnabled);
   return [...new Set(scopes.filter((scope) => allowed.includes(scope)))];
 }
 
