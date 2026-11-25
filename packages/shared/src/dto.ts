@@ -576,6 +576,8 @@ export const AdminPostDetailSchema = z.object({
   telegram: TelegramRefSchema.nullable().default(null),
   createdBy: PostAuthorRefSchema.nullable().default(null),
   updatedBy: PostAuthorRefSchema.nullable().default(null),
+  /** Oxirgi o'zgarish qaysi kanaldan (`web` | `mcp` | `telegram` | `scheduler` | `system`); eski qatorlarda `null`. */
+  updatedVia: z.string().nullable().default(null),
   reviewNote: z.string().nullable().default(null),
   submittedAt: z.string().nullable().default(null),
   reviewedBy: PostAuthorRefSchema.nullable().default(null),
@@ -597,6 +599,11 @@ export const UpdatePostBodySchema = z.object({
   channelPlan: ChannelPlanSchema.nullable().optional(),
   /** Ixtiyoriy: oxirgi olingan `updatedAt`; bazadagidan farq qilsa `409` va hech narsa o'zgarmaydi. */
   expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
+  /**
+   * Ixtiyoriy: `true` — yozishdan oldin joriy holat (oraliq/aktyor qoidasidan qat'i nazar) revision sifatida saqlanadi.
+   * Admin panel "meniki bilan almashtirish"da ishlatadi: boshqa joyda yozilgan versiya Tarixdan yo'qolmasin. Maydon EMAS.
+   */
+  snapshot: z.boolean().optional(),
 });
 export type UpdatePostBody = z.infer<typeof UpdatePostBodySchema>;
 
@@ -607,6 +614,8 @@ export const SubmitPostResponseSchema = z.object({
   id: z.string(),
   status: AdminPostStatusSchema,
   submittedAt: z.string().nullable(),
+  /** Yuborishdan keyingi `updatedAt` — mijoz keyingi so'rovlarda `expectedUpdatedAt` sifatida ishlatadi. */
+  updatedAt: z.string().optional(),
 });
 export type SubmitPostResponse = z.infer<typeof SubmitPostResponseSchema>;
 
