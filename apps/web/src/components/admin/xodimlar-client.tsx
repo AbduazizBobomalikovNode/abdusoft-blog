@@ -184,13 +184,13 @@ function PasswordLinkDialog({
             bo&apos;lmaydi. Xodimga xavfsiz kanal orqali yuboring.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
           <code className="min-w-0 flex-1 truncate text-xs">{link?.url}</code>
           <Button type="button" size="icon-sm" variant="outline" onClick={() => void handleCopy()} aria-label="Nusxalash">
             {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
           </Button>
         </div>
-        <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+        <ul className="min-w-0 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
           <li>Havola {link ? formatDateTime(link.expiresAt) : ""} gacha amal qiladi va faqat bir marta ishlaydi.</li>
           <li>Xodim yangi parol o&apos;rnatgach, uning barcha qurilmalardagi sessiyalari tugatiladi.</li>
           <li>Oldingi parol havolalari bekor qilindi.</li>
@@ -252,13 +252,20 @@ function StaffRow({ member, onRemoved }: { member: StaffMember; onRemoved: (id: 
         <span className="font-medium">{member.name ?? member.email}</span>
       </TableCell>
       <TableCell className="text-sm text-muted-foreground">{member.email}</TableCell>
-      <TableCell className="text-sm text-muted-foreground">{member.postsCount}</TableCell>
-      <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(member.addedAt)}</TableCell>
+      <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">{member.postsCount}</TableCell>
+      <TableCell className="hidden text-xs whitespace-nowrap text-muted-foreground sm:table-cell">{formatDateTime(member.addedAt)}</TableCell>
       <TableCell>
         <div className="flex items-center gap-1.5">
-          <Button variant="outline" size="sm" disabled={linkBusy} onClick={() => void handlePasswordLink()}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={linkBusy}
+            aria-label="Parol havolasi yaratish"
+            title="Parol havolasi yaratish"
+            onClick={() => void handlePasswordLink()}
+          >
             <KeyRound className="size-3.5" aria-hidden="true" />
-            {linkBusy ? "Yaratilmoqda…" : "Parol havolasi"}
+            <span className="hidden sm:inline">{linkBusy ? "Yaratilmoqda…" : "Parol havolasi"}</span>
           </Button>
           <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
             Olib tashlash
@@ -393,8 +400,8 @@ export function XodimlarClient({
                 <TableRow>
                   <TableHead>Ism</TableHead>
                   <TableHead>Email</TableHead>
-                  <TableHead>Postlar</TableHead>
-                  <TableHead>Qo&apos;shilgan</TableHead>
+                  <TableHead className="hidden sm:table-cell">Postlar</TableHead>
+                  <TableHead className="hidden sm:table-cell">Qo&apos;shilgan</TableHead>
                   <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
