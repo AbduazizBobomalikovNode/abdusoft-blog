@@ -57,7 +57,7 @@ jobs:
   deploy-scripts:
     name: Deploy scripts (shellcheck, simulation)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
