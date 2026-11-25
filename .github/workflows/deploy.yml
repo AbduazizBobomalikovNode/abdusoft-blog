@@ -1,0 +1,369 @@
+name: Deploy
+
+# Production'ga deploy. Batafsil: docs/deploy.md
+#
+# Oqim: `CI` main'da muvaffaqiyatli tugagach (yoki qo'lda, ixtiyoriy `sha` bilan)
+#   1) build job — GitHub runner'da hamma narsa build qilinadi, bundle yig'iladi
+#      (yozish huquqi va SSH kalit YO'Q);
+#   2) deploy job — bundle `deploy-builds` pre-release'ga yuklanadi va cheklangan
+#      SSH kalit orqali serverga FAQAT commit SHA yuboriladi; server bundle'ni
+#      o'zi yuklab oladi, tekshiradi va almashtiradi.
+#
+# Pull request'lar (fork va Dependabot ham) bu workflow'ni ISHGA TUSHIRA OLMAYDI:
+#   - `pull_request` triggeri yo'q; `workflow_run` faqat CI'ning `push` hodisasi
+#     (main) uchun o'tadi — PR'dagi CI `pull_request` hodisasi bo'lgani uchun
+#     gate job uni rad etadi;
+#   - `workflow_run` va `workflow_dispatch` workflow faylini DEFAULT branch'dan
+#     (main) oladi, PR'dagi o'zgargan nusxani emas;
+#   - sirlar `production` environment'da, u faqat `main` branch'iga ochiq.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Deploy qilinadigan main commit'i (40 belgili SHA). Bo'sh bo'lsa — main'ning oxirgi commit'i. Eski SHA = qo'lda rollback."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # gate: sirlarsiz va environment'siz. Deploy sozlanmagan bo'lsa — toza o'tkazib yuboradi.
+  # ---------------------------------------------------------------------------
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.g.outputs.enabled }}
+      sha: ${{ steps.g.outputs.sha }}
+    steps:
+      - id: g
+        env:
+          DEPLOY_ENABLED: ${{ vars.DEPLOY_ENABLED }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          DISPATCH_SHA: ${{ inputs.sha }}
+          DEFAULT_SHA: ${{ github.sha }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          skip() { echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "::notice title=Deploy o'tkazib yuborildi::$1"; exit 0; }
+
+          if [ "$EVENT" = "workflow_run" ]; then
+            [ "$RUN_CONCLUSION" = "success" ] || skip "CI muvaffaqiyatli tugamagan ($RUN_CONCLUSION)."
+            [ "$RUN_EVENT" = "push" ] || skip "CI '$RUN_EVENT' hodisasidan ishga tushgan (faqat main'ga push deploy qilinadi)."
+            [ "$RUN_BRANCH" = "main" ] || skip "CI '$RUN_BRANCH' branch'ida ishlagan."
+            [ "$RUN_REPO" = "$REPO" ] || skip "CI boshqa repository'dan (fork) ishlagan."
+            SHA="$RUN_SHA"
+          else
+            [ "$REF" = "refs/heads/main" ] || skip "Qo'lda deploy faqat main branch'idan ishga tushiriladi (hozir: $REF)."
+            SHA="${DISPATCH_SHA:-$DEFAULT_SHA}"
+          fi
+
+          if [ "${#SHA}" -ne 40 ] || [[ "$SHA" == *[!0-9a-f]* ]]; then
+            echo "::error title=Noto'g'ri SHA::SHA 40 belgili kichik hex bo'lishi kerak."
+            exit 1
+          fi
+
+          if [ "$DEPLOY_ENABLED" != "true" ]; then
+            skip "Deploy hali sozlanmagan: repository variable DEPLOY_ENABLED='true' emas. Sozlash: docs/deploy.md."
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Deploy qilinadi: $SHA"
+
+  # ---------------------------------------------------------------------------
+  # build: runner'da install + build + bundle. Na yozish huquqi, na SSH kalit.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build bundle
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      contents: read
+    env:
+      DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
+      # NEXT_PUBLIC_* build vaqtida bundle ichiga yoziladi — shuning uchun ular
+      # environment VARIABLES'dan (sir EMAS, ochiq qiymatlar) olinadi.
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+      NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+      NEXT_PUBLIC_SITE_NAME: ${{ vars.NEXT_PUBLIC_SITE_NAME }}
+      NEXT_PUBLIC_TELEGRAM_URL: ${{ vars.NEXT_PUBLIC_TELEGRAM_URL }}
+      NEXT_PUBLIC_GITHUB_URL: ${{ vars.NEXT_PUBLIC_GITHUB_URL }}
+      NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+      NEXT_PUBLIC_GITHUB_LOGIN: ${{ vars.NEXT_PUBLIC_GITHUB_LOGIN }}
+      NEXT_PUBLIC_UMAMI_SCRIPT_URL: ${{ vars.NEXT_PUBLIC_UMAMI_SCRIPT_URL }}
+      NEXT_PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.NEXT_PUBLIC_UMAMI_WEBSITE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Commit main tarkibida ekanini tekshirish
+        run: |
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/main \
+            || { echo "::error::$DEPLOY_SHA origin/main tarkibida emas — deploy rad etildi."; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # pnpm versiyasi root package.json'dagi "packageManager" maydonidan olinadi.
+      - name: Install pnpm
+        run: npm install -g "pnpm@$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+
+      - name: Production ochiq qiymatlarini tekshirish
+        run: |
+          set -euo pipefail
+          for v in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_SITE_NAME; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error title=Environment variable yo'q::$v 'production' environment variables'da sozlanmagan (docs/deploy.md)."
+              exit 1
+            fi
+          done
+          for v in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL; do
+            case "${!v}" in
+              https://localhost* | https://127.* | https://*.local) echo "::error::$v lokal manzilga ishora qiladi."; exit 1 ;;
+              https://*) ;;
+              *) echo "::error::$v https:// bilan boshlanishi kerak."; exit 1 ;;
+            esac
+          done
+          echo "Ochiq qiymatlar joyida (API: $NEXT_PUBLIC_API_URL, sayt: $NEXT_PUBLIC_SITE_URL)."
+
+      # Next build prerender paytida API'dan ma'lumot oladi (/site, /tags,
+      # /posts/feed, /posts?...). apps/web/src/lib/api.ts tarmoq xatosini
+      # "yumshoq" 503 qilib yutadi — ya'ni API ishlamasa BO'SH sahifalar bilan
+      # build "muvaffaqiyatli" tugab, deploy qilinib ketar edi. Shuning uchun
+      # build'dan oldin shu GET so'rovlarni o'zimiz tekshiramiz (faqat o'qish).
+      - name: Production API oldindan tekshiruvi (faqat GET)
+        run: |
+          set -euo pipefail
+          base="${NEXT_PUBLIC_API_URL%/}"
+          check() {
+            local code
+            code="$(curl -sS -o "$RUNNER_TEMP/api.json" -w '%{http_code}' --max-time 20 \
+              --retry 3 --retry-delay 5 --retry-all-errors "$base$1" || true)"
+            if [ "$code" != "200" ]; then
+              echo "::error title=API javob bermadi::GET $1 -> HTTP $code. Build to'xtatildi (bo'sh sahifalar deploy qilinmasligi uchun)."
+              exit 1
+            fi
+          }
+          for p in /health /site /tags "/posts?page=1&limit=50"; do
+            check "$p"
+            echo "ok: GET $p"
+          done
+          check /posts/feed
+          jq -e '.items | type == "array"' "$RUNNER_TEMP/api.json" > /dev/null \
+            || { echo "::error::/posts/feed kutilmagan formatda."; exit 1; }
+          echo "FEED_COUNT=$(jq '.items | length' "$RUNNER_TEMP/api.json")" >> "$GITHUB_ENV"
+          echo "ok: GET /posts/feed ($(jq '.items | length' "$RUNNER_TEMP/api.json") ta post)"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          pnpm --filter @blog/shared build
+          pnpm --filter @blog/api build
+          pnpm --filter @blog/web build
+
+      # Build natijasi bo'sh emasligini tekshirish (API soft-fail'idan himoya).
+      - name: Build natijasini tekshirish
+        run: |
+          set -euo pipefail
+          app=apps/web/.next/server/app
+          [ -f "$app/haqida.html" ] || { echo "::error::prerender natijasi (haqida.html) yo'q."; exit 1; }
+          locs="$(grep -o '<loc>' "$app/sitemap.xml.body" | wc -l | tr -d ' ')"
+          [ "$locs" -ge 3 ] || { echo "::error::sitemap.xml bo'sh ko'rinadi ($locs ta <loc>)."; exit 1; }
+          if [ "${FEED_COUNT:-0}" -gt 0 ]; then
+            items="$(grep -o '<item>' "$app/rss.xml.body" | wc -l | tr -d ' ')"
+            [ "$items" -ge 1 ] || { echo "::error::API'da ${FEED_COUNT} ta post bor, lekin rss.xml bo'sh — build rad etildi."; exit 1; }
+          fi
+          echo "Build natijasi mantiqiy: sitemap <loc>=$locs, feed=${FEED_COUNT:-0}"
+
+      - name: Bundle yig'ish (+ sir tekshiruvi)
+        run: ./scripts/make-deploy-bundle.sh "$DEPLOY_SHA" "$RUNNER_TEMP/bundle"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deploy-bundle
+          path: ${{ runner.temp }}/bundle/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # deploy: bundle'ni release'ga yuklaydi va serverga FAQAT SHA yuboradi.
+  # Yozish huquqi va SSH kalit faqat shu job'da; dependency kodi bu job'da ishlamaydi.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Publish and deploy
+    needs: [gate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: write
+    # Navbatga qo'yiladi, ishlayotgan deploy BEKOR QILINMAYDI. (GitHub bitta
+    # kutayotgan run'ni saqlaydi — yangisi kelsa, eski kutayotgani almashtiriladi;
+    # bu CD uchun to'g'ri: eng yangi commit baribir oldingilarini ham o'z ichiga oladi.)
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: deploy-builds
+      KEEP_BUILDS: "5"
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deploy-bundle
+          path: bundle
+
+      # Kechroq tugagan eski run yangi deploy ustidan yozib yubormasligi uchun.
+      - name: Eskirgan run'ni o'tkazib yuborish
+        id: fresh
+        if: github.event_name == 'workflow_run'
+        run: |
+          tip="$(git ls-remote "https://github.com/$REPO.git" refs/heads/main | cut -f1)"
+          if [ "$tip" != "$DEPLOY_SHA" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=O'tkazib yuborildi::main'da yangiroq commit bor ($tip) — $DEPLOY_SHA deploy qilinmadi. Kerak bo'lsa, workflow_dispatch bilan qo'lda ishga tushiring."
+          fi
+
+      - name: Bundle yaxlitligini tekshirish
+        id: bundle
+        if: steps.fresh.outputs.stale != 'true'
+        run: |
+          set -euo pipefail
+          cd bundle
+          name="abdusoft-blog-$DEPLOY_SHA.tar.gz"
+          [ -f "$name" ] && [ -f "$name.sha256" ] || { echo "::error::bundle fayllari yo'q"; exit 1; }
+          sum="$(sha256sum "$name" | cut -d' ' -f1)"
+          [ "$sum" = "$(cut -d' ' -f1 < "$name.sha256")" ] || { echo "::error::bundle checksum mos emas"; exit 1; }
+          [ "$(tar -xzOf "$name" MANIFEST.json | jq -r .commit)" = "$DEPLOY_SHA" ] || { echo "::error::manifest commit mos emas"; exit 1; }
+          echo "sha256=$sum" >> "$GITHUB_OUTPUT"
+          echo "Bundle: $(du -h "$name" | cut -f1), sha256 $sum"
+
+      - name: Bundle'ni deploy-builds release'ga yuklash
+        if: steps.fresh.outputs.stale != 'true'
+        run: |
+          set -euo pipefail
+          name="abdusoft-blog-$DEPLOY_SHA.tar.gz"
+          if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --target "$DEPLOY_SHA" \
+              --prerelease --latest=false \
+              --title "Deploy builds (texnik — o'chirmang)" \
+              --notes "Server deploy qilish uchun workflow yig'gan build bundle'lar (oxirgi ${KEEP_BUILDS} ta). Qo'lda yuklamang. Batafsil: docs/deploy.md"
+          fi
+          gh release upload "$TAG" --repo "$REPO" --clobber "bundle/$name" "bundle/$name.sha256"
+
+          # Eski bundle'larni tozalash: oxirgi KEEP_BUILDS ta commit qoladi.
+          gh api "repos/$REPO/releases/tags/$TAG" \
+            --jq '.assets | sort_by(.created_at) | reverse | .[] | [.id, .name] | @tsv' > "$RUNNER_TEMP/assets.tsv"
+          kept=""
+          n=0
+          while IFS=$'\t' read -r id aname; do
+            base="${aname%.sha256}"
+            case " $kept " in *" $base "*) continue ;; esac
+            n=$((n + 1))
+            if [ "$n" -le "$KEEP_BUILDS" ]; then kept="$kept $base"; continue; fi
+          done < "$RUNNER_TEMP/assets.tsv"
+          while IFS=$'\t' read -r id aname; do
+            base="${aname%.sha256}"
+            case " $kept " in *" $base "*) ;; *) echo "o'chirilmoqda: $aname"; gh api -X DELETE "repos/$REPO/releases/assets/$id" ;; esac
+          done < "$RUNNER_TEMP/assets.tsv"
+
+      # Server aynan shu URL'dan (autentifikatsiyasiz) yuklaydi — biz ham shunday tekshiramiz.
+      - name: Ommaviy yuklab olinishini tekshirish
+        if: steps.fresh.outputs.stale != 'true'
+        env:
+          EXPECT: ${{ steps.bundle.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          name="abdusoft-blog-$DEPLOY_SHA.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+            -o "$RUNNER_TEMP/check.tar.gz" "https://github.com/$REPO/releases/download/$TAG/$name"
+          [ "$(sha256sum "$RUNNER_TEMP/check.tar.gz" | cut -d' ' -f1)" = "$EXPECT" ] \
+            || { echo "::error::ommaviy URL'dagi fayl yuklangan bundle'ga mos emas"; exit 1; }
+          echo "Ommaviy URL'dan yuklab olish OK"
+
+      - name: Serverga deploy buyrug'i (faqat SHA)
+        if: steps.fresh.outputs.stale != 'true'
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          BUNDLE_SHA256: ${{ steps.bundle.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          for v in DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS DEPLOY_SSH_KEY; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error title=Sozlanmagan::$v 'production' environment'da yo'q (docs/deploy.md)."
+              exit 1
+            fi
+          done
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::SHA formati noto'g'ri"; exit 1; }
+          [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::bundle sha256 formati noto'g'ri"; exit 1; }
+          port="${DEPLOY_PORT:-22}"
+          [[ "$port" =~ ^[0-9]{1,5}$ ]] || { echo "::error::DEPLOY_PORT noto'g'ri"; exit 1; }
+
+          install -d -m 700 "$HOME/.ssh"
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/deploy_known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/deploy_known_hosts"
+
+          # Serverga faqat "<sha> <bundle-sha256>" yuboriladi; kalit serverda
+          # forced-command bilan shu bitta amalga cheklangan.
+          ssh -T -i "$HOME/.ssh/deploy_key" \
+            -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/deploy_known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" "$DEPLOY_SHA $BUNDLE_SHA256"
+
+      - name: Kalitni o'chirish
+        if: always()
+        run: rm -f "$HOME/.ssh/deploy_key" "$HOME/.ssh/deploy_known_hosts"
+
+      # Faqat ogohlantirish: tashqi tarmoq/CDN muammosi deploy'ni "muvaffaqiyatsiz" qilmasin.
+      - name: Saytni tashqaridan tekshirish
+        if: steps.fresh.outputs.stale != 'true'
+        env:
+          SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: |
+          curl -fsS -o /dev/null --max-time 20 --retry 3 --retry-delay 5 "$SITE_URL/" \
+            && echo "Sayt tashqaridan ochiladi: $SITE_URL" \
+            || echo "::warning::Sayt tashqaridan tekshiruvdan o'tmadi ($SITE_URL) — server health check o'tgan bo'lsa ham qo'lda ko'ring."
+
+      - name: Xulosa
+        if: always() && steps.fresh.outputs.stale != 'true'
+        run: |
+          {
+            echo "### Deploy"
+            echo "- Commit: \`$DEPLOY_SHA\`"
+            echo "- Holat: \`${{ job.status }}\`"
+            echo "- Server holati: SSH orqali \`status\` buyrug'i (docs/deploy.md)"
+          } >> "$GITHUB_STEP_SUMMARY"
