@@ -25,7 +25,7 @@ async function tagSlugsOf(executor: Executor, postId: string): Promise<string[]>
 
 /**
  * Oddiy tahrirdan OLDIN surat kerakmi? Ha, agar: postda hali revision yo'q; oxirgisi `POST_REVISION_INTERVAL_MINUTES`dan
- * eski; yoki oxirgisini BOSHQA aktyor yoki BOSHQA kanal (`via`) yaratgan — shunda AI va inson tahrirlari bir-biriga qo'shilib ketmaydi.
+ * eski; yoki oxirgisini BOSHQA aktyor yoki BOSHQA kanal (`via`) yaratgan — shunda turli aktyorlar yoki manbalar (masalan veb panel va tashqi ilova) tahrirlari bir-biriga qo'shilib ketmaydi.
  */
 export async function shouldSnapshotForUpdate(executor: Executor, postId: string, actor: Actor, now: Date): Promise<boolean> {
   const [latest] = await executor

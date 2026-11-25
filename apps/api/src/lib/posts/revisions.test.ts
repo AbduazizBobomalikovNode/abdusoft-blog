@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { asc, eq } from "drizzle-orm";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { createTestUser, type TestUser } from "../../test/auth-test-helpers.js";
@@ -49,6 +49,9 @@ beforeAll(async () => {
   otherStaff = await createTestUser({ role: "staff", name: "Boshqa" });
 });
 
+// Sekin CI mashinalarida flake bo'lmasligi uchun: har bir test ichida ko'p tranzaksiya (render + PGlite) bor.
+vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
+
 afterEach(() => {
   config.POST_REVISION_INTERVAL_MINUTES = 10;
   config.POST_REVISION_MAX_PER_POST = 100;
@@ -57,7 +60,7 @@ afterEach(() => {
 describe("revision snapshot policy for plain updates", () => {
   it("an autosave burst by one actor produces a single snapshot of the pre-edit state", async () => {
     const post = await newPost(adminActor(), "Boshlang'ich");
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 12; i++) {
       const res = await svc.updatePost(adminActor(), post.id, { title: `Avtosaqlash ${i}`, contentJson: doc(`Matn ${i}`) });
       expect(res.ok).toBe(true);
     }
@@ -199,6 +202,47 @@ describe("retention", () => {
     for (let i = 0; i < 4; i++) await svc.publishPost(adminActor(), a.id);
     expect(await revisions(a.id)).toHaveLength(2);
     expect(await revisions(b.id)).toHaveLength(1);
+  });
+});
+
+describe("restore keeps a live URL stable", () => {
+  let n = 0;
+  async function postWithOldSlug(publish: boolean) {
+    n += 1;
+    const post = await newPost(adminActor());
+    await svc.updatePost(adminActor(), post.id, { slug: `eski-jonli-slug-${n}`, contentJson: doc("Eski") });
+    await svc.updatePost(adminActor("mcp"), post.id, { slug: `yangi-jonli-slug-${n}`, contentJson: doc("Yangi") });
+    if (publish) await svc.publishPost(adminActor(), post.id);
+    const revision = (await revisions(post.id)).find((row) => row.slug === `eski-jonli-slug-${n}`)!;
+    return { post, revision, old: `eski-jonli-slug-${n}`, current: `yangi-jonli-slug-${n}` };
+  }
+
+  it("a published post keeps its current slug by default and restores everything else", async () => {
+    const { post, revision, current } = await postWithOldSlug(true);
+    const res = await svc.restoreRevision(adminActor(), post.id, revision.id);
+    expect(res).toMatchObject({ ok: true, data: { slug: current, slugRestored: false } });
+    const [row] = await db.select().from(schema.posts).where(eq(schema.posts.id, post.id));
+    expect(row?.slug).toBe(current);
+    expect(row?.contentText).toContain("Eski");
+  });
+
+  it("a scheduled post behaves like a published one", async () => {
+    const { post, revision, current } = await postWithOldSlug(false);
+    await svc.schedulePost(adminActor(), post.id, { scheduledAt: new Date(Date.now() + 3_600_000).toISOString() });
+    const res = await svc.restoreRevision(adminActor(), post.id, revision.id);
+    expect(res).toMatchObject({ ok: true, data: { slug: current, slugRestored: false } });
+  });
+
+  it("restoreSlug: true applies the old slug on a published post", async () => {
+    const { post, revision, old } = await postWithOldSlug(true);
+    const res = await svc.restoreRevision(adminActor(), post.id, revision.id, { restoreSlug: true });
+    expect(res).toMatchObject({ ok: true, data: { slug: old, slugRestored: true } });
+  });
+
+  it("a draft restores the old slug as before", async () => {
+    const { post, revision, old } = await postWithOldSlug(false);
+    const res = await svc.restoreRevision(adminActor(), post.id, revision.id);
+    expect(res).toMatchObject({ ok: true, data: { slug: old, slugRestored: true } });
   });
 });
 

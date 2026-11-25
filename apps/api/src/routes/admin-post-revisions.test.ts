@@ -73,6 +73,23 @@ describe("revision endpoints", () => {
     expect(after.items[0]?.reason).toBe("restore-revision");
   });
 
+  it("restore keeps a published post's slug unless restoreSlug is true", async () => {
+    const created = await createPost(admin.cookie);
+    await patch(`/admin/posts/${created.id}`, admin.cookie, { slug: "http-eski-slug" });
+    await post(`/admin/posts/${created.id}/publish`, admin.cookie);
+    await patch(`/admin/posts/${created.id}`, admin.cookie, { slug: "http-yangi-slug" });
+    const list = (await (await get(`/admin/posts/${created.id}/revisions`, admin.cookie)).json()) as { items: { id: string; slug: string }[] };
+    const old = list.items.find((item) => item.slug === "http-eski-slug")!;
+
+    const kept = await post(`/admin/posts/${created.id}/revisions/${old.id}/restore`, admin.cookie);
+    expect(kept.status).toBe(200);
+    expect(await kept.json()).toMatchObject({ slug: "http-yangi-slug", slugRestored: false });
+
+    const restored = await post(`/admin/posts/${created.id}/revisions/${old.id}/restore`, admin.cookie, { restoreSlug: true });
+    expect(await restored.json()).toMatchObject({ slug: "http-eski-slug", slugRestored: true });
+    expect((await post(`/admin/posts/${created.id}/revisions/${old.id}/restore`, admin.cookie, { restoreSlug: "ha" })).status).toBe(400);
+  });
+
   it("returns 404 for malformed or unknown ids", async () => {
     const created = await createPost(admin.cookie);
     expect((await get("/admin/posts/not-a-uuid/revisions", admin.cookie)).status).toBe(404);

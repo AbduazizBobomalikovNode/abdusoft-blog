@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { createTestUser, type TestUser } from "../../test/auth-test-helpers.js";
 
@@ -172,5 +172,34 @@ describe("posts service — updated_by / updated_via on every transition", () =>
     const post = await newPost(adminActor());
     await svc.updatePost(svc.actorFromAdminUser({ id: admin.id, role: "admin" }, "mcp"), post.id, { title: "Yangi sarlavha" });
     expect(await stamp(post.id)).toMatchObject({ by: admin.id, via: "mcp" });
+  });
+});
+
+describe("scheduler isolates failures per post", () => {
+  it("one persistently failing post does not block the others, in this tick or the next", async () => {
+    const bad = await newPost(adminActor(), "Buzuq");
+    const good = await newPost(adminActor(), "Soz");
+    const when = new Date(Date.now() - 60_000).toISOString();
+    await svc.schedulePost(adminActor(), bad.id, { scheduledAt: when });
+    await svc.schedulePost(adminActor(), good.id, { scheduledAt: when });
+    // `bad` uchun chop etish doim xato beradi (DB cheklovi).
+    await db.execute(
+      sql.raw(`ALTER TABLE posts ADD CONSTRAINT scheduler_bad_post CHECK (id <> '${bad.id}'::uuid OR status <> 'published') NOT VALID`),
+    );
+    try {
+      await expect(svc.publishDuePosts()).resolves.toBeUndefined();
+      await expect(svc.publishDuePosts()).resolves.toBeUndefined();
+    } finally {
+      await db.execute(sql`ALTER TABLE posts DROP CONSTRAINT scheduler_bad_post`);
+    }
+    const [badRow] = await db.select().from(schema.posts).where(eq(schema.posts.id, bad.id));
+    const [goodRow] = await db.select().from(schema.posts).where(eq(schema.posts.id, good.id));
+    expect(badRow?.status).toBe("scheduled");
+    expect(goodRow?.status).toBe("published");
+
+    // Cheklov olingach, keyingi tick uni ham chop etadi.
+    await svc.publishDuePosts();
+    const [recovered] = await db.select().from(schema.posts).where(eq(schema.posts.id, bad.id));
+    expect(recovered?.status).toBe("published");
   });
 });
