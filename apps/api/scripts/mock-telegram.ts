@@ -59,6 +59,25 @@ app.post("/__fail", async (c) => {
   return c.json({ ok: true });
 });
 
+/** Testlar uchun: `POST /__chat-type {chatId, type}` — shu chat uchun `getChat` boshqa tur (`group`/`supergroup`/...) qaytaradi (null — o'chirish). */
+const chatTypeOverrides = new Map<string, string>();
+app.post("/__chat-type", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { chatId?: string | number; type?: string | null };
+  if (body.chatId !== undefined) {
+    if (body.type) chatTypeOverrides.set(String(body.chatId), body.type);
+    else chatTypeOverrides.delete(String(body.chatId));
+  }
+  return c.json({ ok: true });
+});
+
+/** Testlar uchun: `POST /__delay {method, ms}` — shu metod javobi `ms` millisekundga kechiktiriladi (0 — o'chirish). */
+const delays = new Map<string, number>();
+app.post("/__delay", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { method?: string; ms?: number };
+  if (body.method) delays.set(body.method, body.ms ?? 0);
+  return c.json({ ok: true });
+});
+
 app.get("/__calls", (c) => c.json({ calls }));
 app.delete("/__calls", (c) => {
   calls.length = 0;
@@ -124,6 +143,9 @@ app.post("/:botToken/:method", async (c) => {
     body = await c.req.json().catch(() => ({}));
   }
   record(method, c.req.path, body);
+
+  const delayMs = delays.get(method) ?? 0;
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
 
   const remainingFailures = failures.get(method) ?? 0;
   if (remainingFailures > 0) {
@@ -229,6 +251,12 @@ app.post("/:botToken/:method", async (c) => {
 
     case "getChat": {
       const chatIdRaw = body.chat_id as string | number;
+      // Musbat raqamli id (son yoki raqamli satr) — foydalanuvchining shaxsiy chati; `__chat-type` bilan almashtirish mumkin.
+      const asNumber = typeof chatIdRaw === "number" ? chatIdRaw : /^-?\d+$/.test(String(chatIdRaw)) ? Number(chatIdRaw) : NaN;
+      const forcedType = chatTypeOverrides.get(String(chatIdRaw));
+      if (forcedType || asNumber > 0) {
+        return c.json(ok({ id: asNumber, type: forcedType ?? "private", first_name: "Mock admin" }));
+      }
       const numericId = typeof chatIdRaw === "number" ? chatIdRaw : usernameToId(String(chatIdRaw));
       const username = typeof chatIdRaw === "string" ? chatIdRaw.replace(/^@/, "") : undefined;
       return c.json(
