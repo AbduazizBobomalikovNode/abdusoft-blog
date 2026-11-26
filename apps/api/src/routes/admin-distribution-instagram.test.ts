@@ -144,9 +144,9 @@ describe("Instagram connect flow", () => {
     const state = stateOf(await start());
     const res = await call(`/callback/instagram?code=AUTH-CODE-1&state=${state}`, admin.cookie);
     expect(res.headers.get("location")).toBe("https://blog.example.test/admin/sozlamalar?tab=tarqatish&dist=connected&provider=instagram");
-    const tokenCall = mock.calls.find((c) => c.host === GRAPH && c.path === "/v27.0/oauth/access_token")!;
+    const tokenCall = mock.calls.find((c) => c.host === GRAPH && new URL(c.url).pathname === "/v27.0/oauth/access_token")!;
     expect(tokenCall.method).toBe("GET");
-    expect(Object.fromEntries(tokenCall.search)).toEqual({ client_id: "meta-app-id", client_secret: META_SECRET, code: "AUTH-CODE-1", redirect_uri: "https://api.example.test/admin/distribution/callback/instagram" });
+    expect(Object.fromEntries(new URL(tokenCall.url).searchParams)).toEqual({ client_id: "meta-app-id", client_secret: META_SECRET, code: "AUTH-CODE-1", redirect_uri: "https://api.example.test/admin/distribution/callback/instagram" });
     const [row] = await db.select().from(s.distributionAccounts);
     expect(row).toMatchObject({ provider: "instagram", externalId: "IG1", username: "owner_ig", displayName: "owner_ig", accessTokenExpiresAt: null, refreshTokenEnc: null, status: "active" });
     expect(row!.meta).toEqual({ clientBusinessId: "BIZ1", accountCount: "1" });
