@@ -20,6 +20,7 @@ Commands
   schema [--out file.json]              print the storyboard JSON Schema
   stills <storyboard.json> --out <dir>  small JPEG previews (960x540); one per scene, or --at 1.5,4,9 (seconds)
   render <storyboard.json> --out <f.mp4>   silent H.264 MP4, 1920x1080 @ 30 fps
+  preflight [--out marker.json]         prove local rendering works on THIS machine (glibc >= 2.35, compositor starts, one tiny still); writes the marker the API's local backend requires
   browser [status|install]              status: is the headless browser installed (--json). install: download Chrome Headless Shell once (the ONLY command that downloads)
   gif <storyboard.json> --out <f.gif> [--from s --to s]
                                         GIF for short clips only (<= ${GIF_LIMITS.maxSeconds} s, ${GIF_LIMITS.maxWidth} px wide, ${GIF_LIMITS.fps} fps)
@@ -125,6 +126,21 @@ async function main(): Promise<number> {
     return 0;
   }
   if (command === "browser") return browserCommand();
+  if (command === "preflight") {
+    const { runPreflight } = await import("./preflight.ts");
+    const r = await runPreflight({ ...(values.browser ? { browserExecutable: values.browser } : {}), ...(values["cache-dir"] ? { cacheDir: values["cache-dir"] } : {}) });
+    for (const line of r.steps) log(line);
+    if (values.out) {
+      const target = path.resolve(values.out);
+      mkdirSync(path.dirname(target), { recursive: true });
+      if (r.ok) writeFileSync(target, `${JSON.stringify({ ok: true, at: new Date().toISOString(), glibc: r.glibc })}\n`);
+      else writeFileSync(target, `${JSON.stringify({ ok: false, at: new Date().toISOString(), glibc: r.glibc })}\n`);
+    }
+    if (json) print({ ok: r.ok, steps: r.steps, message: r.message });
+    if (!r.ok) log(`PREFLIGHT FAILED: ${r.message ?? ""}`);
+    else log("preflight passed: this machine can render locally.");
+    return r.ok ? 0 : 1;
+  }
   if (command !== "validate" && command !== "timeline" && command !== "stills" && command !== "render" && command !== "gif") usage(`unknown command "${command}"`);
 
   let text: string;

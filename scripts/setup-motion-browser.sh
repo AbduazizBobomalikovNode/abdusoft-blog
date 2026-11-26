@@ -6,6 +6,10 @@
 #   bash scripts/setup-motion-browser.sh --check    # faqat tekshiradi (hech narsa yuklamaydi/o'rnatmaydi)
 #   sudo bash scripts/setup-motion-browser.sh --install-deps   # Ubuntu/Debian: yetishmayotgan kutubxonalarni apt bilan o'rnatadi
 #
+# Faqat VIDEO_RUNNER=local uchun kerak (tavsiya etilgan `github` backendda serverda brauzer ham, bu skript ham KERAK EMAS).
+# Oxirida PREFLIGHT ishlaydi: glibc >= 2.35, compositor binari ishga tushishi va bitta kichik kadr render qilinishi tekshiriladi;
+# muvaffaqiyatli bo'lsa belgi fayl yoziladi (API'ning mahalliy backendi shu faylsiz hech qanday ishni boshlamaydi).
+# Muhit: VIDEO_DATA_DIR (belgi fayl shu yerda; bo'sh bo'lsa apps/api/.data/video), VIDEO_BROWSER_PATH (ixtiyoriy brauzer).
 # Hujjat: docs/video.md. Brauzer papkasi: packages/motion/node_modules/.remotion (git'da yo'q).
 set -Eeuo pipefail
 export LC_ALL=C
@@ -84,14 +88,24 @@ command -v "$NODE_BIN" >/dev/null 2>&1 || {
   exit 1
 }
 
+DATA_DIR="${VIDEO_DATA_DIR:-$ROOT/apps/api/.data/video}"
+BROWSER_ARGS=()
+[ -n "${VIDEO_BROWSER_PATH:-}" ] && BROWSER_ARGS=(--browser "$VIDEO_BROWSER_PATH")
+
 cd "$MOTION"
 if [ "$MODE" = check ]; then
-  exec "$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts browser status
+  "$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts browser status ${BROWSER_ARGS[@]+"${BROWSER_ARGS[@]}"}
+  exec "$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts preflight ${BROWSER_ARGS[@]+"${BROWSER_ARGS[@]}"}
 fi
 if "$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts browser status >/dev/null 2>&1; then
   echo "Brauzer allaqachon o'rnatilgan (qayta yuklanmadi)."
 else
   "$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts browser install
 fi
-"$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts browser status
-echo "Tayyor. API'da VIDEO_ENABLED=true qilib qayta ishga tushiring (docs/video.md)."
+"$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts browser status ${BROWSER_ARGS[@]+"${BROWSER_ARGS[@]}"}
+# Haqiqiy tekshiruv: bu mashinada render ishlaydimi (glibc, compositor, bitta kichik kadr). Yiqilsa — aniq xabar va 1 bilan chiqadi.
+if ! "$NODE_BIN" --disable-warning=ExperimentalWarning src/cli.ts preflight --out "$DATA_DIR/local-preflight.json" ${BROWSER_ARGS[@]+"${BROWSER_ARGS[@]}"}; then
+  echo "XATO: bu mashina mahalliy renderga yaramaydi (yuqoridagi xabarga qarang). Tavsiya: VIDEO_RUNNER=github (docs/video.md)." >&2
+  exit 1
+fi
+echo "Tayyor. API'da VIDEO_ENABLED=true va VIDEO_RUNNER=local qilib qayta ishga tushiring (docs/video.md)."
