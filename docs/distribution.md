@@ -88,7 +88,8 @@ Redirect URL uchun **vaqtinchalik yo'l**: `https://<API_ORIGIN>/distribution/cal
 4. Konfiguratsiyaga **Redirect URL**'ni kiriting: `https://api.abdusoft.uz/admin/distribution/callback/instagram` (panelda nusxalash tugmasi bor) va saqlang.
 5. **App roles** → akkauntingizni **Instagram Tester** sifatida taklif qiling va taklifni Instagram veb-saytida qabul qiling. Ilova Development rejimida qoladi (Standard Access app roli bor odamlar uchun yetarli; App Review kerak emas).
 6. Settings → Basic'dan **Meta App ID** va **Meta App Secret**'ni oling (Instagram'ga xos id/secret endi YO'Q). Panelda Instagram kartasiga uchalasini kiriting: Meta App ID, Meta App Secret, Config ID → "Kalitlarni saqlash" → "Ulash" (yoki env: `DISTRIBUTION_INSTAGRAM_CLIENT_ID` = App ID, `DISTRIBUTION_INSTAGRAM_CLIENT_SECRET` = App Secret, `DISTRIBUTION_INSTAGRAM_CONFIG_ID`).
-7. Loginda Instagram akkauntni tanlang. Birinchi muvaffaqiyatli ulanishdan keyin kartada akkaunt nomi va "Token muddatsiz" ko'rinadi.
+6a. Config ID faqat **raqamlardan** iborat (1–32 ta raqam); boshqacha qiymat saqlanmaydi ("Config ID faqat raqamlardan iborat bo'lishi kerak").
+7. Loginda **aynan bitta** Instagram akkauntni tanlang: konfiguratsiya bir nechta akkauntga ruxsat bersa, ulanish rad etiladi (`multiple_instagram_accounts`; foydalanuvchi nomlari faqat jurnaldagi xavfsiz xabarda, URL'da emas). Birinchi muvaffaqiyatli ulanishdan keyin kartada akkaunt nomi va "Token muddatsiz" ko'rinadi.
 8. Rasm: **ommaviy HTTPS JPEG URL**; nisbat 4:5 – 1.91:1; ≤ 8 MB. Captionda havola bosilmaydi.
 9. **Webhook**: Meta hujjati webhook endpoint'ni "kerak" deb ro'yxatlaydi, lekin faqat xabar/izoh kabi hodisalarni QABUL QILISH uchun; ulanish va post yuborish uchun hujjatda webhook sharti yo'q. Bu integratsiya webhook qo'shmaydi (xabarlar — ko'lamdan tashqari).
 
@@ -96,6 +97,18 @@ Redirect URL uchun **vaqtinchalik yo'l**: `https://<API_ORIGIN>/distribution/cal
 1. `github.com/<login>/<login>` (public) repo'sida README.md bo'lsin.
 2. README'ga ikki marker qo'shing (yuqoridagi).
 3. Settings → Developer settings → Fine-grained token: faqat shu repo, **Contents: Read and write**; muddatni tanlang va kalendarga yozing.
+
+**Instagram ulanish xato kodlari** (URL'dagi `reason`; matn mijozdagi qat'iy jadvaldan):
+
+| `reason` | Qachon | Matn (qisqacha) |
+|---|---|---|
+| `denied` | login bekor qilindi (`access_denied`/`user_denied`) | Platformada ruxsat berilmadi yoki bekor qilindi |
+| `login_failed` | Meta login oynasi boshqa xato bilan tugadi | Meta App ID, Config ID va Redirect URL'ni tekshiring |
+| `config_invalid` | Config ID noto'g'ri/o'chirilgan (Meta xabarida "config") | Konfiguratsiyani tekshiring |
+| `exchange_failed` | kod -> token almashtirish xatosi | Client ID/Secret va redirect URL'ni tekshiring |
+| `account_lookup_failed` | akkauntlarni o'qib bo'lmadi yoki id noto'g'ri shaklda | `instagram_basic` ruxsatini tekshiring |
+| `no_instagram_account` | akkauntlar ro'yxati bo'sh | Akkauntni tanlang va Instagram Tester qiling |
+| `multiple_instagram_accounts` | ro'yxatda 1 tadan ko'p akkaunt | Aynan bittasini tanlang va qaytadan ulang |
 
 ### 5. Token muddatlari
 
@@ -143,11 +156,12 @@ LinkedIn API Terms of Use §3.1 (oxirgi tahrir 2022-12-13) taqiqlar ro'yxatida: 
 | 14 | Threads | Havola belgilari 500 limitga kiradimi | `threadsLength` |
 | 15 | Threads | Xato kodlari 32, 613, 100 (hujjatda yo'q); `reply_control` | `graph.ts` |
 | 16 | Threads | `permalink` maydoni; eski hostlar (`threads.net`) holati | `publish` |
-| 17 | Instagram | `assigned_instagram_accounts` javobining `data[]` shakli (hujjat faqat so'rovni ko'rsatadi); bir nechta akkaunt bo'lsa birinchisi olinadi; `client_business_id` javob maydoni | `exchangeCode` |
+| 17 | Instagram | `assigned_instagram_accounts` javobining `data[]` shakli (hujjat faqat so'rovni ko'rsatadi); bir nechta akkaunt bo'lsa ulanish RAD ETILADI (`multiple_instagram_accounts`, hech narsa saqlanmaydi); `client_business_id` javob maydoni | `exchangeCode` |
 | 18 | Instagram | `permalink` maydoni; havolalar bosilmasligining rasmiy tasdig'i | `publish` |
 | 19 | Instagram | 100 vs 50 post/kun ziddiyati; caption sanash birligi; xato kodlari | `INSTAGRAM_POSTS_PER_DAY` |
 | 22 | Instagram | Dialog `state`'ni `config_id` bilan ham qaytaradimi (umumiy Facebook Login hujjati: ha; Unified Login sahifasi aytmaydi) | `buildAuthorizationUrl` |
 | 23 | Instagram | Kod almashtirishda `redirect_uri`: Unified Login sahifasi ro'yxatda ko'rsatmaydi, qo'lda login hujjati "majburiy" deydi — standart YUBORILADI (`exchangeRedirectUri`) | `exchangeCode` |
+| 27 | Instagram | Meta id'lari (akkaunt, konteyner, post) faqat raqam deb olingan (≤ 32) va URL yo'liga qo'yilishidan oldin tekshiriladi; Meta uzun/harfli id qaytarsa ulanish yoki yuborish to'xtaydi (post id'si `media_publish`dan keyin yaroqsiz bo'lsa `outcome_unknown` — qayta urinilmaydi) | `isGraphId` |
 | 24 | Instagram | Bekor qilish: `error=access_denied`, `error_reason=user_denied` (qo'lda login hujjati); noto'g'ri `config_id` da Meta xatosi qanday qaytishi (matnda "config" bo'lsa `config_invalid`) | `completeConnect`, `withConfigReason` |
 | 25 | Instagram | Token boshqaruvi API'si (yangilash/uzaytirish) ishlatilmaydi; 60 kunlik konfiguratsiyada token tugagach qayta ulash | `INSTAGRAM_TOKEN_POLICY` |
 | 26 | Instagram | Caption limiti (2200/30/20), rasm hajmi/nisbati, `permalink`, o'chirishning yo'qligi — yangi hujjatda aytilmagan (eski reference'dan); `content_publishing_limit` endpoint'i mavjud, lekin ishlatilmaydi | `INSTAGRAM_CAPTION_MAX`, `publish` |
@@ -254,6 +268,10 @@ See the Uzbek section 4 for the step-by-step list per platform (developer app, p
 ### 5. Terms of service
 
 LinkedIn API Terms of Use §3.1 (last revised 2022-12-13) lists: "Use the Content or the APIs to automate posting on the LinkedIn Services." Whether posting to your own profile on your explicit instruction falls under it is not spelled out (UNVERIFIED). The integration will only post when the owner or their assistant explicitly triggers it, never automatically on publish.
+
+### 4b. Instagram connection errors
+
+Reason codes in the callback URL (texts are a fixed client table; unknown codes are ignored): `denied` (cancelled), `login_failed`, `config_invalid`, `exchange_failed`, `account_lookup_failed` (also a non-numeric account id), `no_instagram_account` (empty list), `multiple_instagram_accounts` (more than one account returned: the connection is refused and nothing is stored; select exactly one account in the login dialog/configuration; usernames appear only in the audit entry). The Config ID must be digits only (1-32); a stored non-digit value reads as "not configured". Meta ids (account, container, post) must be digits only (up to 32) before they are put in a URL path; a bad post id after `media_publish` is `outcome_unknown` (the post may exist, never retried).
 
 ### 5b. Token lifetimes
 
