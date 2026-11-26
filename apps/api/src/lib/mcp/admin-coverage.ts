@@ -71,6 +71,17 @@ export const ADMIN_ROUTE_TOOLS: Readonly<Record<string, readonly string[]>> = {
   "GET /admin/telegram/status": ["get_integration_status"],
   "GET /admin/settings": ["get_integration_status"], // faqat sozlangan/sozlanmagan holati; qiymatlar HECH QACHON
   "PUT /admin/settings": ["update_site_settings"], // faqat sir bo'lmagan `general` (sayt nomi/tavsifi); sirli bo'limlar istisno (SETTINGS_SECRET_SECTIONS)
+  // ijtimoiy tarqatish (faqat `DISTRIBUTION_ENABLED=true` bo'lganda marshrut va vosita mavjud)
+  "GET /admin/distribution/channels": ["list_distribution_channels"],
+  "GET /admin/distribution/posts/:postId": ["list_post_distributions"],
+  "POST /admin/distribution/posts/:postId/:provider/preview": ["preview_distribution"],
+  "PUT /admin/distribution/posts/:postId/:provider/draft": ["save_distribution_text"],
+  "POST /admin/distribution/posts/:postId/:provider/send": ["send_distribution"],
+  "POST /admin/distribution/posts/:postId/:provider/schedule": ["schedule_distribution"],
+  "GET /admin/distribution/items/:id": ["get_distribution_status"],
+  "POST /admin/distribution/items/:id/cancel": ["cancel_distribution"],
+  "POST /admin/distribution/items/:id/retry": ["retry_distribution"],
+  "POST /admin/distribution/items/:id/remove": ["remove_distribution_from_platform"],
   // xodimlar
   "GET /admin/staff": ["list_staff"],
   "POST /admin/staff/invites": ["create_staff_invite"],
@@ -86,6 +97,13 @@ export const ADMIN_ROUTE_EXCLUSIONS: Readonly<Record<string, string>> = {
   "POST /admin/staff/:userId/password-reset-link": "Parolni tiklash havolasini yaratadi va QAYTARADI: maxfiy qiymat, uni yaratish hisobni egallash vositasi. Faqat panelda, egasining o'zi.",
   "GET /admin/connections": "Konnektor ilovalarini ko'rish/uzish ulanishning o'zini boshqaradi: yordamchi o'z ruxsatlarini yoki boshqa ilovalarni o'zgartira olmasligi kerak.",
   "DELETE /admin/connections": "Konnektor ilovalarini uzish ulanishning o'zini boshqaradi (yuqoridagiga qarang): faqat egasi panelda.",
+  "GET /admin/distribution/settings": "Platforma ilovalarining kalit maydonlari (client id/secret holati) va ulanish sozlamalarini ko'rsatadi: sir bilan bog'liq bo'lgani uchun faqat panelda. Ulanish HOLATI `list_distribution_channels` bilan ko'rinadi.",
+  "PUT /admin/distribution/settings": "Platforma ilovalarining client id/secret kalitlarini yozadi: sirlar (docs/claude-connector.md: sir qabul qiladigan hamma narsa istisno). Faqat egasi panelda.",
+  "POST /admin/distribution/accounts/:provider/connect": "Ijtimoiy akkauntni ulashni boshlaydi (OAuth): akkaunt ulash egasining shaxsiy qarori va brauzerda tasdiqlanadi. Assistent ulay olmaydi.",
+  "POST /admin/distribution/accounts/:provider/token": "Ijtimoiy akkauntga qo'lda kiritilgan kirish tokenini qabul qiladi: token maxfiy qiymat. Faqat egasi panelda.",
+  "DELETE /admin/distribution/accounts/:provider": "Ijtimoiy akkauntni uzadi (tokenlar o'chadi): akkaunt ulanishini boshqarish egasiga tegishli, assistent o'zi yuboradigan kanalni uza olmasligi kerak.",
+  "GET /admin/distribution/callback/:provider": "Platformaning OAuth callback'i (brauzer redirect, `code`/`state` bilan): assistent vositasi emas, faqat egasi brauzerda ulanishni tugatadi.",
+  "POST /admin/distribution/items/:id/resolve": "`needs_checking` holatini hal qiladi (platformada post borligini egasi o'zi tekshirib, 'yuborilgan' deb belgilaydi yoki ongli qayta urinadi): egasining qarori; assistent hal qila olmaydi (`get_distribution_status` faqat holatni aytadi).",
   "DELETE /admin/connections/:clientId": "Konnektor ilovasini uzish ulanishning o'zini boshqaradi (yuqoridagiga qarang): faqat egasi panelda.",
 };
 

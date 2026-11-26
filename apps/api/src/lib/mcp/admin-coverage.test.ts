@@ -6,6 +6,8 @@ vi.hoisted(() => {
   process.env.MCP_ENABLED = "true";
   process.env.MCP_WRITE_TOOLS_ENABLED = "true";
   process.env.MCP_PURGE_ENABLED = "true";
+  // Faqat tarqatish yoqilganda mavjud `/admin/distribution/*` marshrutlari va vositalari ham sanaladi.
+  process.env.DISTRIBUTION_ENABLED = "true";
 });
 
 let routes: string[];
