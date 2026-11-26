@@ -18,8 +18,10 @@ describe("render workflow template (separate render repository)", () => {
     expect(existsSync(path.join(packageDir, "render-workflow/README.md"))).toBe(true);
   });
 
-  it("checks out the blog source explicitly, from a configurable repository, without persisting credentials", () => {
-    expect(code).toMatch(/SOURCE_REPO: \$\{\{ vars\.VIDEO_SOURCE_REPO \|\| 'AbduazizBobomalikovNode\/abdusoft-blog' \}\}/);
+  it("checks out the blog source explicitly, from a hard-coded repository, without persisting credentials", () => {
+    expect(code).toMatch(/^  SOURCE_REPO: AbduazizBobomalikovNode\/abdusoft-blog$/m);
+    // Qaysi kod sir bilan ishlashini repozitoriy o'zgaruvchisi hal qilmasligi kerak.
+    expect(code).not.toMatch(/vars\.VIDEO_SOURCE_REPO/);
     const checkout = code.slice(code.indexOf("actions/checkout@"));
     expect(checkout).toMatch(/repository: \$\{\{ env\.SOURCE_REPO \}\}/);
     expect(checkout).toMatch(/ref: main/);

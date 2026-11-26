@@ -7,7 +7,8 @@
 #   Environment `video-render` (Settings > Environments of the render repository), deployment branches: main only
 #     secret   VIDEO_RUNNER_SECRET   same value as VIDEO_RUNNER_SECRET in the API environment (>= 32 random bytes)
 #     variable VIDEO_API_ORIGIN      https origin of the API, e.g. https://api.example.com (no trailing slash)
-#   Optional repository variable VIDEO_SOURCE_REPO: `owner/name` of the blog source to render with (default: the blog repository below).
+#   The blog source repository is fixed below (SOURCE_REPO). The code on that repository's `main` runs with the secret, so it is
+#   deliberately NOT a repository variable: changing it requires a commit on `main` of the render repository.
 #
 # The repository is public, so its logs are public: the runner script prints stage names, timings and sizes only, and
 # nothing is uploaded as an artifact. The storyboard, the job token and the API's answers are never printed.
@@ -33,7 +34,7 @@ concurrency:
 
 env:
   # The blog source this workflow renders with (checked out explicitly: the render repository only holds this workflow).
-  SOURCE_REPO: ${{ vars.VIDEO_SOURCE_REPO || 'AbduazizBobomalikovNode/abdusoft-blog' }}
+  SOURCE_REPO: AbduazizBobomalikovNode/abdusoft-blog
 
 jobs:
   render:

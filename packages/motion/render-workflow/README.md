@@ -19,7 +19,8 @@ Nothing else is needed: the workflow checks out the blog source itself (`reposit
 - **Environment `video-render`** (Settings > Environments), *Deployment branches and tags*: selected branches, `main` only.
   - secret `VIDEO_RUNNER_SECRET`: the same value as `VIDEO_RUNNER_SECRET` in the API environment (`openssl rand -hex 32`);
   - variable `VIDEO_API_ORIGIN`: the public https origin of the API, no trailing slash.
-- Optional repository variable `VIDEO_SOURCE_REPO` (`owner/name`): the blog source to render with. Default: the blog repository.
+- The blog source repository is hard-coded in the workflow (`SOURCE_REPO`). It decides which code runs with the secret, so it is
+  deliberately not a repository variable: change it only with a commit on `main`.
 - A fine-grained personal access token limited to THIS repository only, with `Actions: Read and write` (Metadata: Read-only is added
   automatically). Enter it, the repository (`owner/abdusoft-blog-render`) and, if you changed them, the workflow file name and branch in the
   blog settings (Admin > Settings > Video) or in `VIDEO_GITHUB_TOKEN`, `VIDEO_GITHUB_REPO`, `VIDEO_GITHUB_WORKFLOW`, `VIDEO_GITHUB_REF`.
