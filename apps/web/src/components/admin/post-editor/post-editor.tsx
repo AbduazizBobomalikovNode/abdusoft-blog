@@ -25,6 +25,8 @@ import { TableToolbar } from "@/components/admin/editor/table-toolbar";
 import { useCaretFollow } from "@/components/admin/editor/use-caret-follow";
 import { useFocusMode } from "@/components/admin/editor/use-focus-mode";
 import { ChannelSendDialog } from "./channel-send-dialog";
+import { useDistributionEnabled } from "../distribution-context";
+import { DistributionDialog } from "./distribution-dialog";
 import { ConflictBanner } from "./conflict-banner";
 import { HistoryDialog } from "./history-dialog";
 import { PostEditorHeader, StaffEditorHeader, type EditorMenuActions, type SaveState } from "./post-editor-header";
@@ -137,6 +139,9 @@ function PostEditorInner({
   const [telegramChannel, setTelegramChannel] = useState<string | null>(null);
   const [refreshingTelegraph, setRefreshingTelegraph] = useState(false);
   const [channelSendOpen, setChannelSendOpen] = useState(false);
+  // "Tarqatish" kirish nuqtasi: `/admin/me` (`distributionEnabled`) bo'yicha — alohida 404 so'rovi yo'q. Xodimga hech qachon.
+  const distributionOn = useDistributionEnabled() && !isStaff;
+  const [distributionOpen, setDistributionOpen] = useState(false);
   const [channelPlanBlocked, setChannelPlanBlocked] = useState(false);
   const [channelChoice, setChannelChoice] = useState<ResolvedChannelChoice | null>(post.channelChoice);
   const [starterDismissed, setStarterDismissed] = useState(false);
@@ -785,6 +790,7 @@ function PostEditorInner({
           onDelete={handleDelete}
           onRefreshTelegraph={() => void handleRefreshTelegraph()}
           onOpenChannelSend={() => setChannelSendOpen(true)}
+          onOpenDistribution={distributionOn ? () => setDistributionOpen(true) : undefined}
           onOpenHistory={() => setHistoryOpen(true)}
           journalHref={`/admin/jurnal?entityType=post&entityId=${post.id}`}
           channelChoice={channelChoice}
@@ -804,6 +810,8 @@ function PostEditorInner({
         readOnly={isStaff && status !== "draft" && status !== "changes_requested"}
         onChoiceChange={setChannelChoice}
       />
+
+      {distributionOn ? <DistributionDialog postId={post.id} open={distributionOpen} onOpenChange={setDistributionOpen} /> : null}
 
       {conflict ? (
         <ConflictBanner

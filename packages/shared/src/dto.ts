@@ -109,6 +109,8 @@ export const MeSchema = z.object({
   email: z.string(),
   name: z.string().nullable(),
   role: RoleSchema,
+  /** Faqat admin uchun va faqat `DISTRIBUTION_ENABLED=true` bo'lganda `true` (o'chiq bo'lsa maydon umuman yo'q). */
+  distributionEnabled: z.boolean().optional(),
 });
 export type Me = z.infer<typeof MeSchema>;
 

@@ -116,7 +116,7 @@ class FetchError extends Error {
   }
 }
 
-async function fetchBytes(url: string): Promise<{ buffer: Buffer; validator: string | null }> {
+async function fetchBytes(url: string, allowRedirect?: (url: URL) => boolean): Promise<{ buffer: Buffer; validator: string | null }> {
   const key = localKeyFor(url);
   const cap = CHANNEL_MEDIA_POLICY.fetchMaxBytes;
   const capMb = Math.round(cap / 1024 / 1024);
@@ -134,7 +134,7 @@ async function fetchBytes(url: string): Promise<{ buffer: Buffer; validator: str
   }
 
   try {
-    return await safeFetchBytes(url, { maxBytes: cap, timeoutMs: DOWNLOAD_TIMEOUT_MS });
+    return await safeFetchBytes(url, { maxBytes: cap, timeoutMs: DOWNLOAD_TIMEOUT_MS, ...(allowRedirect ? { allowRedirect } : {}) });
   } catch (error) {
     if (error instanceof SafeFetchError) {
       if (error.kind === "too_large") throw new FetchError(`Fayl hajmi ${capMb} MB dan katta`, "too_large");
@@ -198,7 +198,7 @@ async function prepareUncached(url: string, fetched: { buffer: Buffer }): Promis
  * validator (mahalliy fayl uchun mtime+hajm, tashqi URL uchun ETag/Last-Modified,
  * bo'lmasa faqat TTL). Mahalliy fayl o'zgarsa kesh avtomatik yaroqsiz bo'ladi.
  */
-export async function getPreparedImage(url: string): Promise<PreparedImage> {
+export async function getPreparedImage(url: string, opts: { allowRedirect?: (url: URL) => boolean } = {}): Promise<PreparedImage> {
   const cached = cache.get(url);
   if (cached && cached.expiresAt > Date.now()) {
     const key = localKeyFor(url);
@@ -214,7 +214,7 @@ export async function getPreparedImage(url: string): Promise<PreparedImage> {
 
   let fetched: { buffer: Buffer; validator: string | null };
   try {
-    fetched = await fetchBytes(url);
+    fetched = await fetchBytes(url, opts.allowRedirect);
   } catch (error) {
     const fe = error instanceof FetchError ? error : new FetchError("Rasmga ulanib bo'lmadi", "unreachable");
     return { ok: false, url, error: fe.message, kind: fe.kind };

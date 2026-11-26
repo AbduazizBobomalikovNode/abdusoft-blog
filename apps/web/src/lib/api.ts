@@ -26,6 +26,7 @@ import {
   TagWithCountSchema,
   TelegramStatusSchema,
   type AdminCommentListResponse,
+  type DistributionSettingsResponse,
   type AuditListResponse,
   type TrashListResponse,
   type AdminPostDetail,
@@ -303,6 +304,18 @@ export async function getAdminSettings(cookieHeader: string | null): Promise<Set
   });
 
   return parseJson(res, SettingsAdminSchema);
+}
+
+/**
+ * Ijtimoiy tarqatish sozlamalari. `DISTRIBUTION_ENABLED` o'chiq bo'lsa API 404 qaytaradi -> `null` (UI'da hech qanday kirish nuqtasi yo'q).
+ */
+export async function getAdminDistributionSettings(cookieHeader: string | null): Promise<DistributionSettingsResponse | null> {
+  const res = await apiFetch("/admin/distribution/settings", {
+    cache: "no-store",
+    headers: authHeaders(cookieHeader),
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as DistributionSettingsResponse;
 }
 
 /** `(site)` layout har so'rovda shu funksiyani chaqiradi (`revalidate: 60`) — runtime Turnstile/Umami/GitHub-login sozlamalari shu yerdan keladi. */

@@ -30,7 +30,9 @@ export const adminRoute = new Hono()
   // qolgan hamma marshrut alohida rollarni o'zi belgilaydi.
   .get("/me", requireRole("admin", "staff"), (c) => {
     const adminUser = c.get("adminUser");
-    return c.json(adminUser);
+    // Veb "Tarqatish" kirish nuqtalarini ko'rsatish-ko'rsatmasligini shundan biladi (alohida 404 so'rovlarisiz).
+    // Bayroq o'chiq (yoki xodim) bo'lsa javob avvalgidek — maydon yo'q.
+    return c.json(config.DISTRIBUTION_ENABLED && adminUser.role === "admin" ? { ...adminUser, distributionEnabled: true } : adminUser);
   })
   .route("/posts", adminPostsRoute)
   .route("/media", adminMediaRoute)
@@ -46,3 +48,9 @@ export const adminRoute = new Hono()
 
 // "Ulangan ilovalar" (Claude konnektori) — faqat MCP_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut yo'q.
 if (config.MCP_ENABLED) adminRoute.route("/connections", adminConnectionsRoute);
+
+// Ijtimoiy tarqatish — faqat DISTRIBUTION_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut ham, modul ham yuklanmaydi.
+if (config.DISTRIBUTION_ENABLED) {
+  const { adminDistributionRoute } = await import("./admin-distribution.js");
+  adminRoute.route("/distribution", adminDistributionRoute);
+}

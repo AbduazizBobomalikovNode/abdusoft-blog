@@ -28,6 +28,12 @@ export interface McpScopeInfo {
   sensitive?: boolean;
 }
 
+/**
+ * Ijtimoiy tarmoqlarga post chiqarish ruxsati. FAQAT yozuv kaliti VA `DISTRIBUTION_ENABLED` ikkalasi yoqilganda beriladi
+ * (`grantableScopeIds`); bayroq o'chiq bo'lsa u e'lon qilinmaydi, so'ralmaydi va rozilik sahifasida chiqmaydi.
+ */
+export const MCP_SOCIAL_SCOPE_ID = "social:post";
+
 export const MCP_SCOPES: readonly McpScopeInfo[] = [
   {
     id: "blog:read",
@@ -71,6 +77,15 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     label: "Telegram kanalga yuborish",
     description: "Postni Telegram kanaliga yuborish yoki kanal xabarini yangilash.",
     english: "Send a post to the Telegram channel or update its channel message.",
+  },
+  {
+    id: MCP_SOCIAL_SCOPE_ID,
+    group: "publish",
+    label: "Ijtimoiy tarmoqlarga post chiqarish",
+    description:
+      "Postni LinkedIn, X, Threads, Instagram'da ommaviy e'lon qilish yoki rejalashtirish, matnini saqlash, qayta urinish, bekor qilish va yuborilgan postni tarmoqdan o'chirish. Telegram kanal ruxsatidan alohida.",
+    english:
+      "Post to the owner's public social accounts (LinkedIn, X, Threads, Instagram, GitHub profile README): send or schedule a distribution, save its text, retry, cancel, and remove a sent post from the platform. Separate from the Telegram channel permission. Only grantable when social distribution is enabled.",
   },
   {
     id: "comments:moderate",
@@ -122,17 +137,19 @@ export const MCP_REQUIRED_SCOPE_ID = "blog:read";
  * `true` — barcha yozuv ruxsatlari ham. Mavjud (faqat o'qish) rozilik o'z-o'zidan kengaymaydi: yangi ruxsat so'ralsa
  * server yangi rozilik talab qiladi.
  */
-export function grantableScopeIds(writeEnabled = false): readonly string[] {
-  return writeEnabled ? MCP_SCOPE_IDS : MCP_GRANTABLE_SCOPE_IDS;
+export function grantableScopeIds(writeEnabled = false, distributionEnabled = false): readonly string[] {
+  if (!writeEnabled) return MCP_GRANTABLE_SCOPE_IDS;
+  // Ijtimoiy post ruxsati ikkala kalit yoqilgandagina; bayroq o'chiq bo'lsa ro'yxat avvalgidek (`social:post`siz).
+  return distributionEnabled ? MCP_SCOPE_IDS : MCP_SCOPE_IDS.filter((id) => id !== MCP_SOCIAL_SCOPE_ID);
 }
 
-export function grantableOAuthScopes(writeEnabled = false): readonly string[] {
-  return [...grantableScopeIds(writeEnabled), MCP_OFFLINE_SCOPE];
+export function grantableOAuthScopes(writeEnabled = false, distributionEnabled = false): readonly string[] {
+  return [...grantableScopeIds(writeEnabled, distributionEnabled), MCP_OFFLINE_SCOPE];
 }
 
 /** `scope` ro'yxatini berilishi mumkin bo'lganlarga qisqartiradi (takrorlarsiz, tartib saqlanadi). */
-export function clampToGrantable(scopes: readonly string[], writeEnabled = false): string[] {
-  const allowed = grantableOAuthScopes(writeEnabled);
+export function clampToGrantable(scopes: readonly string[], writeEnabled = false, distributionEnabled = false): string[] {
+  const allowed = grantableOAuthScopes(writeEnabled, distributionEnabled);
   return [...new Set(scopes.filter((scope) => allowed.includes(scope)))];
 }
 

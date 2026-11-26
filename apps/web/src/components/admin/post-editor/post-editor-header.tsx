@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Archive, ArrowLeft, BarChart3, Eye, History, Keyboard, LayoutTemplate, Maximize2, MoreHorizontal, RefreshCw, ScrollText, Send, Star, Trash2, Undo2 } from "lucide-react";
+import { Archive, ArrowLeft, BarChart3, Eye, History, Keyboard, LayoutTemplate, Maximize2, MoreHorizontal, RefreshCw, ScrollText, Send, Share2, Star, Trash2, Undo2 } from "lucide-react";
 import type { AdminPostStatus, ResolvedChannelChoice } from "@blog/shared";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { formatTime } from "@/lib/format";
@@ -206,6 +206,7 @@ export function PostEditorHeader({
   onDelete,
   onRefreshTelegraph,
   onOpenChannelSend,
+  onOpenDistribution,
   onOpenHistory,
   journalHref,
   channelChoice = null,
@@ -224,6 +225,8 @@ export function PostEditorHeader({
   onDelete: () => Promise<void>;
   onRefreshTelegraph: () => void;
   onOpenChannelSend: () => void;
+  /** "Tarqatish" (ijtimoiy tarmoqlar) — faqat DISTRIBUTION_ENABLED yoqilganda beriladi; berilmasa tugma umuman yo'q. */
+  onOpenDistribution?: () => void;
   /** "Tarix" — avvalgi versiyalar (ixtiyoriy; berilmasa tugma ko'rsatilmaydi). */
   onOpenHistory?: () => void;
   /** "Shu postning jurnali" havolasi (faqat admin; ixtiyoriy). */
@@ -376,6 +379,12 @@ export function PostEditorHeader({
           </AlertDialog>
         )}
 
+        {onOpenDistribution && published ? (
+          <Button variant="outline" size="sm" className="max-md:hidden" onClick={onOpenDistribution} data-testid="open-distribution">
+            <Share2 className="size-4" />
+            Tarqatish
+          </Button>
+        ) : null}
         <span className="max-md:hidden" title={channelDisabled ? "Arxivlangan post uchun kanal versiyasi yo'q" : undefined}>
           <Button variant="outline" size="sm" disabled={channelDisabled} onClick={onOpenChannelSend}>
             {published ? <Send className="size-4" /> : <Star className="size-4" />}
@@ -407,6 +416,12 @@ export function PostEditorHeader({
               <DropdownMenuItem className="min-h-11 md:hidden" onSelect={onOpenHistory}>
                 <History />
                 Tarix
+              </DropdownMenuItem>
+            ) : null}
+            {onOpenDistribution && published ? (
+              <DropdownMenuItem className="min-h-11 md:hidden" onSelect={onOpenDistribution}>
+                <Share2 />
+                Tarqatish
               </DropdownMenuItem>
             ) : null}
             {!published ? (

@@ -82,6 +82,23 @@ export function startScheduler(): Cron[] {
     );
   }
 
+  // Ijtimoiy tarqatish: faqat DISTRIBUTION_ENABLED=true. O'chiq bo'lsa hech qanday job, import yoki so'rov yo'q.
+  if (config.DISTRIBUTION_ENABLED) {
+    void import("./distribution/service/tick.js")
+      .then((m) => m.recoverDistributionsOnStart())
+      .catch((error: unknown) => console.error("Tarqatishlarni tiklashda xatolik:", error instanceof Error ? error.message : error));
+    jobs.push(
+      new Cron("* * * * *", async () => {
+        try {
+          const m = await import("./distribution/service/tick.js");
+          await m.runDistributionTick();
+        } catch (error: unknown) {
+          console.error("Tarqatish scheduler xatosi:", error instanceof Error ? error.message : error);
+        }
+      }),
+    );
+  }
+
   return jobs;
 }
 

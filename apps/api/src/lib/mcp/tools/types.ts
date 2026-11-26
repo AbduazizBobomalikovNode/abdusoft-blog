@@ -16,8 +16,8 @@ export interface McpToolAnnotations {
   readOnlyHint: boolean;
   destructiveHint: boolean;
   idempotentHint: boolean;
-  /** Barcha vositalar faqat shu blog bilan ishlaydi (tashqi dunyoga chiqmaydi) — `false`. */
-  openWorldHint: false;
+  /** Odatda `false` (faqat shu blog bilan ishlaydi). Ijtimoiy tarqatish yuborish vositalari jamoat internetiga chiqadi — `true`. */
+  openWorldHint: boolean;
 }
 
 /**
@@ -32,7 +32,7 @@ export interface ToolOutput {
 }
 
 /** Yozuv chegarasi toifasi (har bir ulanish uchun, `MCP_WRITE_LIMIT_*`). */
-export type WriteLimitCategory = "create" | "edit" | "upload" | "publish" | "channel" | "moderate" | "destructive";
+export type WriteLimitCategory = "create" | "edit" | "upload" | "publish" | "channel" | "social" | "moderate" | "destructive";
 
 export interface McpToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   name: string;

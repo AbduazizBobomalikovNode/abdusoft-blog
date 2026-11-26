@@ -409,3 +409,137 @@ export const mcpIdempotency = pgTable(
   },
   (table) => [primaryKey({ columns: [table.clientId, table.key] }), index("mcp_idempotency_created_idx").on(table.createdAt)],
 );
+
+/**
+ * Ijtimoiy tarqatish: ulangan platforma akkauntlari. Tokenlar `lib/crypto.ts` (`encryptSecret`) bilan SHIFRLANGAN holda
+ * saqlanadi va hech qaysi marshrut/vosita ularni qaytarmaydi. Bir provider uchun bitta faol akkaunt yetarli, lekin jadval
+ * ikkinchisini imkonsiz qilmaydi (`unique(provider, external_id)`; faol akkaunt — eng oxirgi ulangan `active`/`reauth_required`).
+ */
+export const distributionAccounts = pgTable(
+  "distribution_accounts",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    /** `linkedin` | `x` | `threads` | `instagram` | `github`. */
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    displayName: text("display_name").notNull(),
+    username: text("username"),
+    accessTokenEnc: text("access_token_enc").notNull(),
+    refreshTokenEnc: text("refresh_token_enc"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scopes: jsonb("scopes").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    meta: jsonb("meta").$type<Record<string, string>>().notNull().default({}),
+    /** `active` | `reauth_required` (token yaroqsiz — qayta ulash kerak) | `inactive` (shu provider uchun yangi akkaunt ulangan). */
+    status: text("status").notNull().default("active"),
+    /** Token yangilash natijasi noma'lum bo'lgan payt (`refresh_ambiguous`): keyingi yangilash ham xato bersa — qayta ulash. */
+    refreshAmbiguousAt: timestamp("refresh_ambiguous_at", { withTimezone: true }),
+    lastRefreshAt: timestamp("last_refresh_at", { withTimezone: true }),
+    /** Muddat eslatmasi (Telegram) oxirgi marta qachon yuborilgan — kuniga ko'pi bilan bitta. */
+    lastReminderAt: timestamp("last_reminder_at", { withTimezone: true }),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    connectedAt: timestamp("connected_at", { withTimezone: true }).notNull(),
+    connectedBy: text("connected_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("distribution_accounts_provider_external_idx").on(table.provider, table.externalId), index("distribution_accounts_provider_idx").on(table.provider)],
+);
+
+/** OAuth `state` + PKCE verifier (server tomonida; bir martalik, muddatli). `code_verifier_enc` shifrlangan. */
+export const distributionOauthStates = pgTable(
+  "distribution_oauth_states",
+  {
+    state: text("state").primaryKey(),
+    provider: text("provider").notNull(),
+    codeVerifierEnc: text("code_verifier_enc"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("distribution_oauth_states_expires_idx").on(table.expiresAt)],
+);
+
+export const distributionStatusEnum = pgEnum("distribution_status", ["draft", "scheduled", "sending", "sent", "failed", "needs_checking", "cancelled"]);
+
+/**
+ * Bitta postning bitta kanalga tarqatilishi. Faol (`draft/scheduled/sending/failed/needs_checking`) tarqatish bir post+kanal
+ * uchun ko'pi bilan bitta (qisman unique indeks) — ikki marta yuborilishdan himoya.
+ */
+export const distributions = pgTable(
+  "distributions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    /** Kanal (provider id). */
+    provider: text("provider").notNull(),
+    accountId: uuid("account_id").references(() => distributionAccounts.id, { onDelete: "set null" }),
+    status: distributionStatusEnum("status").notNull().default("draft"),
+    /** Qo'lda tahrirlangan matn; `null` — provayderning standart shabloni (yuborish paytida hisoblanadi). */
+    text: text("text"),
+    /** Haqiqatda yuborilgan matn. */
+    sentText: text("sent_text"),
+    /** `auto` | `cover` | `og` | `none`. */
+    imageChoice: text("image_choice").notNull().default("auto"),
+    /** LinkedIn: `article` | `text`. */
+    linkMode: text("link_mode"),
+    /**
+     * Rejalashtirish/yuborish paytida KO'RSATILGAN (render qilingan) matn. Qo'lda tahrirlanmagan tarqatish ham keyinroq postning
+     * o'zgarishidan qayta hisoblangan matnni emas, aynan shu matnni yuboradi. `null` — GitHub (blok har safar qayta yig'iladi) va qoralamalar.
+     */
+    renderedText: text("rendered_text"),
+    /** Rejalashtirish paytidagi akkauntning platformadagi id'si: keyin BOSHQA akkaunt ulansa, yuborish rad etiladi. */
+    accountExternalId: text("account_external_id"),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+    /** Avtomatik qayta urinish (transient/rate_limited) uchun keyingi urinish vaqti. */
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    lastErrorKind: text("last_error_kind"),
+    /** Xavfsiz (sirsiz, qisqartirilgan) xabar. */
+    lastErrorMessage: text("last_error_message"),
+    externalId: text("external_id"),
+    externalUrl: text("external_url"),
+    /** Ko'p bosqichli yuborishda to'xtagan bosqich va tayyor narsalar (qayta urinishda `resume`). */
+    step: text("step"),
+    partial: jsonb("partial").$type<Record<string, string>>(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    /** `web` | `mcp` | `scheduler`. */
+    createdVia: text("created_via").notNull().default("web"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    removedAt: timestamp("removed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("distributions_active_post_provider_idx")
+      .on(table.postId, table.provider)
+      .where(sql`${table.status} in ('draft', 'scheduled', 'sending', 'failed', 'needs_checking')`),
+    index("distributions_due_idx").on(table.status, table.scheduledAt),
+    index("distributions_post_idx").on(table.postId),
+  ],
+);
+
+/** Ijtimoiy rasm keshi (post bo'yicha): Instagram/Threads uchun ommaviy JPEG URL (blogning o'z media saqlashida). */
+export const distributionImages = pgTable(
+  "distribution_images",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    /** `cover` | `og`. */
+    sourceKind: text("source_kind").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    /** Tayyor JPEG baytlarining SHA-256 xeshi — bir xil rasm qayta saqlanmaydi. */
+    fingerprint: text("fingerprint").notNull(),
+    storageKey: text("storage_key").notNull(),
+    url: text("url").notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("distribution_images_post_fp_idx").on(table.postId, table.fingerprint)],
+);

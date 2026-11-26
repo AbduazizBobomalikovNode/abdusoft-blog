@@ -10,7 +10,7 @@
 
 Bu hujjat `apps/api/src/lib/distribution/` ichidagi **tayyor qurilish bloklari**ni tasvirlaydi: har bir maqolani LinkedIn (shaxsiy profil — ustuvor), X, Threads, Instagram va GitHub profil README'ga ("so'nggi maqolalar" bloki) yuborish uchun provider modullari.
 
-**Hozirgi PR hech narsani ishga tushirmaydi:** marshrut yo'q, migratsiya yo'q, UI yo'q, env o'zgaruvchi talab qilinmaydi, mavjud fayllarning xatti-harakati o'zgarmaydi. Modul hech kim import qilmaguncha ish vaqtida mavjud emas. Keyingi PR: ma'lumotlar bazasi jadvallari, akkauntni ulash ekranlari, rejalashtirish, admin UI va yordamchi (assistant) vositalari.
+**(Tarixiy eslatma: provider PR'i hech narsani ishga tushirmagan; integratsiya — 10-bo'lim, `DISTRIBUTION_ENABLED` orqasida.)** Provider PR'i: marshrut yo'q, migratsiya yo'q, UI yo'q, env o'zgaruvchi talab qilinmaydi, mavjud fayllarning xatti-harakati o'zgarmaydi. Modul hech kim import qilmaguncha ish vaqtida mavjud emas. Keyingi PR: ma'lumotlar bazasi jadvallari, akkauntni ulash ekranlari, rejalashtirish, admin UI va yordamchi (assistant) vositalari.
 
 Qoidalar: AI model yo'q (matn deterministik shablon yoki chaqiruvchi bergan matn); har bir tashqi so'rov faqat qattiq yozilgan platforma hostiga, HTTPS orqali, inyeksiya qilinadigan `fetch` bilan; redirect kuzatilmaydi; token va ular bor javob tanalari hech qachon log qilinmaydi; testlar tarmoqqa chiqmaydi (barchasi mock).
 
@@ -150,6 +150,64 @@ LinkedIn API Terms of Use §3.1 (oxirgi tahrir 2022-12-13) taqiqlar ro'yxatida: 
 
 ---
 
+### 10. Integratsiya (admin panel, scheduler, vositalar) — `DISTRIBUTION_ENABLED`
+
+Bu bo'lim yuqoridagi provider bloklari ulangan holatni tasvirlaydi. **Hammasi `DISTRIBUTION_ENABLED=true` orqasida (standart: o'chiq).** O'chiq bo'lsa: yangi marshrut javob bermaydi (404), scheduler hech narsa qilmaydi, admin panelda "Tarqatish" yorlig'i/tugmasi yo'q, konnektorda yangi vosita yo'q, Telegram avvalgidek ishlaydi. Telegram bu PR'da ko'chirilmagan — kanallar ro'yxatida faqat ko'rsatiladi.
+
+**Avtomatik yuborish YO'Q.** Maqola chop etilganda hech narsa yuborilmaydi. Tarqatish faqat egasi (panel) yoki uning yordamchisi (vosita) AYNAN shu post va AYNAN shu kanal uchun "Yuborish"/"Rejalashtirish"ni bosganda boshlanadi. LinkedIn API shartlari (§3.1 "automate posting") shuni talab qiladi — UI va hujjatda ko'rinib turadi.
+
+**Redirect URL'lar** (platforma ilovasida AYNAN shuni kiriting; `API_ORIGIN` ostida, barqaror):
+
+| Platforma | Redirect URL |
+|---|---|
+| LinkedIn | `<API_ORIGIN>/admin/distribution/callback/linkedin` |
+| X | `<API_ORIGIN>/admin/distribution/callback/x` |
+| Threads | `<API_ORIGIN>/admin/distribution/callback/threads` |
+| Instagram | `<API_ORIGIN>/admin/distribution/callback/instagram` |
+| GitHub | yo'q (token yopishtiriladi) |
+
+Aniq URL Sozlamalar → Tarqatish yorlig'ida nusxalash tugmasi bilan ko'rinadi. Callback faqat admin sessiyasi bilan ishlaydi; `state` (+ X uchun PKCE) serverda saqlanadi, 10 daqiqa amal qiladi va bir marta ishlatiladi.
+
+**Egasi uchun qadamlar (har platforma):** 1) Platformada ilova yarating (4-bo'lim). 2) Redirect URL'ni kiriting. 3) Sozlamalar → Tarqatish → Client ID/Secret ni saqlang (yoki `DISTRIBUTION_<PLATFORMA>_CLIENT_ID/_SECRET` env; env DB'dan ustun). 4) "Ulash" → platformada ruxsat bering. 5) Postni oching → "Tarqatish" → matn/rasmni ko'ring → "Yuborish". GitHub: README'ga ikki marker qo'shing, fine-grained tokenni yopishtiring (muddatini kalendarga yozing).
+
+**Holatlar:** `draft` (qoralama) · `scheduled` (rejalashtirilgan yoki navbatda; qayta urinish kutayotgan ham shu) · `sending` (fonda yuborilmoqda) · `sent` (yuborilgan, havola bor) · `failed` (xato; odam qayta urinadi) · `needs_checking` (natija noma'lum) · `cancelled` (bekor qilingan yoki platformadan olib tashlangan). Bir post+kanal uchun bitta faol tarqatish (DB indeksi).
+
+**Qayta urinish:** faqat `transient` va `rate_limited` avtomatik: ko'pi bilan 5 urinish; kutish 1 daq → 5 daq → 15 daq → 1 soat (`rate_limited` da platforma bergan vaqt, 1 daq..6 soat oralig'ida). Qisman bajarilgan bosqich (`partial`: LinkedIn rasm URN, X media id, Threads/Instagram konteyner) saqlanadi va qayta urinishda davom ettiriladi. Qolgan xatolar (`auth_expired`, `permission_missing`, `validation_rejected`, `duplicate_content`, `payment_required`) darhol `failed`. `outcome_unknown` HECH QACHON avtomatik qayta urinilmaydi.
+
+**"Tekshirish kerak" qanday hal qilinadi:** platformada postni qidiring, so'ng panelda: (a) chiqqan bo'lsa — post havolasi bilan "Yuborilgan deb belgilash"; (b) chiqmagan bo'lsa — "Platformada yo'q — yopish" yoki dublikat xavfini tasdiqlab "Bilib turib qayta urinish". Yordamchi (vosita) buni hal qila olmaydi. Server `sending` paytida to'xtab qolsa (crash/deploy) ham shu holatga o'tadi.
+
+**Deploy paytida `needs_checking` nimani anglatadi:** ishga tushganda faqat **20 daqiqadan beri `sending`da turgan** (ESKIRGAN) qatorlar `needs_checking`ga o'tkaziladi — xuddi har daqiqalik tick'dagi qoida. Deploy kesishuvida eski jarayon hali yuborishni tugatayotgan bo'lishi mumkin: uning qatoriga tegilmaydi va u natijani (platforma id + havola) o'zi yozadi. Agar qator allaqachon `needs_checking`ga o'tkazilgan bo'lsa-yu eski jarayon keyin muvaffaqiyatli tugatsa, natija baribir yoziladi (faqat tiklash belgisi turgan, o'sha urinishning qatoriga; siz qo'lda hal qilgan qatorga tegilmaydi) va jurnalda `recordedAfterRecovery` belgisi bo'ladi. Yo'nalish xavfsiz: `sending` yoki `needs_checking` qator hech qachon avtomatik qayta yuborilmaydi — ikkinchi post chiqmaydi. O'lgan jarayonning qatori 20 daqiqadan keyin `needs_checking` bo'ladi: platformada tekshiring (yuqoridagi (a)/(b)).
+
+**Rasm:** standart — muqova, bo'lmasa saytning o'zi yaratgan OG rasmi (`<WEB_ORIGIN>/<slug>/opengraph-image-<hash>`, faqat blogning o'z veb-originidan). Mavjud rasm quvuri bilan JPEG, uzun tomon ≤1440 px, nisbat 4:5–1.91:1 (markazdan kesiladi). LinkedIn/X uchun baytlar; Threads/Instagram uchun blogning o'z media saqlashidagi (R2 yoki `API_ORIGIN/uploads`) OMMAVIY HTTPS JPEG URL — post bo'yicha keshlanadi. Rasm tayyorlanmasa tekshiruvda ko'rinadi (Instagram/LinkedIn maqola kartasi uchun xato, qolganlarida ogohlantirish).
+
+**Token xizmati (har daqiqalik tick):** X va Threads/Instagram tokenlari muddatidan oldin yangilanadi (yangi akkaunt yuborishdan OLDIN bazaga yoziladi; `refresh_ambiguous` — eski tokenlar saqlanadi, keyingi urinish ham xato bersa "qayta ulash kerak"). LinkedIn (60 kun) va GitHub tokenlari yangilanmaydi: muddatdan 10 (GitHub 14) kun oldin boshlab admin Telegram chatiga kuniga ko'pi bilan BITTA eslatma, muddat tugaganda bitta "tugadi" xabari va akkaunt "qayta ulash kerak" holatiga o'tadi. Telegram sozlanmagan bo'lsa eslatma yetkazib bo'lmaydi: bu jurnalga yoziladi (`distribution.reminder_undelivered`) va ertasi kuni qayta uriniladi (har daqiqada emas).
+
+**`BETTER_AUTH_SECRET` almashtirilsa:** tokenlar va Client Secret shu kalitdan olingan kalit bilan shifrlangan. Kalit almashgach ular deshifrlanmaydi. Tizim buni **"qayta ulash kerak"** deb ko'rsatadi ("faol" emas): Sozlamalar'da akkaunt "qayta ulash kerak", kanal "tayyor emas" (sabab: "Saqlangan token o'qib bo'lmadi (maxfiy kalit o'zgargan) — qayta ulang"), tekshiruvda xato, yuborish/olib tashlash platformaga **hech qanday so'rovsiz** rad etiladi (bo'sh bearer token hech qachon yuborilmaydi), token xizmati yangilashga urinmaydi va egasiga BITTA Telegram xabari yuboradi. Saqlangan Client Secret o'qilmasa, ilova sozlanmagan hisoblanadi (X, sirsiz ham ishlay oladigan public client bo'lsa-da) va Sozlamalar'da bu ko'rinadi. Tuzatish: Client Secret'ni qaytadan kiriting va akkauntni qayta ulang. (Kalitni almashtirmaslik eng yaxshisi; almashtirsangiz, barcha ulangan akkauntlar qayta ulanadi.)
+
+**Rejalashtirilgan yuborish — akkaunt va matn "muzlatiladi":** rejalashtirishda (va "Yuborish"da) tizim ikki narsani saqlaydi: ko'rsatilgan (render qilingan) matn va akkauntning platformadagi id'si. Yuborish vaqtida (1) **boshqa akkaunt** ulangan bo'lsa (masalan LinkedIn'ga boshqa profil) tarqatish `failed` bo'ladi ("Rejalashtirilgandan keyin bu kanalga BOSHQA akkaunt ulangan…"), yangi akkauntga post chiqmaydi — bekor qilib, qaytadan rejalashtiring; **xuddi shu akkauntni** qayta ulash (token yangilash, uzib-ulash) muammo emas; (2) qo'lda tahrirlanmagan tarqatish ham postning keyingi tahriridan qayta hisoblangan matnni emas, **rejalashtirish paytida oldindan ko'rsatilgan matnni** yuboradi (rejalashtirilgan tarqatishning matnini saqlash uni yangilaydi). GitHub bloki bundan mustasno: u har safar so'nggi postlardan qayta yig'iladi.
+
+**Savatdagi post:** postni savatga olsangiz ham, "Tarqatish" dialogi Postlar → Savat ro'yxatidan ochiladi: avval yuborilganlar faqat ko'rinadi va (platforma qo'llasa) platformadan olib tashlanadi; yangi yuborish/rejalashtirish yo'q. Postni savatdan butunlay o'chirsangiz tarqatish yozuvlari ham o'chadi — platformadagi postni avval olib tashlang.
+
+**Tick xatolari:** har bir tarqatish va har bir akkaunt o'z xatolarini alohida ushlaydi — bitta yozuvdagi baza xatosi qolganlarini to'xtatmaydi.
+
+**Narx va limit:** X pullik (pay-per-use, 6-bo'lim); qolganlari hujjatda pul ko'rsatilmagan. Konnektor orqali ijtimoiy yuborish (yuborish/rejalashtirish/qayta urinish) **o'z chegarasiga** kiradi: `MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY` (standart **5**/kun, har bir ulanish uchun; `0` — chegarasiz) — Telegram kanalining `MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY` (10) chegarasidan alohida. Platformadan olib tashlash — `MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY`, matnni saqlash/bekor qilish — tahrir chegarasi. Konnektor uchun alohida ruxsat: **`social:post`** ("Ijtimoiy tarmoqlarga post chiqarish", Chop etish guruhida) — 11-bo'lim.
+
+**Marshrutlar (admin, `/admin/distribution/...`):** `GET|PUT /settings`, `POST /accounts/:provider/connect`, `POST /accounts/github/token`, `DELETE /accounts/:provider`, `GET /callback/:provider`, `GET /channels`, `GET /posts/:postId`, `POST /posts/:postId/:provider/preview`, `PUT .../draft`, `POST .../send`, `POST .../schedule`, `GET /items/:id`, `POST /items/:id/{cancel,retry,resolve,remove}`. Hammasi faqat admin (xodim 403). Hech bir javob/jurnal/vositada token yoki client secret yo'q.
+
+**Hali haqiqiy akkaunt bilan TEKSHIRILMAGAN** (birinchi ulanishdan keyin tekshiriladi): 9-bo'limdagi barcha `UNVERIFIED` bandlar; LinkedIn `/rest/posts` limiti va §3.1 talqini; X refresh token rotatsiyasi va `expires_in`; Threads/Instagram `permalink`/`user_id` maydonlari va konteyner holati; GitHub token muddati sarlavhasi; Instagram/Threads Meta ilova tasdig'i (tester roli); OG rasm marshrut hash'i prod'da; Telegram eslatma matnlari.
+
+### 11. Konnektor (Claude) ruxsati: `social:post`
+
+Ijtimoiy yuborish vositalari (`send_distribution`, `schedule_distribution`, `retry_distribution`, `cancel_distribution`, `save_distribution_text`, `remove_distribution_from_platform`) endi Telegram'ning `channels:send` ruxsatini **emas**, alohida **`social:post`** ruxsatini talab qiladi (rozilik sahifasida: **Ijtimoiy tarmoqlarga post chiqarish** — LinkedIn, X, Threads, Instagram'da ommaviy post chiqarish va o'chirish). Sabab: faqat o'z Telegram kanalingiz uchun tasdiqlangan ulanish ijtimoiy tarmoqlarda ommaviy post chiqara olmasligi kerak.
+
+- Faqat **`MCP_WRITE_TOOLS_ENABLED=true` VA `DISTRIBUTION_ENABLED=true`** bo'lganda beriladi/e'lon qilinadi. Bayroq o'chiq bo'lsa ruxsat umuman yo'q: rozilik sahifasi, `scopes_supported` va `tools/list` avvalgidek.
+- Rozilik sahifasida **hech qachon oldindan belgilanmaydi**; yangi ruxsat bo'lgani uchun avval faqat Telegram'ga rozilik bergan ulanish uni so'rasa, rozilik sahifasi **qayta** chiqadi.
+- O'qish vositalari (`list_distribution_channels`, `preview_distribution`, `list_post_distributions`, `get_distribution_status`) `blog:read` bilan qoladi.
+- Yuborish chegarasi: `MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY` (standart 5/kun).
+- Mavjud ulanishlar (`channels:send` bilan) ijtimoiy vositalardan foydalana olmaydi: qayta ulang va yangi ruxsatni belgilang.
+
+---
+
 ## English
 
 ### 1. What this is (and is not)
@@ -183,3 +241,39 @@ LinkedIn API Terms of Use §3.1 (last revised 2022-12-13) lists: "Use the Conten
 ### 6. UNVERIFIED items
 
 See the table in the Uzbek section 9; each item is also tagged `UNVERIFIED` next to the relevant constant in code.
+
+### 7. Integration (admin panel, scheduler, tools) — `DISTRIBUTION_ENABLED`
+
+Everything below is behind `DISTRIBUTION_ENABLED=true` (default off). Off: no new route answers (404), no scheduler work, no UI entry point, no new connector tool, Telegram unchanged. Telegram is NOT migrated; it is only shown read-only in the channel list.
+
+**Nothing is ever posted automatically on publish.** A distribution starts only when the owner (panel) or their assistant (tool) explicitly sends or schedules that post to that channel - as the LinkedIn API terms (§3.1, "automate posting") require.
+
+**Redirect URLs** (register exactly these; stable): `<API_ORIGIN>/admin/distribution/callback/{linkedin|x|threads|instagram}`; GitHub has none (pasted token). The settings tab shows them with a copy button. The callback needs the admin session; `state` (+PKCE for X) is stored server-side, expires in 10 minutes and is single-use.
+
+**Owner checklist per platform:** create the app (section 4), register the redirect URL, save Client ID/Secret in Settings → Tarqatish (or `DISTRIBUTION_<PLATFORM>_CLIENT_ID/_CLIENT_SECRET`, env wins), click Connect, then open a post → Tarqatish → review text/image/checks → Send. GitHub: add the two markers to the README and paste a fine-grained token.
+
+**Statuses:** draft, scheduled (also while waiting for an automatic retry), sending, sent, failed, needs_checking, cancelled (also "removed from the platform"). One active distribution per post+channel (partial unique index).
+
+**Retries:** only `transient` and `rate_limited`, automatically: at most 5 attempts, waits 1 min, 5 min, 15 min, 1 h (rate limits: the platform's time clamped to 1 min..6 h). Completed steps (`partial`) are kept and resumed. Other errors fail immediately. `outcome_unknown` is never retried automatically; a crash during `sending` also becomes `needs_checking`.
+
+**What `needs_checking` means after a deploy:** on start only STALE `sending` rows (stuck for 20+ minutes, the same rule as the per-minute tick) become `needs_checking`. During a deploy overlap the old process may still be finishing a send: its fresh row is left alone and it records the result (platform id and URL) itself. If a row was already flipped and the old process then succeeds, the result is still recorded (only on a row that carries the recovery marker, never on one you resolved by hand; the audit entry has `recordedAfterRecovery`). The direction stays safe: a `sending` or `needs_checking` row is never re-sent automatically, so no second post. A dead process's row becomes `needs_checking` after 20 minutes: check the platform.
+
+**Resolving needs_checking:** look for the post on the platform, then in the panel either mark it sent with the post URL, close it as not posted, or retry knowingly (explicit duplicate-risk confirmation). The assistant cannot resolve it.
+
+**Images:** cover, else the site's generated OG image (own web origin only), converted with the existing pipeline (JPEG, long side ≤1440 px, aspect 4:5-1.91:1). Bytes for LinkedIn/X; a public HTTPS JPEG URL on the blog's own media storage for Threads/Instagram, cached per post.
+
+**Token upkeep:** X/Threads/Instagram tokens are refreshed ahead of expiry (the new account is persisted BEFORE use; `refresh_ambiguous` keeps the old tokens and requires reconnecting if the next attempt also fails). LinkedIn (60 days) and GitHub tokens cannot be refreshed: at most one Telegram reminder per day from 10 (GitHub 14) days before expiry, one message on expiry. When Telegram is not configured the reminder cannot be delivered: that is recorded in the audit log (`distribution.reminder_undelivered`) and retried the next day, not every minute.
+
+**After `BETTER_AUTH_SECRET` changes:** tokens and client secrets are encrypted with a key derived from it and no longer decrypt. They are shown as **reconnect required**, never as active: the account says so in Settings, the channel is not ready (reason "the stored token could not be read (secret key changed) - reconnect"), preflight errors, send/remove are refused with **no outbound request** (an empty bearer token is never sent), token upkeep makes no refresh attempt and sends ONE owner notification. An unreadable stored client secret marks the app as not configured (also for X, which could otherwise run as a public client). Fix: re-enter the client secret and reconnect the account.
+
+**Scheduled sends freeze the account and the text:** at schedule/send time the rendered text and the platform id of the account are stored. At send time (1) if a DIFFERENT account was connected for that channel meanwhile, the distribution fails ("a DIFFERENT account was connected after scheduling...") and nothing is posted to the new account - cancel and schedule again; reconnecting the SAME account is fine; (2) a distribution without hand-edited text posts what the preview showed when it was scheduled, not text regenerated from a later edit of the post (saving the text of a scheduled distribution refreshes it). The GitHub block is excluded (rebuilt from the latest posts each time).
+
+**Posts in the trash:** the Tarqatish dialog opens from Posts → Trash: earlier sends are shown read-only and can be removed from the platform; no new send/schedule. Purging the post for good deletes its distribution rows - remove the platform post first.
+
+**Tick isolation:** each distribution and each account is handled in its own error handling, so one database error does not stop the rest.
+
+**Limits/costs:** X is pay-per-use. Connector sends (send/schedule/retry) count toward their OWN limit `MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY` (default **5**/day per connection, `0` = unlimited), separate from Telegram's `MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY` (10); removals toward `MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY`; saving text and cancelling toward the edit limit.
+
+**Connector permission `social:post`:** the social write tools (`send_distribution`, `schedule_distribution`, `retry_distribution`, `cancel_distribution`, `save_distribution_text`, `remove_distribution_from_platform`) no longer use Telegram's `channels:send`; they require the separate **`social:post`** permission (consent label "Ijtimoiy tarmoqlarga post chiqarish", publishing group). It is only grantable/advertised when BOTH `MCP_WRITE_TOOLS_ENABLED` and `DISTRIBUTION_ENABLED` are on (flag off: consent page, `scopes_supported`, `tools/list` unchanged), never pre-ticked, and asking for it later forces a fresh consent. The four read tools stay on `blog:read`. Existing connections approved with `channels:send` cannot use the social tools until reconnected with the new permission.
+
+**Still UNVERIFIED until the first live connection:** every item in the UNVERIFIED table plus the LinkedIn `/rest/posts` limit and §3.1 interpretation, X refresh-token rotation, Threads/Instagram `permalink`/`user_id` fields, GitHub token-expiry header, Meta app review (tester role), the OG image route hash in production.
