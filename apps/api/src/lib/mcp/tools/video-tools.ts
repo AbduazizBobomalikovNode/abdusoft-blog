@@ -24,9 +24,19 @@ import {
 } from "../../video/jobs.js";
 import { videoStatus } from "../../video/status.js";
 import { withIdempotency } from "../idempotency.js";
-import { ToolError, defineTool, unwrap, type McpToolDef, type ToolImage } from "./types.js";
+import { ToolError, defineTool, unwrap as unwrapService, type McpToolDef, type ToolImage } from "./types.js";
+import { fail, type ServiceResult } from "../../posts/types.js";
 import { idempotencyKeyField, uuidField } from "./write-support.js";
 import { UNTRUSTED_DESCRIPTION_PREFIX as U, untrusted } from "./untrusted.js";
+
+/** Xizmat xatosidagi `code` (masalan `post_busy`) xato `code`ini bosib ketmasligi uchun `reason` deb nomlanadi. */
+function unwrap<T>(result: ServiceResult<T>, hints: { notFound?: string } = {}): T {
+  if (!result.ok && typeof result.error.extra?.code === "string") {
+    const { code, ...rest } = result.error.extra;
+    return unwrapService(fail(result.error.kind, result.error.message, { ...rest, reason: code }), hints);
+  }
+  return unwrapService(result, hints);
+}
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const ADDITIVE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
