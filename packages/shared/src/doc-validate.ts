@@ -327,10 +327,11 @@ export function validateDocument(doc: unknown, opts: DocValidationOptions): DocV
       if (content.length > DOC_LIMITS.maxChildren) bad(`${here}: too many child nodes`);
       if (type === "table" && content.length > DOC_LIMITS.maxTableRows) bad(`${here}: a table can have at most ${DOC_LIMITS.maxTableRows} rows`);
       if (type === "table") {
-        // Jadval renderi birinchi qatordagi HAR ustun uchun `<col>` chiqaradi (colspan'lar yig'indisi) — bular ham render elementlari.
+        // Jadval renderi birinchi BOLA (har qanday turdagi — noto'g'ri tuzilgan hujjatda u qator bo'lmasligi mumkin) bolalarining HAR
+        // ustuni uchun `<col>` chiqaradi (colspan'lar yig'indisi) — bular ham render elementlari. Tur tekshirilmaydi: renderer ham tekshirmaydi.
         const first = content[0];
         let columns = 0;
-        if (isObj(first) && first.type === "tableRow" && Array.isArray(first.content)) {
+        if (isObj(first) && Array.isArray(first.content)) {
           for (const c of first.content as unknown[]) {
             const span = isObj(c) && isObj(c.attrs) && isInt(c.attrs.colspan, 1, DOC_LIMITS.maxSpan) ? c.attrs.colspan : 1;
             columns += span; // eng ko'pi bilan maxTableCellsPerRow * maxSpan (= 1024): qatorlar soni keyin tekshiriladi

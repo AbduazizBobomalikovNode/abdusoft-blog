@@ -34,3 +34,17 @@ describe("table column groups count toward the render budget", () => {
     expect(DOC_LIMITS.maxRenderElements).toBe(12_000);
   });
 });
+
+/** The renderer emits a `<col>` per spanned column of the table's FIRST child, whatever its type is. */
+describe("table columns are counted from whatever the renderer would use (first child of any type)", () => {
+  const spanned = (n: number) => Array.from({ length: n }, () => ({ type: "tableCell", attrs: { colspan: 32 }, content: [{ type: "paragraph" }] }));
+  it("a first child that is not a tableRow but holds spanned cells is still counted", () => {
+    const t = Date.now();
+    for (const first of [{ type: "tableCell", content: spanned(1000) }, { type: "paragraph", content: spanned(1000).map((c) => ({ ...c, type: "tableHeader" })) }]) {
+      const r = panel(doc({ type: "table", content: [first] }));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.message).toMatch(/table columns|cells/);
+    }
+    expect(Date.now() - t).toBeLessThan(500);
+  });
+});
