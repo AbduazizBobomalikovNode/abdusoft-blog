@@ -46,6 +46,9 @@ import type {
   UpdatePostResponse,
   UpdateSiteSettingsBody,
   UpdateTagBody,
+  MotionJobDetail,
+  MotionJobList,
+  MotionStatus,
 } from "@blog/shared";
 import { site } from "./site";
 
@@ -444,6 +447,13 @@ export const adminApi = {
 
   revokeStaffInvite: (id: string) =>
     adminJson<{ ok: true }>(`/admin/staff/invites/${id}/revoke`, { method: "POST" }),
+
+  /** Video xizmati holati. Bayroq o'chiq bo'lsa 404 (AdminApiError) — UI yashiriladi. */
+  getVideoStatus: () => adminJson<MotionStatus>("/admin/video/status"),
+  listVideoJobs: (postId: string) => adminJson<MotionJobList>(`/admin/video/jobs?postId=${encodeURIComponent(postId)}&limit=30`),
+  getVideoJob: (id: string) => adminJson<MotionJobDetail>(`/admin/video/jobs/${encodeURIComponent(id)}`),
+  cancelVideoJob: (id: string) => adminJson<MotionJobDetail>(`/admin/video/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  deleteVideoJob: (id: string) => adminJson<{ ok: true }>(`/admin/video/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   /** BARCHA ulangan ilovalarni bir yo'la uzadi (token'lar, rozilik, kutilayotgan kodlar). */
   revokeAllConnections: () => adminJson<{ revoked: number }>("/admin/connections", { method: "DELETE" }),
