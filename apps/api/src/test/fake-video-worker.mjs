@@ -41,7 +41,12 @@ if (mode === "hang" || mode === "stubborn" || mode === "child" || mode === "memo
     writeFileSync(path.join(process.cwd(), "child.pid"), String(child.pid));
   }
   if (mode === "memory") {
-    globalThis.hold = Buffer.alloc(330 * 1024 * 1024, 1);
+    // Touch every page repeatedly so the resident set really grows (macOS compresses idle pages).
+    const hold = Buffer.alloc(400 * 1024 * 1024, 1);
+    globalThis.hold = hold;
+    setInterval(() => {
+      for (let i = 0; i < hold.length; i += 4096) hold[i] = (hold[i] + 1) & 255;
+    }, 200);
   }
   writeFileSync(path.join(process.cwd(), `${mode}.pid`), String(process.pid));
   setInterval(() => out({ t: "progress", phase: "render", fraction: 0.3, message: "frame 3/90" }), 500);
