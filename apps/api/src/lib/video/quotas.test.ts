@@ -108,6 +108,7 @@ describe("quotas are atomic under parallel calls", () => {
 describe("the daily count cannot be reset by deleting jobs", () => {
   it("deleting every job does not give the quota back", async () => {
     setCfg({ VIDEO_MAX_RENDERS_PER_DAY: 2, VIDEO_MAX_QUEUE: 50 });
+    const before = (await db.select().from(s.motionJobs)).length;
     for (let i = 0; i < 2; i++) {
       const r = await jobs.createJob(actor(), { kind: "render", storyboard: sbOf("ok"), postId: await newPost() });
       expect(r.ok).toBe(true);
@@ -117,7 +118,7 @@ describe("the daily count cannot be reset by deleting jobs", () => {
         expect(del.ok, JSON.stringify(del)).toBe(true);
       }
     }
-    expect(await db.select().from(s.motionJobs)).toHaveLength(0);
+    expect(await db.select().from(s.motionJobs)).toHaveLength(before);
     const third = await jobs.createJob(actor(), { kind: "render", storyboard: sbOf("ok"), postId: await newPost() });
     expect(codeOf(third)).toBe("daily_renders");
     expect((await jobs.countCreatedToday()).renders).toBe(2);
