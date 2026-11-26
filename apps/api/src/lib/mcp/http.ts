@@ -50,30 +50,53 @@ const SAFE_METHOD = /^[A-Za-z0-9_./-]{1,80}$/;
 export const MCP_LOG_PEEK_BYTES = 16 * 1024;
 const PEEK_KEY = "mcpLogPeek";
 
+/** Peek uchun eng ko'p kutish (ms): sekin/to'xtab qolgan tana autentifikatsiyani va javobni kechiktirmasin. */
+export const MCP_LOG_PEEK_DEADLINE_MS = 1000;
+
 /**
- * Tananing boshidan EN KO'PI bilan `MCP_LOG_PEEK_BYTES` bayt o'qiydi (klon oqimidan, so'ng klon bekor qilinadi — asl oqim
- * to'liq saqlanadi va uni baribir `bodyLimit` cheklaydi). Faqat `bodyLimit`dan KEYIN ulanadi: shuning uchun autentifikatsiyasiz
- * so'rovning tanasi hech qachon cheksiz klonlanmaydi/buferlanmaydi. Natija `mcpRejectLogger`ga uzatiladi.
+ * Klon (tee) oqimidan EN KO'PI bilan `MCP_LOG_PEEK_BYTES` bayt o'qiydi. MUHIM: tee shoxini `cancel()` qilish va KUTISH mumkin emas —
+ * Streams spetsifikatsiyasiga ko'ra bitta shoxni bekor qilish va'dasi IKKALA shox bekor qilingandagina hal bo'ladi, shuning uchun
+ * to'liq o'qilmagan tana (16 KB dan katta) so'rovni abadiy muzlatib qo'yardi. Shu sabab `cancel()` kutilmaydi (fire-and-forget),
+ * o'qish esa qisqa muddat (`deadlineMs`) bilan chegaralanadi; muddat o'tsa — `undefined` ("metod noma'lum"), asl tana esa butun qoladi.
+ */
+async function peekBody(raw: Request, deadlineMs: number): Promise<string | undefined> {
+  const reader = raw.clone().body?.getReader();
+  if (!reader) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = (async () => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total <= MCP_LOG_PEEK_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    return total <= MCP_LOG_PEEK_BYTES ? new TextDecoder().decode(Buffer.concat(chunks)) : undefined;
+  })();
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), deadlineMs);
+  });
+  try {
+    return await Promise.race([read, deadline]);
+  } finally {
+    clearTimeout(timer);
+    // KUTILMAYDI: tee shoxining cancel() va'dasi ikkinchi shox bekor qilinmaguncha hal bo'lmaydi.
+    reader.cancel().catch(() => undefined);
+    read.catch(() => undefined);
+  }
+}
+
+/**
+ * Faqat `Authorization` sarlavhali POST uchun (autentifikatsiyasiz so'rov tanasi umuman o'qilmaydi — `main` bilan bir xil xatti-harakat:
+ * tana kelmay qolgan mijoz ham darhol 401 oladi). Faqat `bodyLimit`dan KEYIN ulanadi: tana hech qachon cheksiz klonlanmaydi/buferlanmaydi.
+ * Natija `mcpRejectLogger`ga uzatiladi.
  */
 export const mcpLogPeek: MiddlewareHandler = async (c, next) => {
   try {
-    if (c.req.method === "POST" && c.req.raw.body) {
-      const reader = c.req.raw.clone().body?.getReader();
-      if (reader) {
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        try {
-          while (total <= MCP_LOG_PEEK_BYTES) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            total += value.byteLength;
-          }
-        } finally {
-          await reader.cancel().catch(() => undefined);
-        }
-        if (total <= MCP_LOG_PEEK_BYTES) c.set(PEEK_KEY, new TextDecoder().decode(Buffer.concat(chunks)));
-      }
+    if (c.req.method === "POST" && c.req.raw.body && c.req.header("authorization")) {
+      const text = await peekBody(c.req.raw, MCP_LOG_PEEK_DEADLINE_MS);
+      if (text !== undefined) c.set(PEEK_KEY, text);
     }
   } catch {
     // log uchun — hech qachon so'rovni buzmasin
