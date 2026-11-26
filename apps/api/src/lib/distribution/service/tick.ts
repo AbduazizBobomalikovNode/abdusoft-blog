@@ -5,9 +5,13 @@ import { runTokenReminders, runTokenRefreshes } from "./accounts.js";
 import { distNow } from "./env.js";
 import { recoverInterruptedDistributions, runDueDistributions } from "./runner.js";
 
-/** Ishga tushganda: oldingi jarayondan qolgan `sending` yozuvlari "tekshirish kerak" bo'ladi (qayta urinilmaydi). */
+/**
+ * Ishga tushganda: oldingi jarayondan qolgan `sending` yozuvlari "tekshirish kerak" bo'ladi (qayta urinilmaydi) — lekin faqat
+ * ESKIRGANLARI (`STALE_SENDING_MS`). Deploy kesishuvida eski jarayon hali yuborishni tugatayotgan bo'lishi mumkin: yangi qatorga
+ * tegilmaydi (o'zi natijani yozadi); o'lgan jarayonning qatori keyingi tick'larda eskirganda baribir "tekshirish kerak"ga o'tadi.
+ */
 export async function recoverDistributionsOnStart(): Promise<void> {
-  const n = await recoverInterruptedDistributions(distNow(), true);
+  const n = await recoverInterruptedDistributions(distNow(), false);
   if (n > 0) console.log(`Uzilib qolgan tarqatishlar «tekshirish kerak»ga o'tkazildi: ${n}`);
 }
 

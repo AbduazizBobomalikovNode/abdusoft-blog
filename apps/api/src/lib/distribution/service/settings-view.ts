@@ -12,6 +12,7 @@ export async function buildSettingsView(): Promise<DistributionSettingsResponse>
     const p = getProvider(id);
     const row = await getActiveAccount(id);
     const oauth = isOAuthProvider(id);
+    const creds = oauth ? await getCredentials(id) : null;
     providers.push({
       id,
       name: meta.name,
@@ -25,7 +26,8 @@ export async function buildSettingsView(): Promise<DistributionSettingsResponse>
       restrictions: [...meta.restrictions],
       docs: [...meta.docs],
       credentials: oauth ? await getCredentialsAdmin(id) : null,
-      credentialsReady: oauth ? credentialsReady(id, await getCredentials(id)) : true,
+      credentialsReady: oauth && creds ? credentialsReady(id, creds) : true,
+      ...(creds?.secretUnreadable ? { credentialsUnreadable: true } : {}),
       account: row ? accountView(row, distNow()) : null,
       capabilities: capabilitiesDto(id),
     });

@@ -485,6 +485,13 @@ export const distributions = pgTable(
     imageChoice: text("image_choice").notNull().default("auto"),
     /** LinkedIn: `article` | `text`. */
     linkMode: text("link_mode"),
+    /**
+     * Rejalashtirish/yuborish paytida KO'RSATILGAN (render qilingan) matn. Qo'lda tahrirlanmagan tarqatish ham keyinroq postning
+     * o'zgarishidan qayta hisoblangan matnni emas, aynan shu matnni yuboradi. `null` — GitHub (blok har safar qayta yig'iladi) va qoralamalar.
+     */
+    renderedText: text("rendered_text"),
+    /** Rejalashtirish paytidagi akkauntning platformadagi id'si: keyin BOSHQA akkaunt ulansa, yuborish rad etiladi. */
+    accountExternalId: text("account_external_id"),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
     /** Avtomatik qayta urinish (transient/rate_limited) uchun keyingi urinish vaqti. */
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),

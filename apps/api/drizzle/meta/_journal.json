@@ -127,6 +127,13 @@
       "when": 1795636735775,
       "tag": "0017_distribution_integration",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795657164275,
+      "tag": "0018_distribution_frozen_text_account",
+      "breakpoints": true
     }
   ]
 }

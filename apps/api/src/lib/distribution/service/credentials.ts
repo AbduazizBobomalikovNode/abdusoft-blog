@@ -39,21 +39,34 @@ async function loadRaw(): Promise<Raw> {
 export interface ResolvedCredentials {
   clientId: string;
   clientSecret: string;
+  /** DB'da shifrlangan Client Secret bor, lekin deshifrlanmaydi (`BETTER_AUTH_SECRET` almashtirilgan) va env'dan ham berilmagan. */
+  secretUnreadable?: boolean;
 }
+
+/** Saqlangan (shifrlangan) qiymat bor, lekin deshifrlanganda bo'sh — kalit almashtirilgan yoki qiymat buzilgan. */
+export function isUnreadableSecret(stored: string | null | undefined): boolean {
+  return Boolean(stored) && decryptSecret(stored) === "";
+}
+
+export const UNREADABLE_CREDENTIALS_MESSAGE = "Saqlangan Client Secret o'qib bo'lmadi (maxfiy kalit o'zgargan) — Client Secret'ni qaytadan kiriting";
 
 /** env (bo'sh bo'lmasa) > DB. Deshifrlangan qiymat FAQAT server ichida (token almashtirish) ishlatiladi. */
 export async function getCredentials(provider: OAuthProviderId): Promise<ResolvedCredentials> {
   const raw = (await loadRaw())[provider] ?? {};
   const env = ENV[provider];
+  const secret = env.secretValue() || decryptSecret(raw.clientSecret);
   return {
     clientId: env.idValue() || raw.clientId || "",
-    clientSecret: env.secretValue() || decryptSecret(raw.clientSecret),
+    clientSecret: secret,
+    ...(!env.secretValue() && isUnreadableSecret(raw.clientSecret) ? { secretUnreadable: true } : {}),
   };
 }
 
 /** Tayyor: client id va (X'dan tashqari hammasida majburiy) client secret bor. X — public client bo'lishi mumkin. */
 export function credentialsReady(provider: OAuthProviderId, creds: ResolvedCredentials): boolean {
   if (!creds.clientId) return false;
+  // X public client bo'lishi mumkin, lekin saqlangan sir BOR-u o'qilmasa — sozlanmagan hisoblanadi (jimgina sirsiz davom etmaydi).
+  if (creds.secretUnreadable) return false;
   return provider === "x" ? true : Boolean(creds.clientSecret);
 }
 

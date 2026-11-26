@@ -59,6 +59,8 @@ export interface DistributionAccountDto {
   expiresAt: string | null;
   daysLeft: number | null;
   canRefresh: boolean;
+  /** Saqlangan token deshifrlanmaydi (masalan `BETTER_AUTH_SECRET` almashtirilgan) — faqat qayta ulash yordam beradi. */
+  secretUnreadable?: boolean;
 }
 
 export interface DistributionCredentialField {
@@ -93,6 +95,8 @@ export interface DistributionProviderSettingsDto {
   /** OAuth provider uchun client id/secret (maxfiy qiymat maskalangan). GitHub (token yopishtiriladi) uchun null. */
   credentials: { clientId: DistributionCredentialField; clientSecret: DistributionCredentialField } | null;
   credentialsReady: boolean;
+  /** Saqlangan Client Secret deshifrlanmaydi (maxfiy kalit almashtirilgan) — qaytadan kiriting. */
+  credentialsUnreadable?: boolean;
   account: DistributionAccountDto | null;
   capabilities: DistributionProviderCapabilitiesDto;
 }
@@ -190,6 +194,8 @@ export interface DistributionPostResponse {
   distributions: DistributionItemDto[];
   /** Doim `false`: chop etilganda hech narsa avtomatik yuborilmaydi. */
   autoPost: false;
+  /** Post savatda (o'chirilgan): faqat ko'rish va platformadan olib tashlash mumkin; yangi yuborish yo'q. Savatda bo'lmasa maydon yo'q. */
+  postDeleted?: true;
 }
 
 // --- Matn uzunligini platforma sanagandek hisoblash (API providerlarining `measureText` bilan bir xil; API testi tengligini tekshiradi) ---

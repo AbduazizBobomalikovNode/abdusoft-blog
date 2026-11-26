@@ -5,7 +5,7 @@ import { GITHUB_HOSTS, contentsUrl, githubHeaders, renderReadmeList } from "../p
 import { truncateTo } from "../text.js";
 import type { DistributionProvider, ImageMeta, PreflightInput, ProviderId } from "../types.js";
 import { config } from "../../../config.js";
-import { getActiveAccount, toConnected, type AccountRow } from "./accounts.js";
+import { accountSecretsUnreadable, getActiveAccount, toConnected, type AccountRow } from "./accounts.js";
 import { capabilitiesDto, channelFor } from "./channels.js";
 import { getProvider, providerDeps } from "./env.js";
 import { cachedPublicImageUrl, ensurePublicImageUrl, imageSourcePreview, prepareSocialImage, publicMediaBase, type SocialImageResult } from "./images.js";
@@ -129,7 +129,7 @@ export async function resolvePlan(postId: string, providerId: ProviderId, opts: 
 
   // --- Provayder tekshiruvlari ---
   let currentReadme: string | undefined;
-  if (isGithub && opts.live && account) {
+  if (isGithub && opts.live && account && !accountSecretsUnreadable(account)) {
     const readme = await readGithubReadme(account).catch(() => null);
     if (readme === null) checks.push(check({ id: "dist.readme", group: "config", status: "warn", title: "README", message: "README'ni o'qib bo'lmadi — markerlar tekshirilmadi" }));
     else currentReadme = readme;

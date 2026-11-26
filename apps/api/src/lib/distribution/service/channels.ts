@@ -2,7 +2,7 @@ import type { DistributionChannelDto, DistributionProviderCapabilitiesDto } from
 import { getSettings } from "../../settings.js";
 import { PROVIDER_IDS } from "../registry.js";
 import type { ProviderId } from "../types.js";
-import { accountView, getActiveAccount } from "./accounts.js";
+import { UNREADABLE_TOKEN_MESSAGE, accountView, getActiveAccount } from "./accounts.js";
 import { distNow, getProvider } from "./env.js";
 
 export const CHANNEL_NAMES: Record<ProviderId, string> = {
@@ -31,6 +31,7 @@ export async function channelFor(id: ProviderId): Promise<DistributionChannelDto
   let ready = false;
   let reason: string | null = null;
   if (!account) reason = "Akkaunt ulanmagan (Sozlamalar → Tarqatish kanallari)";
+  else if (account.secretUnreadable) reason = UNREADABLE_TOKEN_MESSAGE;
   else if (account.status === "reauth_required" || account.tokenState === "expired") reason = "Token yaroqsiz yoki muddati tugagan — qayta ulang";
   else ready = true;
   return { id, name: CHANNEL_NAMES[id], readOnly: false, connected: Boolean(account), ready, notReadyReason: reason, account, capabilities: capabilitiesDto(id) };

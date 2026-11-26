@@ -9,7 +9,7 @@ import { DistributionError, isDistributionError, sanitizeMessage } from "../erro
 import { createOAuthState, verifyOAuthState } from "../oauth-state.js";
 import { DAY_MS } from "../token-status.js";
 import type { ConnectedAccount, DistributionProvider, ProviderId } from "../types.js";
-import { credentialsReady, getCredentials, isOAuthProvider, type OAuthProviderId } from "./credentials.js";
+import { UNREADABLE_CREDENTIALS_MESSAGE, credentialsReady, getCredentials, isOAuthProvider, type OAuthProviderId } from "./credentials.js";
 import { distNow, getProvider, providerDeps, redirectUrlFor } from "./env.js";
 import { escapeHtml, notifyOwner } from "./notify.js";
 
@@ -32,6 +32,16 @@ export function toConnected(row: AccountRow): ConnectedAccount {
     meta: row.meta,
   };
 }
+
+/**
+ * Saqlangan token (yoki refresh token) bor, lekin deshifrlanmaydi (`BETTER_AUTH_SECRET` almashtirilgan): `decryptSecret`
+ * bo'sh satr qaytaradi. Bunday akkaunt "faol" EMAS — qayta ulash kerak; unga hech qanday tashqi so'rov yuborilmaydi.
+ */
+export function accountSecretsUnreadable(row: AccountRow): boolean {
+  return (Boolean(row.accessTokenEnc) && decryptSecret(row.accessTokenEnc) === "") || (Boolean(row.refreshTokenEnc) && decryptSecret(row.refreshTokenEnc) === "");
+}
+
+export const UNREADABLE_TOKEN_MESSAGE = "Saqlangan token o'qib bo'lmadi (maxfiy kalit o'zgargan) — qayta ulang";
 
 function tokenColumns(acc: ConnectedAccount) {
   return {
@@ -63,13 +73,15 @@ export async function getAccountById(id: string): Promise<AccountRow | null> {
 export function accountView(row: AccountRow, now: Date): DistributionAccountDto {
   const provider = getProvider(row.provider as ProviderId);
   const st = provider.tokenStatus(toConnected(row), now);
-  const reauth = row.status === "reauth_required";
+  const unreadable = accountSecretsUnreadable(row);
+  const reauth = row.status === "reauth_required" || unreadable;
   const tokenState: DistributionTokenState = reauth ? "expired" : st.state;
   return {
     id: row.id,
     displayName: row.displayName,
     username: row.username,
     status: reauth ? "reauth_required" : "active",
+    ...(unreadable ? { secretUnreadable: true } : {}),
     scopes: row.scopes,
     connectedAt: row.connectedAt.toISOString(),
     tokenState,
@@ -126,6 +138,7 @@ export function safeErrorMessage(error: unknown, secrets: readonly string[] = []
 export async function startConnect(actor: Actor, provider: ProviderId): Promise<ServiceResult<{ authorizationUrl: string; redirectUrl: string }>> {
   if (!isOAuthProvider(provider)) return fail("bad_request", "Bu provider OAuth bilan ulanmaydi (token yopishtiriladi)");
   const creds = await getCredentials(provider);
+  if (creds.secretUnreadable) return fail("unprocessable", UNREADABLE_CREDENTIALS_MESSAGE);
   if (!credentialsReady(provider, creds)) return fail("unprocessable", "Avval Client ID va Client Secret'ni kiriting va saqlang");
   const p = getProvider(provider);
   const now = distNow();
@@ -253,7 +266,16 @@ async function doRefresh(row: AccountRow): Promise<RefreshOutcome> {
   if (!provider.auth.refresh) return { ok: false, row, error: null };
   const now = distNow();
   lastRefreshAttempt.set(row.id, now.getTime());
+  // O'qib bo'lmaydigan token bilan platformaga HECH QANDAY so'rov yuborilmaydi: akkaunt "qayta ulash kerak"ga o'tadi (bitta bildirishnoma).
+  if (accountSecretsUnreadable(row)) {
+    const [saved] = await markReauth(row, UNREADABLE_TOKEN_MESSAGE);
+    return { ok: false, row: saved ?? row, error: new DistributionError({ kind: "auth_expired", message: UNREADABLE_TOKEN_MESSAGE }) };
+  }
   const creds = isOAuthProvider(row.provider) ? await getCredentials(row.provider as OAuthProviderId) : { clientId: "", clientSecret: "" };
+  if (creds.secretUnreadable) {
+    const [saved] = await markReauth(row, UNREADABLE_CREDENTIALS_MESSAGE);
+    return { ok: false, row: saved ?? row, error: new DistributionError({ kind: "auth_expired", message: UNREADABLE_CREDENTIALS_MESSAGE }) };
+  }
   try {
     const result = await provider.auth.refresh(providerDeps(), { clientId: creds.clientId, clientSecret: creds.clientSecret || undefined, redirectUri: redirectUrlFor(row.provider as ProviderId) }, toConnected(row));
     const [saved] = await db
@@ -292,6 +314,10 @@ async function markReauth(row: AccountRow, reason: string) {
 
 /** Yuborishdan oldin: kerak bo'lsa tokenni yangilaydi. Akkaunt ishlamaydigan bo'lsa `DistributionError` tashlaydi. */
 export async function ensureFreshAccount(row: AccountRow): Promise<AccountRow> {
+  if (accountSecretsUnreadable(row)) {
+    if (row.status !== "reauth_required") await markReauth(row, UNREADABLE_TOKEN_MESSAGE);
+    throw new DistributionError({ kind: "auth_expired", message: UNREADABLE_TOKEN_MESSAGE });
+  }
   if (row.status === "reauth_required") throw new DistributionError({ kind: "auth_expired", message: "Akkaunt qayta ulanishi kerak (token yaroqsiz)" });
   const provider = getProvider(row.provider as ProviderId);
   const st = provider.tokenStatus(toConnected(row), distNow());
@@ -318,14 +344,23 @@ export async function runTokenRefreshes(now: Date = distNow()): Promise<number> 
   const rows = await db.select().from(distributionAccounts).where(eq(distributionAccounts.status, "active"));
   let attempted = 0;
   for (const row of rows) {
-    const provider = getProvider(row.provider as ProviderId);
-    if (!provider.auth.refresh) continue;
-    const st = provider.tokenStatus(toConnected(row), now);
-    if (!st.refreshDue) continue;
-    const last = lastRefreshAttempt.get(row.id) ?? 0;
-    if (now.getTime() - last < REFRESH_RETRY_MS) continue;
-    attempted += 1;
-    await refreshAccount(row);
+    // Bitta akkauntdagi xato (masalan baza xatosi) qolganlarini to'xtatmasin.
+    try {
+      if (accountSecretsUnreadable(row)) {
+        await markReauth(row, UNREADABLE_TOKEN_MESSAGE);
+        continue;
+      }
+      const provider = getProvider(row.provider as ProviderId);
+      if (!provider.auth.refresh) continue;
+      const st = provider.tokenStatus(toConnected(row), now);
+      if (!st.refreshDue) continue;
+      const last = lastRefreshAttempt.get(row.id) ?? 0;
+      if (now.getTime() - last < REFRESH_RETRY_MS) continue;
+      attempted += 1;
+      await refreshAccount(row);
+    } catch (error: unknown) {
+      console.error(`Token yangilashda xato (${row.provider}):`, error instanceof Error ? error.message : "noma'lum");
+    }
   }
   return attempted;
 }
@@ -338,29 +373,46 @@ export async function runTokenReminders(now: Date = distNow()): Promise<number> 
   const rows = await db.select().from(distributionAccounts).where(eq(distributionAccounts.status, "active"));
   let sent = 0;
   for (const row of rows) {
-    const provider: DistributionProvider = getProvider(row.provider as ProviderId);
-    if (provider.tokenPolicy.refresh !== "none") continue;
-    const st = provider.tokenStatus(toConnected(row), now);
-    if (!st.expiresAt) continue;
-    const label = PROVIDER_LABEL[row.provider as ProviderId];
-    if (st.state === "expired") {
-      const [updated] = await db.update(distributionAccounts).set({ status: "reauth_required", lastReminderAt: now, updatedAt: now }).where(and(eq(distributionAccounts.id, row.id), eq(distributionAccounts.status, "active"))).returning();
-      if (updated) {
-        await notifyOwner(`🔴 <b>${escapeHtml(label)}</b> tokeni muddati tugadi — post yuborib bo'lmaydi. Qayta ulang: Sozlamalar → Tarqatish kanallari.`);
-        await recordAuditSafe(SCHEDULER_ACTOR, { action: "distribution.token_expired", entityType: "distribution_account", entityId: row.id, summary: `${label} tokeni muddati tugadi`, meta: { provider: row.provider } });
-        sent += 1;
-      }
-      continue;
-    }
-    if (!st.remindAt || now.getTime() < st.remindAt.getTime()) continue;
-    if (row.lastReminderAt && now.getTime() - row.lastReminderAt.getTime() < DAY_MS) continue;
-    const result = await notifyOwner(`🟡 <b>${escapeHtml(label)}</b> tokeni ${escapeHtml(daysText(st.daysLeft ?? 0))} tugaydi (${escapeHtml(st.expiresAt.toISOString().slice(0, 10))}). Qayta ulang: Sozlamalar → Tarqatish kanallari.`);
-    if (result !== "error") {
-      await db.update(distributionAccounts).set({ lastReminderAt: now }).where(eq(distributionAccounts.id, row.id));
-      if (result === "sent") sent += 1;
+    // Bitta akkauntdagi xato (masalan baza xatosi) qolganlariga to'sqinlik qilmasin.
+    try {
+      sent += await remindOne(row, now);
+    } catch (error: unknown) {
+      console.error(`Token eslatmasida xato (${row.provider}):`, error instanceof Error ? error.message : "noma'lum");
     }
   }
   return sent;
+}
+
+async function remindOne(row: AccountRow, now: Date): Promise<number> {
+  if (accountSecretsUnreadable(row)) {
+    await markReauth(row, UNREADABLE_TOKEN_MESSAGE);
+    return 0;
+  }
+  const provider: DistributionProvider = getProvider(row.provider as ProviderId);
+  if (provider.tokenPolicy.refresh !== "none") return 0;
+  const st = provider.tokenStatus(toConnected(row), now);
+  if (!st.expiresAt) return 0;
+  const label = PROVIDER_LABEL[row.provider as ProviderId];
+  if (st.state === "expired") {
+    const [updated] = await db.update(distributionAccounts).set({ status: "reauth_required", lastReminderAt: now, updatedAt: now }).where(and(eq(distributionAccounts.id, row.id), eq(distributionAccounts.status, "active"))).returning();
+    if (updated) {
+      await notifyOwner(`🔴 <b>${escapeHtml(label)}</b> tokeni muddati tugadi — post yuborib bo'lmaydi. Qayta ulang: Sozlamalar → Tarqatish kanallari.`);
+      await recordAuditSafe(SCHEDULER_ACTOR, { action: "distribution.token_expired", entityType: "distribution_account", entityId: row.id, summary: `${label} tokeni muddati tugadi`, meta: { provider: row.provider } });
+      return 1;
+    }
+    return 0;
+  }
+  if (!st.remindAt || now.getTime() < st.remindAt.getTime()) return 0;
+  if (row.lastReminderAt && now.getTime() - row.lastReminderAt.getTime() < DAY_MS) return 0;
+  const result = await notifyOwner(`🟡 <b>${escapeHtml(label)}</b> tokeni ${escapeHtml(daysText(st.daysLeft ?? 0))} tugaydi (${escapeHtml(st.expiresAt.toISOString().slice(0, 10))}). Qayta ulang: Sozlamalar → Tarqatish kanallari.`);
+  if (result === "error") return 0; // vaqtinchalik xato — keyingi tick'da qayta uriniladi
+  await db.update(distributionAccounts).set({ lastReminderAt: now }).where(eq(distributionAccounts.id, row.id));
+  if (result === "skipped") {
+    // Telegram sozlanmagan: eslatma yetkazib bo'lmadi. Har daqiqada qayta baholamaymiz — qayd etib, ertasi kuni yana uriniladi.
+    await recordAuditSafe(SCHEDULER_ACTOR, { action: "distribution.reminder_undelivered", entityType: "distribution_account", entityId: row.id, summary: `${label}: token eslatmasi yetkazilmadi (Telegram sozlanmagan)`, meta: { provider: row.provider } });
+    return 0;
+  }
+  return 1;
 }
 
 /** Test yordamchisi. */

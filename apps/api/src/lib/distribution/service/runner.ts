@@ -24,6 +24,11 @@ const RATE_LIMIT_DEFAULT_MS = 15 * 60_000;
 /** `sending` holatida shuncha vaqt turib qolsa — jarayon o'lgan; noaniq natija sifatida "tekshirish kerak". */
 export const STALE_SENDING_MS = 20 * 60_000;
 
+export const ACCOUNT_CHANGED_MESSAGE = "Rejalashtirilgandan keyin bu kanalga BOSHQA akkaunt ulangan — yangi akkauntga yuborilmadi. Bekor qilib, qaytadan rejalashtiring (yoki yuboring)";
+
+/** Tiklash belgisi: bu xabar bilan `needs_checking`ga o'tgan qatorga kech tugagan yuborishning natijasi yoziladi (qarang `finishSent`). */
+export const RECOVERED_MESSAGE = "Yuborish jarayoni to'xtab qoldi (server qayta ishga tushgan bo'lishi mumkin). Platformada tekshiring.";
+
 export function backoffFor(attempt: number): number {
   return BACKOFF_MS[Math.min(Math.max(attempt - 1, 0), BACKOFF_MS.length - 1)]!;
 }
@@ -72,18 +77,30 @@ function secretsOf(account: Awaited<ReturnType<typeof getActiveAccount>>): strin
 
 async function finishSent(row: DistributionRow, result: { externalId: string; url: string | null }, text: string): Promise<void> {
   const now = distNow();
-  const [updated] = await db
+  const sentFields = { status: "sent" as const, sentText: text, externalId: result.externalId, externalUrl: result.url, sentAt: now, lastErrorKind: null, lastErrorMessage: null, step: null, partial: null, nextAttemptAt: null, updatedAt: now };
+  let [updated] = await db
     .update(distributions)
-    .set({ status: "sent", sentText: text, externalId: result.externalId, externalUrl: result.url, sentAt: now, lastErrorKind: null, lastErrorMessage: null, step: null, partial: null, nextAttemptAt: null, updatedAt: now })
+    .set(sentFields)
     .where(and(eq(distributions.id, row.id), eq(distributions.status, "sending")))
     .returning();
+  let late = false;
+  if (!updated) {
+    // Deploy kesishuvi: qator yuborish paytida (boshqa jarayon) "tekshirish kerak"ga o'tkazilgan bo'lishi mumkin. Platforma post'ni
+    // yaratgani ANIQ bo'lgani uchun natija yoziladi — faqat tiklash belgisi turgan, shu urinishning qatoriga (odam hal qilgan qatorga tegilmaydi).
+    [updated] = await db
+      .update(distributions)
+      .set(sentFields)
+      .where(and(eq(distributions.id, row.id), eq(distributions.status, "needs_checking"), eq(distributions.lastErrorMessage, RECOVERED_MESSAGE), eq(distributions.attempts, row.attempts)))
+      .returning();
+    late = Boolean(updated);
+  }
   if (!updated) return;
   await recordAuditSafe(SCHEDULER_ACTOR, {
     action: "distribution.sent",
     entityType: "distribution",
     entityId: row.id,
     summary: `${PROVIDER_LABEL[row.provider as ProviderId]}: yuborildi`,
-    meta: { postId: row.postId, provider: row.provider, attempts: row.attempts, via: row.createdVia },
+    meta: { postId: row.postId, provider: row.provider, attempts: row.attempts, via: row.createdVia, ...(late ? { recordedAfterRecovery: true } : {}) },
   });
 }
 
@@ -135,10 +152,15 @@ export async function runDistribution(id: string, now: Date = distNow()): Promis
     title = post0.title;
     if (post0.deletedAt || post0.status !== "published") throw new DistributionError({ kind: "validation_rejected", message: "Post chop etilmagan yoki o'chirilgan — yuborilmadi" });
     if (!account) throw new DistributionError({ kind: "auth_expired", message: "Akkaunt ulanmagan — Sozlamalar → Tarqatish kanallari" });
+    // Rejalashtirilgan akkaunt almashtirilgan bo'lsa (boshqa akkaunt ulangan) — yangi akkauntga POST QILINMAYDI.
+    if (row.accountExternalId && account.externalId !== row.accountExternalId) {
+      throw new DistributionError({ kind: "validation_rejected", message: ACCOUNT_CHANGED_MESSAGE });
+    }
     account = await ensureFreshAccount(account);
 
-    // Yuborish paytida QAYTA tayyorlanadi (rasm saqlashga yoziladi, tekshiruvlar yangilanadi).
-    const plan = await resolvePlan(row.postId, providerId, { row, forSend: true });
+    // Yuborish paytida QAYTA tayyorlanadi (rasm saqlashga yoziladi, tekshiruvlar yangilanadi), lekin matn — rejalashtirish
+    // paytida ko'rsatilgani (`renderedText`): postning keyingi tahriri yuboriladigan matnni jimgina o'zgartirmaydi.
+    const plan = await resolvePlan(row.postId, providerId, { row, forSend: true, ...(row.renderedText !== null && providerId !== "github" ? { overrides: { text: row.renderedText } } : {}) });
     if (!plan) throw new DistributionError({ kind: "validation_rejected", message: "Post topilmadi" });
     if (plan.errorCount > 0) {
       const first = plan.checks.filter((c) => c.status === "error").map((c) => c.message).slice(0, 3).join("; ");
@@ -179,8 +201,14 @@ export async function runDueDistributions(now: Date = distNow()): Promise<number
     .where(and(eq(distributions.status, "scheduled"), or(isNull(distributions.scheduledAt), lte(distributions.scheduledAt, now)), or(isNull(distributions.nextAttemptAt), lte(distributions.nextAttemptAt, now))));
   let n = 0;
   for (const { id } of due) {
-    const outcome = await runDistribution(id, now);
-    if (outcome !== "skipped") n += 1;
+    // Bitta tarqatishdagi xato (masalan claim/finish paytidagi baza xatosi) qolganlarini to'xtatmasin. Qator `sending`da qolsa,
+    // tiklash uni "tekshirish kerak"ka o'tkazadi (hech qachon avtomatik qayta yuborilmaydi).
+    try {
+      const outcome = await runDistribution(id, now);
+      if (outcome !== "skipped") n += 1;
+    } catch (error: unknown) {
+      console.error(`Tarqatishni bajarishda xato (${id}):`, error instanceof Error ? error.message : "noma'lum");
+    }
   }
   return n;
 }
@@ -193,7 +221,7 @@ export async function recoverInterruptedDistributions(now: Date = distNow(), all
   const cutoff = new Date(now.getTime() - STALE_SENDING_MS);
   const rows = await db
     .update(distributions)
-    .set({ status: "needs_checking", lastErrorKind: "outcome_unknown", lastErrorMessage: "Yuborish jarayoni to'xtab qoldi (server qayta ishga tushgan bo'lishi mumkin). Platformada tekshiring.", updatedAt: now })
+    .set({ status: "needs_checking", lastErrorKind: "outcome_unknown", lastErrorMessage: RECOVERED_MESSAGE, updatedAt: now })
     .where(and(eq(distributions.status, "sending"), all ? undefined : lt(distributions.updatedAt, cutoff)))
     .returning();
   for (const row of rows) {

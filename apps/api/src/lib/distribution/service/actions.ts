@@ -75,11 +75,15 @@ function auditEntry(action: string, row: DistributionRow, summary: string, meta:
   return { action, entityType: "distribution", entityId: row.id, summary: `${PROVIDER_LABEL[row.provider as ProviderId]}: ${summary}`, meta: { postId: row.postId, provider: row.provider, ...meta } };
 }
 
+/**
+ * Post savatda bo'lsa ham ro'yxat qaytadi (`postDeleted: true`): yuborilgan postlarni platformadan olib tashlash mumkin bo'lishi
+ * uchun. Savatdagi postga yangi yuborish/rejalashtirish baribir mumkin emas (`guardPost`).
+ */
 export async function listPostDistributions(postId: string): Promise<ServiceResult<DistributionPostResponse>> {
-  const post = await guardPost(postId);
+  const post = await loadPostForDistribution(postId);
   if (!post) return fail("not_found", "Post topilmadi");
   const [channels, rows] = await Promise.all([listChannels(), listForPost(postId)]);
-  return ok({ channels, distributions: rows.map(toItemDto), autoPost: false });
+  return ok({ channels, distributions: rows.map(toItemDto), autoPost: false, ...(post.deletedAt ? { postDeleted: true as const } : {}) });
 }
 
 /** Matn/rasm tanlovini saqlaydi (qoralama). Hech narsa yuborilmaydi. */
@@ -91,9 +95,15 @@ export async function saveDraft(actor: Actor, postId: string, provider: Provider
   if (!["draft", "failed", "scheduled"].includes(row.status)) {
     return fail("conflict", row.status === "sending" ? "Hozir yuborilmoqda — tahrirlab bo'lmaydi" : "Avval «tekshirish kerak» holatini hal qiling");
   }
+  // Rejalashtirilgan tarqatishning matni o'zgarsa, "muzlatilgan" matn ham yangi ko'rsatilgan matnga yangilanadi.
+  let frozen: Partial<typeof distributions.$inferInsert> = {};
+  if (row.status === "scheduled" && provider !== "github") {
+    const plan = await resolvePlan(postId, provider, { overrides: toOverrides(input), row });
+    if (plan) frozen = { renderedText: plan.text };
+  }
   const [updated] = await db
     .update(distributions)
-    .set({ ...draftFields(input), updatedAt: distNow() })
+    .set({ ...draftFields(input), ...frozen, updatedAt: distNow() })
     .where(and(eq(distributions.id, row.id), inArray(distributions.status, ["draft", "failed", "scheduled"])))
     .returning();
   if (!updated) return fail("conflict", "Holat o'zgargan — qayta urinib ko'ring");
@@ -141,6 +151,9 @@ async function queue(
     .set({
       ...draftFields(input),
       status: "scheduled",
+      // Ko'rsatilgan matn va akkaunt "muzlatiladi": yuborish paytida postning keyingi o'zgarishi yoki boshqa akkaunt ta'sir qilmaydi.
+      renderedText: provider === "github" ? null : plan.text,
+      accountExternalId: account?.externalId ?? null,
       scheduledAt: when,
       nextAttemptAt: null,
       attempts: 0,
