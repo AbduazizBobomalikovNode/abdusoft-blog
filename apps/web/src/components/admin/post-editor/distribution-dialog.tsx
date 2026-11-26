@@ -5,7 +5,6 @@ import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import type { DistributionChannelDto, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId } from "@blog/shared";
-import { DISTRIBUTION_STATUS_LABELS } from "@blog/shared";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,9 +13,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import {
-  ERROR_KIND_TEXT, IMAGE_CHOICE_LABEL, LINK_MODE_LABEL, NO_AUTO_POST_NOTICE, STATUS_TONE, TONE_CLASS, UNIT_LABEL,
-  counterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, textForSave, tokenLine,
+  ERROR_KIND_TEXT, IMAGE_CHOICE_LABEL, LINK_MODE_LABEL, NO_AUTO_POST_NOTICE, TONE_CLASS, UNIT_LABEL,
+  counterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, statusPill, textForSave, tokenLine,
 } from "@/lib/distribution-ui";
+import { TrashedPanel } from "./distribution-trashed-panel";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "cn";
 
@@ -24,11 +24,14 @@ function errMsg(e: unknown, fallback: string): string {
   return e instanceof AdminApiError ? e.message : fallback;
 }
 
+const STATUS_DOT: Record<string, string> = { sent: "bg-emerald-500", failed: "bg-destructive", needs_checking: "bg-amber-500", scheduled: "bg-sky-500", sending: "bg-sky-500", draft: "bg-muted-foreground", cancelled: "bg-muted-foreground/40" };
+
 const selectClass = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 
 function StatusPill({ item }: { item: DistributionItemDto | null }) {
   if (!item) return <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-medium", TONE_CLASS.neutral)}>Hali yuborilmagan</span>;
-  return <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-medium", TONE_CLASS[STATUS_TONE[item.status]])}>{DISTRIBUTION_STATUS_LABELS[item.status]}</span>;
+  const pill = statusPill(item.status);
+  return <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-medium", pill.className)}>{pill.label}</span>;
 }
 
 function Checklist({ checks }: { checks: DistributionPreviewResponse["checks"] }) {
@@ -127,7 +130,7 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
 
       {item?.status === "failed" || item?.status === "needs_checking" || (item?.status === "scheduled" && item.attempts > 0) ? (
         <div className={cn("rounded-lg px-3 py-2 text-sm", TONE_CLASS[item.status === "failed" ? "danger" : "warn"])} data-testid="dist-error">
-          <p className="font-medium">{item.lastErrorKind ? ERROR_KIND_TEXT[item.lastErrorKind] : "Xato"}</p>
+          <p className="font-medium">{own(ERROR_KIND_TEXT, item.lastErrorKind, "Xato")}</p>
           {item.lastErrorMessage ? <p className="mt-0.5 text-xs break-words opacity-90">{item.lastErrorMessage}</p> : null}
           <p className="mt-0.5 text-xs opacity-80">
             Urinishlar: {item.attempts}
@@ -159,11 +162,11 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor={`dist-text-${provider}`}>Matn</Label>
-            <span className={cn("text-xs tabular-nums", counter.className)} data-testid="dist-counter" title={caps ? UNIT_LABEL[caps.textUnit] : ""}>{counter.label}</span>
+            <span className={cn("text-xs tabular-nums", counter.className)} data-testid="dist-counter" title={caps ? own(UNIT_LABEL, caps.textUnit, "") : ""}>{counter.label}</span>
           </div>
           <Textarea id={`dist-text-${provider}`} rows={7} value={text} disabled={!actions.edit || busy} onChange={(e) => { setText(e.target.value); setTouched(true); }} className="min-h-32 text-sm" />
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{caps ? UNIT_LABEL[caps.textUnit] : ""}</span>
+            <span>{caps ? own(UNIT_LABEL, caps.textUnit, "") : ""}</span>
             {preview && text !== preview.defaultText ? (
               <button type="button" className="underline" disabled={!actions.edit} onClick={() => { setText(preview.defaultText); setTouched(true); }}>Standart matnga qaytarish</button>
             ) : <span>Standart shablon</span>}
@@ -278,65 +281,6 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
   );
 }
 
-/**
- * Post savatda: faqat O'QISH. Avval yuborilganlar ko'rinadi va (platforma qo'llasa) olib tashlash mumkin; matn tahriri,
- * yuborish va rejalashtirish yo'q.
- */
-function TrashedPanel({ data, onChanged }: { data: DistributionPostResponse; onChanged: () => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
-  const sent = data.distributions.filter((d) => d.status === "sent" || d.removedAt);
-  async function remove(id: string) {
-    setBusy(true);
-    try {
-      await adminApi.distributionRemove(id);
-      toast.success("Olib tashlandi");
-    } catch (e) {
-      toast.error(errMsg(e, "Olib tashlab bo'lmadi"));
-    } finally {
-      setBusy(false);
-      setConfirmId(null);
-      await onChanged().catch(() => undefined);
-    }
-  }
-  return (
-    <div className="flex flex-col gap-3" data-testid="dist-trashed">
-      <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm">Post savatda. Yangi yuborib bo&apos;lmaydi; avval yuborilganlarni platformadan olib tashlash mumkin.</p>
-      {sent.length === 0 ? <p className="text-sm text-muted-foreground">Bu post hech qaysi tarmoqqa yuborilmagan.</p> : null}
-      {sent.map((d) => {
-        const ch = data.channels.find((c) => c.id === d.provider);
-        const can = itemActions(d, false, ch?.capabilities ?? null).remove;
-        return (
-          <div key={d.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm" data-testid={`dist-trashed-${d.provider}`}>
-            <div className="min-w-0">
-              <p className="font-medium">{ch?.name ?? d.provider}</p>
-              <p className="text-xs text-muted-foreground">
-                Yuborilgan: {formatDateTime(d.sentAt)}{" "}
-                {d.externalUrl ? <a href={d.externalUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline">Postni ko&apos;rish <ExternalLink className="size-3" /></a> : null}
-                {d.removedAt ? " · platformadan olib tashlangan" : ""}
-              </p>
-              {!can && !d.removedAt && ch?.capabilities?.deleteNote ? <p className="text-xs text-muted-foreground">{ch.capabilities.deleteNote}</p> : null}
-            </div>
-            {can ? <Button size="sm" variant="ghost" className="text-destructive" disabled={busy} onClick={() => setConfirmId(d.id)}>Platformadan olib tashlash</Button> : null}
-          </div>
-        );
-      })}
-      <AlertDialog open={confirmId !== null} onOpenChange={(o) => !o && setConfirmId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Platformadan olib tashlansinmi?</AlertDialogTitle>
-            <AlertDialogDescription>Ommaviy post o&apos;chiriladi. Bu amalni qaytarib bo&apos;lmaydi.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Bekor qilish</AlertDialogCancel>
-            <AlertDialogAction className="bg-destructive text-destructive-foreground" onClick={() => confirmId && void remove(confirmId)}>Olib tashlash</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-
 /** Post tahrirlagichidagi "Tarqatish" dialogi (Telegram yuborish dialogi yonida). Faqat bayroq yoqilganda ochiladi. */
 export function DistributionDialog({ postId, open, onOpenChange }: { postId: string; open: boolean; onOpenChange: (o: boolean) => void }) {
   const [data, setData] = useState<DistributionPostResponse | null>(null);
@@ -382,7 +326,7 @@ export function DistributionDialog({ postId, open, onOpenChange }: { postId: str
                   <button key={c.id} type="button" role="tab" aria-selected={active === c.id} onClick={() => setActive(c.id as DistributionProviderId)}
                     className={cn("flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium", active === c.id ? "bg-background shadow-sm" : "text-muted-foreground")}>
                     {c.name.replace(/ \(.*\)/, "")}
-                    <span className={cn("size-1.5 rounded-full", it ? { sent: "bg-emerald-500", failed: "bg-destructive", needs_checking: "bg-amber-500", scheduled: "bg-sky-500", sending: "bg-sky-500", draft: "bg-muted-foreground", cancelled: "bg-muted-foreground/40" }[it.status] : c.ready ? "bg-muted-foreground/30" : "bg-transparent")} />
+                    <span className={cn("size-1.5 rounded-full", it ? own(STATUS_DOT, it.status, "bg-muted-foreground") : c.ready ? "bg-muted-foreground/30" : "bg-transparent")} />
                   </button>
                 );
               })}

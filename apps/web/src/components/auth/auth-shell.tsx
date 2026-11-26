@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ArrowLeft, ShieldCheck } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { LogoMark } from "@/components/brand/logo";
 import { site } from "@/lib/site";
 
 /**
@@ -32,9 +33,7 @@ export function AuthShell({
   return (
     <div className="mx-auto flex min-h-svh max-w-sm flex-col justify-center gap-6 px-4 py-12">
       <div className="flex flex-col items-center gap-2 text-center">
-        <span className="flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <ShieldCheck className="size-5" aria-hidden="true" />
-        </span>
+        <LogoMark className="size-12 rounded-[22%]" />
         <h1 className="text-lg font-semibold tracking-tight">{site.name}</h1>
         <p className="text-sm text-muted-foreground">{subtitle}</p>
       </div>
