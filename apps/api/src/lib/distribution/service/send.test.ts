@@ -132,7 +132,7 @@ describe("send success — documented multi-step sequences per provider", () => 
     await svc.fx.insertAccount("instagram", now());
     const d = await send(post.id, "instagram");
     expect(await svc.runner.runDistribution(d.id)).toBe("sent");
-    expect(callPaths()).toEqual(["POST graph.instagram.com/v27.0/IG1/media", "GET graph.instagram.com/v27.0/IC1", "POST graph.instagram.com/v27.0/IG1/media_publish", "GET graph.instagram.com/v27.0/IM1"]);
+    expect(callPaths()).toEqual(["POST graph.facebook.com/v27.0/IG1/media", "GET graph.facebook.com/v27.0/IC1", "POST graph.facebook.com/v27.0/IG1/media_publish", "GET graph.facebook.com/v27.0/IM1"]);
     expect((await rowOf(d.id)).externalUrl).toBe("https://www.instagram.com/p/IM1/");
   });
 
@@ -293,7 +293,7 @@ describe("resume from partial", () => {
     const r = await svc.actions.retry(A(), d.id);
     expect(r.ok).toBe(true);
     await svc.runner.runDistribution(d.id);
-    expect(callPaths()).toEqual(["GET graph.instagram.com/v27.0/IC1", "POST graph.instagram.com/v27.0/IG1/media_publish", "GET graph.instagram.com/v27.0/IM1"]);
+    expect(callPaths()).toEqual(["GET graph.facebook.com/v27.0/IC1", "POST graph.facebook.com/v27.0/IG1/media_publish", "GET graph.facebook.com/v27.0/IM1"]);
     expect((await rowOf(d.id)).status).toBe("sent");
   });
   it("X: media uploaded, tweet fails -> failed keeps mediaId", async () => {
