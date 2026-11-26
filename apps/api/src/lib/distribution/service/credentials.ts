@@ -18,6 +18,11 @@ export type OAuthProviderId = (typeof OAUTH_PROVIDERS)[number];
 
 const KEY = "settings:distribution";
 
+/** Config ID: faqat raqamlar (1–32). Saqlangan eski/noto'g'ri qiymat "sozlanmagan" deb o'qiladi (xato bermaydi). */
+export const CONFIG_ID_RE = /^\d{1,32}$/;
+export const CONFIG_ID_ERROR = "Config ID faqat raqamlardan iborat bo'lishi kerak (1–32 ta raqam)";
+const validConfigId = (v: string): string => (CONFIG_ID_RE.test(v) ? v : "");
+
 /** Ixtiyoriy maydon (maxfiy emas): faqat Instagram (Unified Login `config_id`). Boshqa providerlarda YO'Q. */
 const CONFIG_ID_ENV: Partial<Record<OAuthProviderId, { name: string; value: () => string }>> = {
   instagram: { name: "DISTRIBUTION_INSTAGRAM_CONFIG_ID", value: () => config.DISTRIBUTION_INSTAGRAM_CONFIG_ID },
@@ -70,7 +75,7 @@ export async function getCredentials(provider: OAuthProviderId): Promise<Resolve
   return {
     clientId: env.idValue() || raw.clientId || "",
     clientSecret: secret,
-    ...(CONFIG_ID_ENV[provider] ? { configId: CONFIG_ID_ENV[provider].value() || raw.configId || "" } : {}),
+    ...(CONFIG_ID_ENV[provider] ? { configId: validConfigId(CONFIG_ID_ENV[provider].value() || raw.configId || "") } : {}),
     ...(!env.secretValue() && isUnreadableSecret(raw.clientSecret) ? { secretUnreadable: true } : {}),
   };
 }
@@ -97,7 +102,7 @@ export async function getCredentialsAdmin(provider: OAuthProviderId): Promise<{ 
       ? {
           configId: cfgEnv
             ? { value: cfgEnv, source: "env" as const, isSet: true, envVar: cfg.name }
-            : { value: raw.configId ?? "", source: raw.configId ? ("db" as const) : ("none" as const), isSet: Boolean(raw.configId), envVar: cfg.name },
+            : { value: validConfigId(raw.configId ?? ""), source: validConfigId(raw.configId ?? "") ? ("db" as const) : ("none" as const), isSet: Boolean(validConfigId(raw.configId ?? "")), envVar: cfg.name },
         }
       : {}),
     clientId: idEnv
@@ -142,7 +147,7 @@ export async function saveCredentials(patch: DistributionCredentialsPatch): Prom
       if (!cfg) errors[`${provider}.configId`] = "Bu provider Config ID'ni qo'llamaydi";
       else if (cfg.value()) {
         if (p.configId.trim() !== cfg.value()) errors[`${provider}.configId`] = `env'dan qulflangan (${cfg.name}) — panelda o'zgartirib bo'lmaydi`;
-      } else if (/\s/.test(p.configId.trim())) errors[`${provider}.configId`] = "Bo'shliq bo'lmasligi kerak";
+      } else if (p.configId.trim() !== "" && !CONFIG_ID_RE.test(p.configId.trim())) errors[`${provider}.configId`] = CONFIG_ID_ERROR;
       else next.configId = p.configId.trim();
     }
     raw[provider] = next;

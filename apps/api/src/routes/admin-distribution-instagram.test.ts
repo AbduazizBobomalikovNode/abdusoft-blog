@@ -74,12 +74,12 @@ beforeEach(async () => {
   await db.delete(s.siteSettings).where(eq(s.siteSettings.key, "settings:distribution"));
 });
 
-const saveCreds = (instagram: Record<string, string> = { clientId: "meta-app-id", clientSecret: META_SECRET, configId: "CFG-555" }) => call("/settings", admin.cookie, { method: "PUT", body: { instagram } });
+const saveCreds = (instagram: Record<string, string> = { clientId: "meta-app-id", clientSecret: META_SECRET, configId: "555123" }) => call("/settings", admin.cookie, { method: "PUT", body: { instagram } });
 const stateOf = (url: string) => new URL(url).searchParams.get("state")!;
 const start = async () => ((await (await call("/accounts/instagram/connect", admin.cookie, { method: "POST" })).json()) as { authorizationUrl: string }).authorizationUrl;
 const params = (res: Response) => new URL(res.headers.get("location")!).searchParams;
 
-type SettingsView = { providers: Array<{ id: string; credentialsReady: boolean; credentialLabels?: Record<string, string>; credentials: { clientId: { value: string; source: string }; clientSecret: { value: string }; configId?: { value: string; source: string; envVar: string } } | null; account: { neverExpires?: boolean; expiresAt: string | null; tokenState: string; displayName: string; username: string | null; daysLeft: number | null } | null }> };
+type SettingsView = { providers: Array<{ id: string; credentialsReady: boolean; credentialLabels?: Record<string, string>; credentials: { clientId: { value: string; source: string }; clientSecret: { value: string }; configId?: { value: string; source: string; envVar: string; isSet?: boolean } } | null; account: { neverExpires?: boolean; expiresAt: string | null; tokenState: string; displayName: string; username: string | null; daysLeft: number | null } | null }> };
 const igView = async () => ((await (await call("/settings", admin.cookie)).json()) as SettingsView).providers.find((p) => p.id === "instagram")!;
 
 describe("Instagram settings: Meta App ID / Meta App Secret / Config ID", () => {
@@ -90,14 +90,14 @@ describe("Instagram settings: Meta App ID / Meta App Secret / Config ID", () => 
     expect(text).not.toContain(META_SECRET);
     const ig = (JSON.parse(text) as SettingsView).providers.find((p) => p.id === "instagram")!;
     expect(ig.credentials!.clientSecret.value).toBe(`••••${META_SECRET.slice(-4)}`);
-    expect(ig.credentials!.configId).toMatchObject({ value: "CFG-555", source: "db", envVar: "DISTRIBUTION_INSTAGRAM_CONFIG_ID" });
+    expect(ig.credentials!.configId).toMatchObject({ value: "555123", source: "db", envVar: "DISTRIBUTION_INSTAGRAM_CONFIG_ID" });
     expect(ig.credentialLabels).toEqual({ clientId: "Meta App ID", clientSecret: "Meta App Secret", configId: "Config ID" });
     expect(ig.credentialsReady).toBe(true);
     const [row] = await db.select().from(s.siteSettings).where(eq(s.siteSettings.key, "settings:distribution"));
     expect(JSON.stringify(row!.value)).not.toContain(META_SECRET);
-    expect(JSON.stringify(row!.value)).toContain("CFG-555");
+    expect(JSON.stringify(row!.value)).toContain("555123");
     // maska qaytsa o'zgarmaydi
-    await saveCreds({ clientId: "meta-app-id", clientSecret: ig.credentials!.clientSecret.value, configId: "CFG-555" });
+    await saveCreds({ clientId: "meta-app-id", clientSecret: ig.credentials!.clientSecret.value, configId: "555123" });
     expect((await igView()).credentials!.clientSecret.value).toBe(`••••${META_SECRET.slice(-4)}`);
   });
   it("a missing Config ID means not ready, and Ulash is refused with a clear message", async () => {
@@ -108,8 +108,29 @@ describe("Instagram settings: Meta App ID / Meta App Secret / Config ID", () => 
     expect(res.status).toBe(422);
     expect(JSON.stringify(await res.json())).toContain("Config ID");
     // keyin Config ID ni kiritsak tayyor bo'ladi
-    await saveCreds({ configId: "CFG-555" });
+    await saveCreds({ configId: "555123" });
     expect((await igView()).credentialsReady).toBe(true);
+  });
+  it("Config ID must be digits only (bounded): clear Uzbek error at save time", async () => {
+    for (const bad of ["CFG-555", "12 34", "12a", "1".repeat(33), "../1"]) {
+      const res = await saveCreds({ configId: bad });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { fields: Record<string, string> }).fields["instagram.configId"]).toBe("Config ID faqat raqamlardan iborat bo'lishi kerak (1–32 ta raqam)");
+    }
+    expect((await saveCreds({ configId: "123456789012345678" })).status).toBe(200);
+  });
+  it("an already stored non-digit Config ID does not crash reading: it reads as not configured, with the same message on Ulash", async () => {
+    await saveCreds();
+    const [row] = await db.select().from(s.siteSettings).where(eq(s.siteSettings.key, "settings:distribution"));
+    const v = row!.value as Record<string, Record<string, string>>;
+    v.instagram!.configId = "OLD-CFG";
+    await db.update(s.siteSettings).set({ value: v }).where(eq(s.siteSettings.key, "settings:distribution"));
+    const ig = await igView();
+    expect(ig.credentialsReady).toBe(false);
+    expect(ig.credentials!.configId).toMatchObject({ value: "", isSet: false, source: "none" });
+    const res = await call("/accounts/instagram/connect", admin.cookie, { method: "POST" });
+    expect(res.status).toBe(422);
+    expect(JSON.stringify(await res.json())).toContain("Config ID");
   });
   it("Config ID: whitespace is rejected; other channels do not accept it; clearing makes it not ready", async () => {
     expect((await saveCreds({ configId: "a b" })).status).toBe(400);
@@ -134,7 +155,7 @@ describe("Instagram connect flow", () => {
     await saveCreds();
     const url = new URL(await start());
     expect(url.origin + url.pathname).toBe("https://www.facebook.com/dialog/oauth");
-    expect(Object.fromEntries(url.searchParams)).toMatchObject({ client_id: "meta-app-id", config_id: "CFG-555", redirect_uri: "https://api.example.test/admin/distribution/callback/instagram", response_type: "code" });
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({ client_id: "meta-app-id", config_id: "555123", redirect_uri: "https://api.example.test/admin/distribution/callback/instagram", response_type: "code" });
     expect(url.searchParams.has("scope")).toBe(false);
     expect(await db.select().from(s.distributionOauthStates)).toHaveLength(1);
   });
@@ -148,8 +169,8 @@ describe("Instagram connect flow", () => {
     expect(tokenCall.method).toBe("GET");
     expect(Object.fromEntries(new URL(tokenCall.url).searchParams)).toEqual({ client_id: "meta-app-id", client_secret: META_SECRET, code: "AUTH-CODE-1", redirect_uri: "https://api.example.test/admin/distribution/callback/instagram" });
     const [row] = await db.select().from(s.distributionAccounts);
-    expect(row).toMatchObject({ provider: "instagram", externalId: "IG1", username: "owner_ig", displayName: "owner_ig", accessTokenExpiresAt: null, refreshTokenEnc: null, status: "active" });
-    expect(row!.meta).toEqual({ clientBusinessId: "BIZ1", accountCount: "1" });
+    expect(row).toMatchObject({ provider: "instagram", externalId: "17841400000001", username: "owner_ig", displayName: "owner_ig", accessTokenExpiresAt: null, refreshTokenEnc: null, status: "active" });
+    expect(row!.meta).toEqual({ clientBusinessId: "BIZ1" });
     expect(row!.accessTokenEnc).toContain("enc:v1:");
     expect(JSON.stringify(row)).not.toContain(sup.TOKENS.ig);
     const ig = await igView();
@@ -215,6 +236,17 @@ describe("Instagram connect flow", () => {
       const res = await call(`/callback/instagram?code=C1&state=${stateOf(await start())}`, admin.cookie);
       expect(params(res).get("reason")).toBe("no_instagram_account");
       expect(await db.select().from(s.distributionAccounts)).toHaveLength(0);
+    });
+    it("several assigned accounts -> multiple_instagram_accounts, nothing stored, usernames only in the audit message, never in the URL", async () => {
+      await saveCreds();
+      mock.use((c) => (c.host === GRAPH && c.path === "/v27.0/me/assigned_instagram_accounts" ? new Response(JSON.stringify({ data: [{ id: "111", username: "first_acc" }, { id: "222", username: "second_acc" }] }), { status: 200 }) : undefined));
+      const res = await call(`/callback/instagram?code=C1&state=${stateOf(await start())}`, admin.cookie);
+      expect(params(res).get("reason")).toBe("multiple_instagram_accounts");
+      expect(decodeURIComponent(res.headers.get("location")!)).not.toMatch(/first_acc|second_acc/);
+      expect(await db.select().from(s.distributionAccounts)).toHaveLength(0);
+      const audit = JSON.stringify(await db.select().from(s.auditLog));
+      expect(audit).toContain("multiple_instagram_accounts");
+      expect(audit).toContain("@first_acc");
     });
     it("token exchange failure -> exchange_failed, and no secret/code is echoed", async () => {
       await saveCreds();
