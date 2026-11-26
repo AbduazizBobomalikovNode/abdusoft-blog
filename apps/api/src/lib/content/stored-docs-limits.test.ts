@@ -61,7 +61,7 @@ describe("check-stored-docs logic accepts the repository's fixtures, templates a
       const [row] = await db
         .insert(posts)
         .values({ slug: `fx-${i}`, title: name, contentJson: doc, contentHtml: rendered.html, contentText: rendered.text, toc: rendered.toc })
-        .returning({ id: posts.id });
+        .returning();
       await db.insert(postRevisions).values({ postId: row!.id, title: name, slug: `fx-${i}`, contentJson: doc, status: "draft", via: "web", reason: "update" });
     }
     await db.insert(siteSettings).values({ key: "about", value: { json: samplePostOne, html: "" } });

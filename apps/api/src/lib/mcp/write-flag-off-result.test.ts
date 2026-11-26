@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Hono } from "hono";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { createTestUser, TEST_USER_PASSWORD } from "../../test/auth-test-helpers.js";

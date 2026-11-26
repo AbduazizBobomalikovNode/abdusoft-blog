@@ -41,6 +41,63 @@ const originGuard: MiddlewareHandler = async (c, next) => {
   return next();
 };
 
+/**
+ * `/mcp`dagi HAR BIR 2xx bo'lmagan javob uchun bitta tuzilmaviy log qatori: HTTP holat, JSON-RPC metod va id turi (tahlil qilinsa),
+ * `MCP-Protocol-Version` va `Accept` sarlavhalari, yuborilgan xato kodi/xabari. Tana, token va argumentlar HECH QACHON yozilmaydi.
+ */
+const SAFE_METHOD = /^[A-Za-z0-9_./-]{1,80}$/;
+export function mcpRejectLogger(): MiddlewareHandler {
+  return async (c, next) => {
+    // Tana faqat oddiy (<= 1 MB) so'rovlarda, faqat metod/id turini olish uchun o'qiladi (kattalari — yuklash vositasi — o'qilmaydi).
+    let bodyText: string | null = null;
+    if (c.req.method === "POST" && Number(c.req.header("content-length") ?? "0") <= MAX_MCP_BODY) {
+      bodyText = await c.req.raw.clone().text().catch(() => null);
+    }
+    await next();
+    const status = c.res.status;
+    if (status >= 200 && status < 300) return;
+    let rpcMethod: string | undefined;
+    let idType: string | undefined;
+    if (bodyText) {
+      try {
+        const parsed = JSON.parse(bodyText) as unknown;
+        const first = Array.isArray(parsed) ? parsed[0] : parsed;
+        if (first && typeof first === "object") {
+          const m = first as { method?: unknown; id?: unknown };
+          if (typeof m.method === "string" && SAFE_METHOD.test(m.method)) rpcMethod = m.method;
+          idType = m.id === undefined ? "none" : m.id === null ? "null" : typeof m.id;
+        }
+        if (Array.isArray(parsed)) idType = `batch(${parsed.length})`;
+      } catch {
+        rpcMethod = "(unparseable)";
+      }
+    }
+    let errorCode: unknown;
+    let errorMessage: string | undefined;
+    try {
+      const body = (await c.res.clone().json()) as { error?: { code?: unknown; message?: unknown } };
+      errorCode = body.error?.code;
+      if (typeof body.error?.message === "string") errorMessage = body.error.message.slice(0, 160);
+    } catch {
+      // javob JSON emas (masalan bo'sh tana)
+    }
+    if (config.NODE_ENV === "test" && !process.env.MCP_LOG_REJECTS_IN_TEST) return;
+    console.warn(
+      JSON.stringify({
+        event: "mcp.rejected",
+        status,
+        httpMethod: c.req.method,
+        rpcMethod,
+        idType,
+        protocolVersion: (c.req.header("mcp-protocol-version") ?? "").slice(0, 40) || null,
+        accept: (c.req.header("accept") ?? "").slice(0, 120) || null,
+        errorCode,
+        errorMessage,
+      }),
+    );
+  };
+}
+
 function jsonRpcError(status: number, code: number, message: string, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }), {
     status,
@@ -105,6 +162,7 @@ export function mountMcp(app: Hono): void {
     return handleAuthRequest(c, new Request(url, c.req.raw));
   });
 
+  app.use(MCP_PATH, mcpRejectLogger());
   app.post(
     MCP_PATH,
     originGuard,

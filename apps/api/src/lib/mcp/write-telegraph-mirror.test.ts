@@ -4,7 +4,7 @@ import type { Hono } from "hono";
 import { startMockTelegram } from "../../../scripts/mock-telegram.js";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { createTestUser, TEST_USER_PASSWORD, type TestUser } from "../../test/auth-test-helpers.js";
-import { API, callTool, connect, type Json } from "../../test/mcp-harness.js";
+import { callTool, connect } from "../../test/mcp-harness.js";
 
 vi.hoisted(() => {
   process.env.MCP_ENABLED = "true";
@@ -16,7 +16,6 @@ vi.hoisted(() => {
 
 let app: Hono;
 let admin: TestUser;
-let full: string; // every permission
 let narrow: string; // reading + writing + publishing, NO channels:send
 let mock: { url: string; close: () => Promise<void> } | null = null;
 let db: typeof import("../../db/index.js").db;
@@ -26,12 +25,6 @@ const calls = async () => ((await (await fetch(`${mock!.url}/__calls`)).json()) 
 const methods = async (re: RegExp) => (await calls()).map((c) => c.method).filter((m) => re.test(m));
 const settle = () => new Promise((r) => setTimeout(r, 400));
 const callAs = (tok: string, name: string, args: Record<string, unknown> = {}) => callTool(app, tok, name, args);
-const webReq = (path: string, init: { method?: string; body?: unknown } = {}) =>
-  app.request(`${API}${path}`, {
-    method: init.method ?? "GET",
-    headers: { cookie: admin.cookie, ...(init.body !== undefined ? { "content-type": "application/json" } : {}) },
-    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-  });
 
 const refOf = async (id: string) => (await db.select().from(s.telegramRefs).where(eq(s.telegramRefs.postId, id)))[0];
 
@@ -52,7 +45,6 @@ beforeAll(async () => {
   invalidateSettingsCache();
   await saveSettings({ telegram: { botToken: "test-bot-token", webhookSecret: "0123456789abcdef", channelId: "@testchannel", apiRoot: mock.url }, telegraph: { enabled: true, accessToken: "tgph-token" } });
   reconfigureBot("test-bot-token", mock.url);
-  full = (await connect(app, { email: admin.email, password: TEST_USER_PASSWORD })).tokens.access_token;
   narrow = (await connect(app, { email: admin.email, password: TEST_USER_PASSWORD }, { consentScope: "blog:read posts:write posts:publish" })).tokens.access_token;
 });
 afterAll(async () => {

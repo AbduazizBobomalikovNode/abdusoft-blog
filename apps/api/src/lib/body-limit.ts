@@ -18,3 +18,15 @@ export function adminDocBodyLimit(match: (c: Context) => boolean): MiddlewareHan
   });
   return async (c, next) => (match(c) ? limiter(c, next) : next());
 }
+
+/** Ikki middleware'ni BITTA middleware qilib birlashtiradi (marshrut jadvalida qo'shimcha yozuv paydo bo'lmasin). */
+export function chain(first: MiddlewareHandler, second: MiddlewareHandler): MiddlewareHandler {
+  return async (c, next) => {
+    let response: Response | void = undefined;
+    const result = await first(c, async () => {
+      response = await second(c, next);
+      if (response instanceof Response) c.res = response;
+    });
+    return result ?? response;
+  };
+}

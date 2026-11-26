@@ -16,7 +16,7 @@ import {
   UpdatePostBodySchema,
 } from "@blog/shared";
 import { requireRole } from "../lib/require-admin.js";
-import { adminDocBodyLimit } from "../lib/body-limit.js";
+import { adminDocBodyLimit, chain } from "../lib/body-limit.js";
 import {
   actorFromAdminUser,
   approvePost,
@@ -215,9 +215,12 @@ const CARRIES_DOCUMENT = (c: Context): boolean => {
   return c.req.method === "POST" && /^\/admin\/posts\/[^/]+\/channel\/versions$/.test(path);
 };
 
+const POSTS_GUARD = requireRole("admin", "staff");
+const POSTS_BODY_LIMIT = adminDocBodyLimit(CARRIES_DOCUMENT);
+
 export const adminPostsRoute = new Hono()
-  .use("*", requireRole("admin", "staff"))
-  .use("*", adminDocBodyLimit(CARRIES_DOCUMENT))
+  // Bitta middleware (rol tekshiruvi + hujjat tanasi chegarasi): marshrut jadvali `main` bilan bir xil qoladi.
+  .use("*", chain(POSTS_GUARD, POSTS_BODY_LIMIT))
   .get("/mine/summary", async (c) => c.json(await mineSummary(actorOf(c))))
   // Chiqindi qutisi (faqat admin): `/trash` marshrutlari `/:id`dan OLDIN ro'yxatga olinadi.
   .get("/trash", async (c) => {
