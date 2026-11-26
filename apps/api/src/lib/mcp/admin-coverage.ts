@@ -82,6 +82,12 @@ export const ADMIN_ROUTE_TOOLS: Readonly<Record<string, readonly string[]>> = {
   "POST /admin/distribution/items/:id/cancel": ["cancel_distribution"],
   "POST /admin/distribution/items/:id/retry": ["retry_distribution"],
   "POST /admin/distribution/items/:id/remove": ["remove_distribution_from_platform"],
+  // video (faqat `VIDEO_ENABLED=true` bo'lganda marshrut va vositalar mavjud; yaratish faqat konnektor orqali)
+  "GET /admin/video/status": ["get_video_status"],
+  "GET /admin/video/jobs": ["list_post_videos"],
+  "GET /admin/video/jobs/:id": ["get_video_job"],
+  "POST /admin/video/jobs/:id/cancel": ["cancel_video_job"],
+  "DELETE /admin/video/jobs/:id": ["delete_video_job"],
   // xodimlar
   "GET /admin/staff": ["list_staff"],
   "POST /admin/staff/invites": ["create_staff_invite"],
@@ -104,6 +110,8 @@ export const ADMIN_ROUTE_EXCLUSIONS: Readonly<Record<string, string>> = {
   "DELETE /admin/distribution/accounts/:provider": "Ijtimoiy akkauntni uzadi (tokenlar o'chadi): akkaunt ulanishini boshqarish egasiga tegishli, assistent o'zi yuboradigan kanalni uza olmasligi kerak.",
   "GET /admin/distribution/callback/:provider": "Platformaning OAuth callback'i (brauzer redirect, `code`/`state` bilan): assistent vositasi emas, faqat egasi brauzerda ulanishni tugatadi.",
   "POST /admin/distribution/items/:id/resolve": "`needs_checking` holatini hal qiladi (platformada post borligini egasi o'zi tekshirib, 'yuborilgan' deb belgilaydi yoki ongli qayta urinadi): egasining qarori; assistent hal qila olmaydi (`get_distribution_status` faqat holatni aytadi).",
+  "GET /admin/video/settings": "GitHub runner sozlamalarini (token holati/maskasi, repozitoriy) ko'rsatadi: token maxfiy qiymat bilan bog'liq, faqat egasi panelda. Sozlanganlik holati `get_video_status` bilan ko'rinadi (qiymatsiz).",
+  "PUT /admin/video/settings": "GitHub tokenini (Actions: Read and write) va repozitoriyni yozadi: token maxfiy qiymat (docs/claude-connector.md: sir qabul qiladigan hamma narsa istisno), uni yordamchi o'zgartira olmasligi kerak. Faqat egasi panelda.",
   "DELETE /admin/connections/:clientId": "Konnektor ilovasini uzish ulanishning o'zini boshqaradi (yuqoridagiga qarang): faqat egasi panelda.",
 };
 

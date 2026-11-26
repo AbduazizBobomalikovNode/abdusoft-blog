@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { requireRole } from "../lib/require-admin.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
@@ -27,7 +28,7 @@ export const adminVideoRoute = new Hono()
   .use("*", requireRole("admin"))
   .get("/status", async (c) => c.json(await videoStatus()))
   .get("/settings", async (c) => c.json(await getGithubSettingsView()))
-  .put("/settings", async (c) => {
+  .put("/settings", bodyLimit({ maxSize: 4 * 1024, onError: (c) => c.json({ error: "So'rov hajmi juda katta" }, 413) }), async (c) => {
     const parsed = MotionGithubSettingsPatchSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov" }, 400);
     try {

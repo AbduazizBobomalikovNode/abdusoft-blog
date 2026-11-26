@@ -8,6 +8,8 @@ vi.hoisted(() => {
   process.env.MCP_PURGE_ENABLED = "true";
   // Faqat tarqatish yoqilganda mavjud `/admin/distribution/*` marshrutlari va vositalari ham sanaladi.
   process.env.DISTRIBUTION_ENABLED = "true";
+  // Faqat video yoqilganda mavjud `/admin/video/*` marshrutlari va vositalari ham sanaladi.
+  process.env.VIDEO_ENABLED = "true";
 });
 
 let routes: string[];
@@ -52,7 +54,8 @@ describe("every admin route has a connector tool or a documented exclusion", () 
 
   it("every registered tool serves at least one admin route or is a connector-only tool", () => {
     const mapped = new Set(Object.values(ADMIN_ROUTE_TOOLS).flat());
-    const connectorOnly = new Set<string>();
+    // Video: storyboard yozish/tekshirish/ko'rik/render boshlash faqat konnektor orqali (panelda storyboard muharriri yo'q).
+    const connectorOnly = new Set<string>(["get_storyboard_guide", "validate_storyboard", "preview_storyboard", "start_video_render"]);
     const orphans = [...toolNames].filter((t) => !mapped.has(t) && !connectorOnly.has(t));
     // Tools without a dedicated HTTP route of their own are reachable through the capability they wrap; list them so a new tool is a conscious choice.
     expect(orphans.sort()).toEqual([]);
