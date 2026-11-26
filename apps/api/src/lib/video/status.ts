@@ -67,7 +67,7 @@ export async function videoStatus(): Promise<MotionStatus> {
   let githubInfo: MotionStatus["github"] = null;
   if (github) {
     const c = await getGithubConfig();
-    githubInfo = { tokenConfigured: Boolean(c.token), secretConfigured: runnerSecretConfigured(), repoConfigured: Boolean(c.repo), repo: c.repo || null, lastSuccessAt: await lastSuccessAt() };
+    githubInfo = { tokenConfigured: Boolean(c.token), secretConfigured: runnerSecretConfigured(), repoConfigured: Boolean(c.repo), repo: c.repo || null, workflow: c.workflow || config.VIDEO_GITHUB_WORKFLOW, ref: c.ref || config.VIDEO_GITHUB_REF, problem: c.problem, lastSuccessAt: await lastSuccessAt() };
   }
   const pre = github ? null : localPreflight();
   const browser = github ? null : await getBrowserInfo();

@@ -13,11 +13,13 @@ import { toast } from "sonner";
 function GithubForm({ settings, onSaved }: { settings: MotionGithubSettings; onSaved: (s: MotionGithubSettings) => void }) {
   const [token, setToken] = useState("");
   const [repo, setRepo] = useState(settings.repo.value);
+  const [workflow, setWorkflow] = useState(settings.workflow.value);
+  const [ref, setRef] = useState(settings.ref.value);
   const [busy, setBusy] = useState(false);
   async function save() {
     setBusy(true);
     try {
-      const next = await adminApi.saveVideoSettings({ ...(token ? { githubToken: token } : {}), githubRepo: repo });
+      const next = await adminApi.saveVideoSettings({ ...(token ? { githubToken: token } : {}), githubRepo: repo, githubWorkflow: workflow, githubRef: ref });
       setToken("");
       onSaved(next);
       toast.success("Saqlandi");
@@ -30,13 +32,24 @@ function GithubForm({ settings, onSaved }: { settings: MotionGithubSettings; onS
   return (
     <div className="mt-3 flex flex-col gap-2" data-testid="video-github-form">
       <label className="flex flex-col gap-1 text-xs">
-        GitHub repozitoriy (egasi/nomi)
-        <Input value={repo} onChange={(e) => setRepo(e.target.value)} disabled={settings.repo.source === "env"} placeholder="egasi/abdusoft-blog" autoComplete="off" />
+        Render repozitoriysi (egasi/nomi; blogning o&apos;zi emas)
+        <Input value={repo} onChange={(e) => setRepo(e.target.value)} disabled={settings.repo.source === "env"} placeholder="egasi/abdusoft-blog-render" autoComplete="off" />
       </label>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-xs">
+          Workflow fayli (default {settings.workflow.default})
+          <Input value={workflow} onChange={(e) => setWorkflow(e.target.value)} disabled={settings.workflow.source === "env"} placeholder={settings.workflow.default} autoComplete="off" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs">
+          Shox (default {settings.ref.default})
+          <Input value={ref} onChange={(e) => setRef(e.target.value)} disabled={settings.ref.source === "env"} placeholder={settings.ref.default} autoComplete="off" />
+        </label>
+      </div>
       <label className="flex flex-col gap-1 text-xs">
-        GitHub token (fine-grained, Actions: Read and write) {settings.token.isSet ? `— saqlangan: ${settings.token.masked}` : ""}
+        GitHub token (fine-grained, FAQAT render repozitoriysi, Actions: Read and write) {settings.token.isSet ? `— saqlangan: ${settings.token.masked}` : ""}
         <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} disabled={settings.token.source === "env"} placeholder={settings.token.isSet ? "o'zgartirish uchun yangisini kiriting" : "github_pat_…"} autoComplete="off" />
       </label>
+      {settings.problem ? <p className="text-xs text-destructive" data-testid="video-github-problem">{settings.problem}</p> : null}
       {settings.token.unreadable ? <p className="text-xs text-destructive">Saqlangan token o&apos;qib bo&apos;lmadi (maxfiy kalit o&apos;zgargan) — qaytadan kiriting.</p> : null}
       <Button type="button" size="sm" className="w-fit max-md:h-11" disabled={busy} onClick={() => void save()}>
         Saqlash
@@ -74,7 +87,8 @@ export function VideoStatusLine() {
         {gh ? (
           <>
             Token: {gh.tokenConfigured ? "bor" : <span className="text-destructive">yo&apos;q</span>}, runner siri: {gh.secretConfigured ? "bor" : <span className="text-destructive">yo&apos;q</span>}, repozitoriy:{" "}
-            {gh.repoConfigured ? gh.repo : <span className="text-destructive">yo&apos;q</span>}. Oxirgi muvaffaqiyatli run: {gh.lastSuccessAt ? formatDateTime(gh.lastSuccessAt) : "hali yo'q"}.
+            {gh.repoConfigured ? gh.repo : <span className="text-destructive">yo&apos;q</span>}. Workflow: {gh.workflow}@{gh.ref}. Oxirgi muvaffaqiyatli run: {gh.lastSuccessAt ? formatDateTime(gh.lastSuccessAt) : "hali yo'q"}.
+            {gh.problem ? <span className="text-destructive" data-testid="video-status-problem"> {gh.problem}</span> : null}
           </>
         ) : status.local ? (
           status.local.preflightOk ? (

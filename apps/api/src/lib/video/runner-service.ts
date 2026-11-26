@@ -1,9 +1,10 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { db } from "../../db/index.js";
 import { motionJobs } from "../../db/schema.js";
 import { failJob, jobTimeoutSeconds, phasePercent, previewWidthOf, storeAndFinalize, type JobOptions, type StagedFile } from "./jobs.js";
+import { RUN_ID_RE } from "./github.js";
 import { POST_CLAIM_GRACE_MS } from "./runner-github.js";
 import { PART_BYTES, assembledPath, removeUploads, rulesFor, uploadDirOf } from "./uploads.js";
 import { existsSync, statSync } from "node:fs";
@@ -87,7 +88,7 @@ function claimPayload(row: JobRow): ClaimResponse {
   };
 }
 
-export const ClaimBody = z.strictObject({ runId: z.string().regex(/^\d{1,20}$/), attempt: z.number().int().min(1).max(100) });
+export const ClaimBody = z.strictObject({ runId: z.string().regex(RUN_ID_RE), attempt: z.number().int().min(1).max(100) });
 
 /** Single use: the first run to claim wins; a different run id (a duplicated dispatch) is refused; the SAME run may repeat it (lost response). */
 export async function claim(id: string, body: z.infer<typeof ClaimBody>, now: Date = new Date()): Promise<ClaimResponse> {
@@ -97,10 +98,12 @@ export async function claim(id: string, body: z.infer<typeof ClaimBody>, now: Da
     if (row.runnerRunId === body.runId && row.runnerAttempt === body.attempt) return claimPayload(row);
     throw new RunnerError(409, "already_claimed");
   }
+  // The dispatch response named the run it created: only THAT run may claim (the id is later used to cancel a run with the server's token).
+  if (row.runnerRunId && row.runnerRunId !== body.runId) throw new RunnerError(409, "run_mismatch");
   const [claimed] = await db
     .update(motionJobs)
-    .set({ runnerClaimedAt: now, runnerRunId: body.runId, runnerAttempt: body.attempt, phase: "starting", message: "the runner started" })
-    .where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running"), eq(motionJobs.runner, "github"), isNull(motionJobs.runnerClaimedAt)))
+    .set({ runnerClaimedAt: now, runnerRunId: sql`coalesce(${motionJobs.runnerRunId}, ${body.runId})`, runnerAttempt: body.attempt, phase: "starting", message: "the runner started" })
+    .where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running"), eq(motionJobs.runner, "github"), isNull(motionJobs.runnerClaimedAt), or(isNull(motionJobs.runnerRunId), eq(motionJobs.runnerRunId, body.runId))))
     .returning();
   if (!claimed) {
     const again = await loadJob(id);

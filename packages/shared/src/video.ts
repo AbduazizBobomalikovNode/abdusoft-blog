@@ -72,6 +72,11 @@ export const MotionStatusSchema = z.object({
       secretConfigured: z.boolean(),
       repoConfigured: z.boolean(),
       repo: z.string().nullable(),
+      /** Dispatch nishoni: workflow fayl nomi va shox. */
+      workflow: z.string(),
+      ref: z.string(),
+      /** Dispatch'ni to'xtatayotgan sozlama xatosi (o'zbekcha, qiymatsiz), masalan blogning o'z repozitoriysi; yo'q bo'lsa `null`. */
+      problem: z.string().nullable(),
       lastSuccessAt: z.string().nullable(),
     })
     .nullable(),
@@ -94,11 +99,16 @@ export type MotionStatus = z.infer<typeof MotionStatusSchema>;
 export const MotionGithubSettingsSchema = z.object({
   token: z.object({ isSet: z.boolean(), masked: z.string(), source: z.enum(["env", "db", "none"]), envVar: z.string(), unreadable: z.boolean() }),
   repo: z.object({ value: z.string(), source: z.enum(["env", "db", "none"]), envVar: z.string() }),
+  workflow: z.object({ value: z.string(), source: z.enum(["env", "db", "none"]), envVar: z.string(), default: z.string() }),
+  ref: z.object({ value: z.string(), source: z.enum(["env", "db", "none"]), envVar: z.string(), default: z.string() }),
+  problem: z.string().nullable(),
 });
 export type MotionGithubSettings = z.infer<typeof MotionGithubSettingsSchema>;
 
 export const MotionGithubSettingsPatchSchema = z.strictObject({
   githubToken: z.string().max(300).optional(),
   githubRepo: z.string().max(210).optional(),
+  githubWorkflow: z.string().max(120).optional(),
+  githubRef: z.string().max(120).optional(),
 });
 export type MotionGithubSettingsPatch = z.infer<typeof MotionGithubSettingsPatchSchema>;

@@ -108,7 +108,7 @@ const call = (id: string, method: string, p: string, init: Init = {}) =>
     ...(init.json !== undefined ? { body: JSON.stringify(init.json) } : init.body ? { body: init.body as never } : {}),
   });
 const jsonOf = async (r: Response) => (await r.json()) as Record<string, unknown>;
-const claim = (id: string, runId = "1001", attempt = 1) => call(id, "POST", "/claim", { json: { runId, attempt } });
+const claim = (id: string, runId = "4242", attempt = 1) => call(id, "POST", "/claim", { json: { runId, attempt } });
 const uploadDir = (id: string) => uploads.uploadDirOf(id);
 
 async function putFile(id: string, name: string, data: Buffer, partBytes = uploads.PART_BYTES): Promise<{ parts: number }> {
@@ -284,17 +284,17 @@ describe("runner endpoint authentication", () => {
 describe("claim", () => {
   it("is single use: the first run wins, the SAME run may repeat it, a different run id is refused (duplicate dispatch is harmless)", async () => {
     const id = await startJob("render");
-    const first = await claim(id, "1001", 1);
+    const first = await claim(id, "4242", 1);
     expect(first.status).toBe(200);
     const body = await jsonOf(first);
     expect(body).toMatchObject({ kind: "render", videoName: "video.mp4", partBytes: 8 * 1024 * 1024, concurrency: 4 });
     expect((body.storyboard as { title: string }).title).toBe("ok");
-    expect((await claim(id, "1001", 1)).status).toBe(200);
+    expect((await claim(id, "4242", 1)).status).toBe(200);
     const dup = await claim(id, "2002", 1);
     expect(dup.status).toBe(409);
     expect(await jsonOf(dup)).toEqual({ code: "already_claimed" });
-    expect((await claim(id, "1001", 2)).status).toBe(409);
-    expect(await rowOf(id)).toMatchObject({ runnerRunId: "1001", runnerAttempt: 1 });
+    expect((await claim(id, "4242", 2)).status).toBe(409);
+    expect(await rowOf(id)).toMatchObject({ runnerRunId: "4242", runnerAttempt: 1 });
   });
 
   it("is refused for a job that is queued, finished, failed or cancelled", async () => {
@@ -347,15 +347,15 @@ describe("progress and cancel", () => {
     expect((await claim(id)).status).toBe(409);
   });
 
-  it("cancel AFTER the claim: the next progress call tells the runner to stop; the run id comes from the claim", async () => {
+  it("cancel AFTER the claim: the next progress call tells the runner to stop; the run id is the one from the dispatch", async () => {
     const id = await startJob("render");
-    await claim(id, "9009", 1);
+    await claim(id, "4242", 1);
     await jobs.cancelJob(actor(), id);
     expect((await rowOf(id)).status).toBe("cancelled");
     const p = await call(id, "POST", "/progress", { json: { phase: "render", fraction: 0.2, message: "x" } });
     expect(p.status).toBe(200);
     expect(await jsonOf(p)).toEqual({ cancel: true });
-    await waitFor(() => double.calls.some((c) => c.url.endsWith("/actions/runs/9009/cancel")), 5_000);
+    await waitFor(() => double.calls.some((c) => c.url.endsWith("/actions/runs/4242/cancel")), 5_000);
     expect((await call(id, "POST", "/complete", { json: { kind: "render", video: { name: "video.mp4", seconds: 1, frames: 30, renderMs: 10 }, timings: { renderMs: 1, uploadMs: 1 } } })).status).toBe(409);
   });
 });
@@ -509,19 +509,19 @@ describe("completion and cleanup", () => {
 
   it("a render: files move into media storage under final keys, the job is ready, temp uploads are gone, the outcome is audited with runner and run id", async () => {
     const id = await startJob("render");
-    await claim(id, "5005", 2);
+    await claim(id, "4242", 2);
     await putFile(id, "video.mp4", mp4(5000));
     const r = await call(id, "POST", "/complete", { json: completeBody() });
     expect(r.status).toBe(200);
     const { row, assets } = (await jobs.getJob(id))!;
-    expect(row).toMatchObject({ status: "ready", progress: 100, runnerRunId: "5005" });
+    expect(row).toMatchObject({ status: "ready", progress: 100, runnerRunId: "4242" });
     expect(assets).toHaveLength(1);
     expect(assets[0]).toMatchObject({ kind: "mp4", mime: "video/mp4", size: 5000 });
     expect(existsSync(path.join(storage.root, assets[0]!.key))).toBe(true);
     expect(existsSync(uploadDir(id))).toBe(false);
     const audit = (await db.select().from(s.auditLog)).filter((a) => a.action === "video.finish" && a.entityId === id);
     expect(audit).toHaveLength(1);
-    expect(audit[0]!.meta).toMatchObject({ status: "ready", runner: "github", runId: "5005", kind: "render" });
+    expect(audit[0]!.meta).toMatchObject({ status: "ready", runner: "github", runId: "4242", kind: "render" });
     // repeating completion for a finished job is harmless
     expect((await call(id, "POST", "/complete", { json: completeBody() })).status).toBe(200);
   });
@@ -649,14 +649,14 @@ describe("watchdog (fake clock)", () => {
   it("claimed but not completed within the render timeout (+ grace): runner_timeout and a run cancel", async () => {
     setCfg({ VIDEO_RENDER_TIMEOUT_SECONDS: 600 });
     const id = await startJob("render");
-    await claim(id, "7007", 1);
+    await claim(id, "4242", 1);
     const claimedAt = (await rowOf(id)).runnerClaimedAt!;
     const justBefore = new Date(claimedAt.getTime() + (600 + 179) * 1000);
     expect((await rg.superviseGithubJobs(justBefore)).timedOut).toBe(0);
     const out = await rg.superviseGithubJobs(new Date(claimedAt.getTime() + (600 + 181) * 1000));
     expect(out.timedOut).toBe(1);
     expect(await rowOf(id)).toMatchObject({ status: "failed", errorCode: "runner_timeout" });
-    await waitFor(() => double.calls.some((c) => c.url.endsWith("/actions/runs/7007/cancel")), 5_000);
+    await waitFor(() => double.calls.some((c) => c.url.endsWith("/actions/runs/4242/cancel")), 5_000);
   });
 
   it("the preview timeout (not the render timeout) applies to previews", async () => {
@@ -757,4 +757,251 @@ describe("rate limits", () => {
     }
     expect(last).toBe(429);
   }, 60_000);
+});
+
+// --------------------------------------------------------------------------- hardening follow-up (M1, M3, L1, L3)
+
+const usageCount = async (): Promise<number> => (await db.select().from(s.motionUsage)).length;
+const failRunner = (id: string, code = "render_failed") => call(id, "POST", "/fail", { json: { code, message: "x" } });
+
+describe("configurable dispatch target (M1)", () => {
+  it("dispatches to the configured repository, workflow file and ref (encoded path, ref in the body)", async () => {
+    setCfg({ VIDEO_GITHUB_REPO: "render-owner/abdusoft-blog-render", VIDEO_GITHUB_WORKFLOW: "my-render.yaml", VIDEO_GITHUB_REF: "release/v1" });
+    const id = await startJob("render");
+    const c = double.calls.find((x) => x.url.endsWith("/dispatches"))!;
+    expect(c.url).toBe("https://api.github.com/repos/render-owner/abdusoft-blog-render/actions/workflows/my-render.yaml/dispatches");
+    expect(JSON.parse(c.body!)).toEqual({ ref: "release/v1", inputs: { job_id: id }, return_run_details: true });
+  });
+
+  it("defaults are render-video.yml and main; the status view shows the target", async () => {
+    expect(config.VIDEO_RUNNER_START_TIMEOUT_SECONDS).toBe(600);
+    const view = await (await import("./status.js")).videoStatus();
+    expect(view.github).toMatchObject({ workflow: "render-video.yml", ref: "main", problem: null });
+  });
+
+  it("refuses the blog's own repository (any letter case) with an actionable job error and an Uzbek status message", async () => {
+    for (const repo of [gh.BLOG_REPO, gh.BLOG_REPO.toUpperCase()]) {
+      setCfg({ VIDEO_GITHUB_REPO: repo });
+      const view = await (await import("./status.js")).videoStatus();
+      expect(view.github?.problem).toContain("VIDEO_ALLOW_SAME_REPO");
+      expect(view.github?.problem).toContain("alohida");
+      const r = await jobs.createJob(actor(), { kind: "preview", storyboard: sbOf("ok") });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(String(r.error.extra?.hint)).toContain("VIDEO_ALLOW_SAME_REPO");
+    }
+    expect(double.calls).toHaveLength(0);
+    // dispatch itself refuses too, even if readiness were bypassed
+    const direct = await gh.dispatchWorkflow("11111111-2222-3333-4444-555555555555");
+    expect(direct).toMatchObject({ ok: false, code: "runner_not_configured" });
+    expect(double.calls).toHaveLength(0);
+  });
+
+  it("VIDEO_ALLOW_SAME_REPO=true lifts the refusal", async () => {
+    setCfg({ VIDEO_GITHUB_REPO: gh.BLOG_REPO, VIDEO_ALLOW_SAME_REPO: true });
+    expect((await (await import("./status.js")).videoStatus()).github?.problem).toBeNull();
+    await startJob("preview");
+    expect(double.calls.some((x) => x.url.includes(`/repos/${gh.BLOG_REPO}/actions/workflows/`))).toBe(true);
+  });
+
+  it("the settings save validates every field and refuses the blog repository", async () => {
+    setCfg({ VIDEO_GITHUB_REPO: "", VIDEO_GITHUB_WORKFLOW: "", VIDEO_GITHUB_REF: "" });
+    try {
+      await expect(gh.saveGithubSettings({ githubRepo: gh.BLOG_REPO.toLowerCase() })).rejects.toMatchObject({ fields: { githubRepo: expect.stringContaining("VIDEO_ALLOW_SAME_REPO") } });
+      await expect(gh.saveGithubSettings({ githubRepo: "owner/..", githubWorkflow: "../x.yml", githubRef: "-x" })).rejects.toMatchObject({ fields: { githubRepo: expect.any(String), githubWorkflow: expect.any(String), githubRef: expect.any(String) } });
+      await gh.saveGithubSettings({ githubRepo: "o/render", githubWorkflow: "r.yml", githubRef: "main" });
+      expect(await gh.getGithubSettingsView()).toMatchObject({ repo: { value: "o/render", source: "db" }, workflow: { value: "r.yml", source: "db" }, ref: { value: "main", source: "db" }, problem: null });
+    } finally {
+      await gh.saveGithubSettings({ githubRepo: "", githubWorkflow: "", githubRef: "" });
+    }
+  });
+});
+
+describe("run id steering (L1)", () => {
+  it("a claim from a run other than the dispatched one is refused and leaves the job unclaimed", async () => {
+    const id = await startJob("render");
+    const bad = await claim(id, "999", 1);
+    expect(bad.status).toBe(409);
+    expect(await jsonOf(bad)).toEqual({ code: "run_mismatch" });
+    expect(await rowOf(id)).toMatchObject({ runnerClaimedAt: null, runnerRunId: "4242" });
+    expect((await claim(id, "4242", 1)).status).toBe(200);
+    expect((await rowOf(id)).runnerRunId).toBe("4242");
+  });
+
+  it("without a dispatched run id the claim's id is stored once and never overwritten", async () => {
+    double = githubDouble(() => new Response(null, { status: 204 }));
+    gh.setGithubFetchForTests(double.fetchFn);
+    const id = await startJob("render");
+    expect((await rowOf(id)).runnerRunId).toBeNull();
+    expect((await claim(id, "777", 1)).status).toBe(200);
+    expect((await claim(id, "888", 1)).status).toBe(409);
+    expect((await rowOf(id)).runnerRunId).toBe("777");
+  });
+
+  it("only digits of a sane length are accepted as a run id", async () => {
+    const id = await startJob("render");
+    for (const runId of ["", "abc", "12a", "0123", "-5", "1.5", "1".repeat(19), "9".repeat(40), "../1"]) {
+      const r = await claim(id, runId, 1);
+      expect(r.status, runId).toBe(422);
+    }
+    expect((await rowOf(id)).runnerClaimedAt).toBeNull();
+  });
+});
+
+describe("a run GitHub already ended before the claim (M3)", () => {
+  const ended = (conclusion: string) => async () => ({ status: "completed", conclusion });
+
+  it("a cancelled run fails the job at once as runner_not_started, long before the start timeout", async () => {
+    const id = await startJob("render");
+    rg.setRunStateForTests(ended("cancelled"));
+    try {
+      expect((await rg.superviseGithubJobs()).notStarted).toBe(1);
+      const row = await rowOf(id);
+      expect(row).toMatchObject({ status: "failed", errorCode: "runner_not_started" });
+      expect(row.errorMessage).toContain("was cancelled");
+    } finally {
+      rg.setRunStateForTests(null);
+    }
+  });
+
+  it("a run that is still queued or in progress is left alone, and is polled at most every 20 s", async () => {
+    const id = await startJob("render");
+    let polls = 0;
+    rg.setRunStateForTests(async () => {
+      polls++;
+      return { status: "in_progress", conclusion: null };
+    });
+    try {
+      const t0 = Date.now();
+      await rg.superviseGithubJobs(new Date(t0));
+      await rg.superviseGithubJobs(new Date(t0 + 5_000));
+      expect(polls).toBe(1);
+      await rg.superviseGithubJobs(new Date(t0 + 21_000));
+      expect(polls).toBe(2);
+      expect((await rowOf(id)).status).toBe("running");
+    } finally {
+      rg.setRunStateForTests(null);
+    }
+  });
+
+  it("a claimed job, and a job whose dispatch returned no run id, are never polled", async () => {
+    const claimed = await startJob("render");
+    await claim(claimed, "4242", 1);
+    double = githubDouble(() => new Response(null, { status: 204 }));
+    gh.setGithubFetchForTests(double.fetchFn);
+    const noId = await startJob("render");
+    let polls = 0;
+    rg.setRunStateForTests(async () => {
+      polls++;
+      return { status: "completed", conclusion: "failure" };
+    });
+    try {
+      await rg.superviseGithubJobs();
+      expect(polls).toBe(0);
+      expect((await rowOf(claimed)).status).toBe("running");
+      expect((await rowOf(noId)).status).toBe("running");
+    } finally {
+      rg.setRunStateForTests(null);
+    }
+  });
+
+  it("asks GitHub for the run with GET /repos/{owner}/{repo}/actions/runs/{id}", async () => {
+    const calls: string[] = [];
+    gh.setGithubFetchForTests(async (input, init) => {
+      calls.push(`${init?.method} ${String(input)}`);
+      return new Response(JSON.stringify({ status: "completed", conclusion: "cancelled" }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    expect(await gh.getWorkflowRunState("4242")).toEqual({ status: "completed", conclusion: "cancelled" });
+    expect(calls).toEqual(["GET https://api.github.com/repos/owner/blog/actions/runs/4242"]);
+    expect(await gh.getWorkflowRunState("../4242")).toBeNull();
+  });
+});
+
+describe("quota refund for infrastructure failures (L3)", () => {
+  it("refunds exactly one unit for each infrastructure code, once, and deleting the job restores nothing more", async () => {
+    setCfg({ VIDEO_MAX_RENDERS_PER_DAY: 50 });
+    for (const code of ["runner_not_configured", "runner_auth", "runner_not_found", "runner_rejected", "runner_unavailable", "runner_not_started"]) {
+      const postId = await newPost();
+      const before = await usageCount();
+      const created = await jobs.createJob(actor(), { kind: "render", storyboard: sbOf("ok"), postId });
+      if (!created.ok) throw new Error("create");
+      const id = created.data.id;
+      await waitFor(async () => (await rowOf(id)).runnerDispatchedAt, 15_000);
+      expect(await usageCount()).toBe(before + 1);
+      expect(await jobs.failJob(id, code, undefined, {})).toBe(true);
+      expect(await usageCount(), code).toBe(before);
+      expect(await jobs.failJob(id, code, undefined, {})).toBe(false); // second call: nothing changes
+      expect(await usageCount(), code).toBe(before);
+      await jobs.deleteJob(actor(), id);
+      expect(await usageCount(), code).toBe(before);
+    }
+  });
+
+  it("the dispatch failing at once (HTTP 401) gives the unit back", async () => {
+    double = githubDouble(() => new Response("{}", { status: 401 }));
+    gh.setGithubFetchForTests(double.fetchFn);
+    const before = await usageCount();
+    const res = await jobs.createJob(actor(), { kind: "preview", storyboard: sbOf("ok") });
+    if (!res.ok) throw new Error("create");
+    await waitFor(async () => (await rowOf(res.data.id)).status === "failed", 15_000);
+    expect(await usageCount()).toBe(before);
+  });
+
+  it("the watchdog's runner_not_started refunds; renders that ran, user cancels and runner failures do not", async () => {
+    const start = await usageCount();
+    const a = await startJob("render");
+    await rg.superviseGithubJobs(new Date(Date.now() + 700_000));
+    expect((await rowOf(a)).errorCode).toBe("runner_not_started");
+    expect(await usageCount()).toBe(start);
+
+    const b = await startJob("render");
+    await claim(b, "4242", 1);
+    expect((await failRunner(b)).status).toBe(200);
+    expect((await rowOf(b)).errorCode).toBe("render_failed");
+    expect(await usageCount()).toBe(start + 1);
+
+    const c = await startJob("render");
+    await jobs.cancelJob(actor(), c);
+    expect(await usageCount()).toBe(start + 2);
+
+    const d = await startJob("render");
+    await claim(d, "4242", 1);
+    await jobs.failJob(d, "runner_timeout", undefined, {});
+    expect(await usageCount()).toBe(start + 3);
+  });
+
+  it("queued jobs failed because the backend became unconfigured get their unit back", async () => {
+    setCfg({ VIDEO_MAX_RUNNING: 0 });
+    const postId = await newPost();
+    const before = await usageCount();
+    const created = await jobs.createJob(actor(), { kind: "render", storyboard: sbOf("ok"), postId });
+    if (!created.ok) throw new Error("create");
+    expect((await rowOf(created.data.id)).status).toBe("queued");
+    expect(await usageCount()).toBe(before + 1);
+    setCfg({ VIDEO_RUNNER_SECRET: "short" });
+    await rg.tickGithub(async () => null, new Date(Date.now() + 120_000));
+    expect(await rowOf(created.data.id)).toMatchObject({ status: "failed", errorCode: "runner_not_configured" });
+    expect(await usageCount()).toBe(before);
+    await rg.tickGithub(async () => null, new Date(Date.now() + 120_000));
+    expect(await usageCount()).toBe(before);
+  });
+});
+
+describe("MP4 structure at upload (L4)", () => {
+  it("an upload with a valid ftyp but no moov/mdat structure is refused at /files/video.mp4/complete and nothing is kept", async () => {
+    const id = await startJob("render");
+    await claim(id, "4242", 1);
+    const fake = Buffer.alloc(4096, 7);
+    fake.writeUInt32BE(24, 0);
+    fake.write("ftypisom", 4, "latin1");
+    expect((await call(id, "PUT", "/files/video.mp4/parts/0", { body: fake, headers: { "x-part-sha256": sha(fake) } })).status).toBe(200);
+    const done = await call(id, "POST", "/files/video.mp4/complete", { json: { parts: 1, bytes: fake.length, sha256: sha(fake) } });
+    expect(done.status).toBe(422);
+    expect(await jsonOf(done)).toEqual({ code: "bad_structure" });
+    expect(existsSync(path.join(uploadDir(id), "video.mp4"))).toBe(false);
+    // a truncated copy of a real structure is refused as well
+    const good = mp4(4096);
+    const cut = good.subarray(0, 3000);
+    await call(id, "PUT", "/files/video.mp4/parts/0", { body: cut, headers: { "x-part-sha256": sha(cut) } });
+    expect((await call(id, "POST", "/files/video.mp4/complete", { json: { parts: 1, bytes: cut.length, sha256: sha(cut) } })).status).toBe(422);
+  });
 });

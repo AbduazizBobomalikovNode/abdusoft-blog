@@ -219,10 +219,19 @@ const EnvSchema = z.object({
   // GitHub backend: workflow'ni ishga tushiruvchi fine-grained token ("Actions: Read and write") va repozitoriy `egasi/nomi`. Env > admin panel (shifrlangan).
   VIDEO_GITHUB_TOKEN: z.string().optional().default(""),
   VIDEO_GITHUB_REPO: z.string().optional().default(""),
+  // Dispatch nishoni: workflow fayl nomi va shox. Env > admin panel. Tokenni ALOHIDA kichik repozitoriyga cheklash uchun (docs/video.md).
+  VIDEO_GITHUB_WORKFLOW: z.string().optional().default(""),
+  VIDEO_GITHUB_REF: z.string().optional().default(""),
+  // `true` bo'lsa dispatch blogning O'Z repozitoriysiga ham ruxsat etiladi (tavsiya etilmaydi: token deploy.yml'ni ham ishga tushira oladi).
+  VIDEO_ALLOW_SAME_REPO: z
+    .string()
+    .optional()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
   // GitHub runner'da parallel kadrlar (hosted runner: 4 yadro). Runner o'z yadrolari soni bilan yana cheklaydi.
   VIDEO_RUNNER_CONCURRENCY: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).max(8).default(4)),
   // Dispatch'dan keyin ishchi shuncha soniyada `claim` qilmasa ish `runner_not_started` bilan to'xtaydi.
-  VIDEO_RUNNER_START_TIMEOUT_SECONDS: intEnv(300, 30),
+  VIDEO_RUNNER_START_TIMEOUT_SECONDS: intEnv(600, 30),
   // `preview_storyboard` ko'rik tayyor bo'lishini ko'pi bilan shuncha soniya kutadi (proksi 60 soniyada uzadi; 5..50).
   VIDEO_PREVIEW_WAIT_SECONDS: intEnv(40, 5),
   // Platforma ilovalari (client id / secret) — env > admin panel (shifrlangan). Bo'sh bo'lsa panelda kiritiladi.

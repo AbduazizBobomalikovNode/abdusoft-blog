@@ -162,6 +162,48 @@ async function head(file: string, n: number): Promise<Buffer> {
   }
 }
 
+/**
+ * Minimal MP4 structure check (no parser dependency): walks the TOP-LEVEL boxes by their headers only. `ftyp` must come first, a `moov` and
+ * an `mdat` must exist, every box must fit inside the file, and the boxes must end exactly at the end of the file (a truncated or padded
+ * upload is refused). A box with size 0 extends to the end of the file; size 1 means a 64-bit size follows the type.
+ */
+export async function verifyMp4Structure(file: string): Promise<boolean> {
+  const fh = await open(file, "r");
+  try {
+    const length = (await fh.stat()).size;
+    const header = Buffer.alloc(16);
+    let offset = 0;
+    let first = true;
+    let moov = false;
+    let mdat = false;
+    for (let boxes = 0; boxes < 10_000 && offset < length; boxes++) {
+      const { bytesRead } = await fh.read(header, 0, 16, offset);
+      if (bytesRead < 8) return false;
+      let size = header.readUInt32BE(0);
+      let headerLen = 8;
+      const type = header.subarray(4, 8).toString("latin1");
+      if (size === 1) {
+        if (bytesRead < 16) return false;
+        const big = header.readBigUInt64BE(8);
+        if (big > BigInt(Number.MAX_SAFE_INTEGER)) return false;
+        size = Number(big);
+        headerLen = 16;
+      } else if (size === 0) {
+        size = length - offset;
+      }
+      if (size < headerLen || offset + size > length) return false;
+      if (first && type !== "ftyp") return false;
+      first = false;
+      if (type === "moov") moov = true;
+      if (type === "mdat") mdat = true;
+      offset += size;
+    }
+    return !first && offset === length && moov && mdat;
+  } finally {
+    await fh.close();
+  }
+}
+
 export interface Verified {
   mime: "video/mp4" | "image/gif" | "image/jpeg";
   ext: "mp4" | "gif" | "jpg";
@@ -174,6 +216,7 @@ export async function verifyFile(file: string, kind: "preview" | "render" | "gif
   const h = await head(file, 16);
   if (kind === "render") {
     if (h.length < 12 || h.subarray(4, 8).toString("latin1") !== "ftyp") throw new UploadError(422, "bad_magic");
+    if (!(await verifyMp4Structure(file))) throw new UploadError(422, "bad_structure");
     return { mime: "video/mp4", ext: "mp4", width: 1920, height: 1080 };
   }
   if (kind === "gif") {
