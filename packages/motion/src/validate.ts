@@ -2,6 +2,7 @@ import { INPUT_LIMITS, LIMITS } from "./limits.ts";
 import { convertZodIssue, formatIssues, type StoryboardIssue } from "./schema/issues.ts";
 import { type Storyboard, storyboardSchema } from "./schema/storyboard.ts";
 import { computeTimeline, type Timeline } from "./timeline.ts";
+import { structureIssue } from "./precheck.ts";
 import { FPS } from "./timing.ts";
 
 export type ValidationResult =
@@ -80,6 +81,8 @@ function internalFailure(err: unknown): ValidationResult {
 /** Validate an already-parsed JSON value. Never throws. */
 export function validateStoryboard(input: unknown): ValidationResult {
   try {
+    const structural = structureIssue(input);
+    if (structural) return { ok: false, issues: [structural] };
     const parsed = storyboardSchema.safeParse(input);
     if (!parsed.success) {
       return { ok: false, issues: capIssues(parsed.error.issues.slice(0, INPUT_LIMITS.maxIssues + 1).map((i) => convertZodIssue(i, input))) };

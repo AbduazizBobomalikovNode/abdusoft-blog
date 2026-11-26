@@ -34,6 +34,11 @@ export interface WorkerSpec {
   from?: number;
   to?: number;
   loop?: boolean;
+  /**
+   * Largest acceptable output file (render/gif: the video; preview: ONE still), checked as soon as the file exists so an
+   * oversized result is reported before anything is uploaded or stored. Omit for no limit.
+   */
+  maxOutputBytes?: number;
 }
 
 export type WorkerMessage =
@@ -50,4 +55,6 @@ export type WorkerErrorCode =
   | "cancelled"
   | "gif_limit"
   | "scene_not_found"
+  | "too_large"
+  | "disk_full"
   | "render_failed";

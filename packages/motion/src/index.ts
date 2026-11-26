@@ -7,3 +7,4 @@ export * from "./timing.ts";
 export * from "./theme/tokens.ts";
 export * from "./validate.ts";
 export { storyboardJsonSchema } from "./json-schema.ts";
+export { STRUCTURE_LIMITS, structureIssue } from "./precheck.ts";

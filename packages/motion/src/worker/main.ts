@@ -4,7 +4,7 @@
  * `WorkerSpec`, validates the storyboard again, renders and prints JSON lines (see protocol.ts). It owns this
  * process's signals: SIGTERM/SIGINT cancel the render, clean up and exit.
  */
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { INPUT_LIMITS } from "../limits.ts";
 import { formatIssues } from "../schema/issues.ts";
@@ -83,61 +83,24 @@ async function main(): Promise<number> {
     }, 2000).unref();
   }
 
-  const { MotionRenderer, MotionError } = await import("../render/index.ts");
-  const { isolateBrowserSignals } = await import("../render/cli-signals.ts");
-  let renderer: Awaited<ReturnType<typeof MotionRenderer.create>> | null = null;
   try {
-    mkdirSync(spec.outDir, { recursive: true });
-    renderer = await MotionRenderer.create({
+    const { isolateBrowserSignals } = await import("../render/cli-signals.ts");
+    const { executeSpec } = await import("./execute.ts");
+    const outcome = await executeSpec({
+      spec,
+      input,
+      totalSeconds: checked.timeline.totalSeconds,
       signal: abort.signal,
-      cacheDir: spec.cacheDir,
-      sweepOnStart: false,
-      allowBrowserDownload: false,
+      onProgress: out,
       launchHook: isolateBrowserSignals,
-      ...(spec.browserExecutable ? { browserExecutable: spec.browserExecutable } : {}),
-      ...(spec.concurrency !== undefined ? { concurrency: spec.concurrency } : {}),
-      ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
-      onProgress: (p) => out({ t: "progress", phase: p.phase, fraction: p.fraction, message: p.message }),
     });
-    if (spec.kind === "preview") {
-      const stills = await renderer.stills(input, {
-        outDir: spec.outDir,
-        width: spec.width ?? 640,
-        quality: spec.quality ?? 72,
-        ...(spec.at ? { at: spec.at } : {}),
-        ...(spec.scene !== undefined ? { scene: spec.scene } : {}),
-      });
-      out({
-        t: "result",
-        kind: "preview",
-        stills: stills.map((s) => ({ file: s.file, seconds: s.seconds, scene: s.scene, sceneType: s.sceneType, bytes: s.bytes })),
-        totalSeconds: checked.timeline.totalSeconds,
-      });
-    } else {
-      const file = path.join(spec.outDir, spec.outName as string);
-      const r =
-        spec.kind === "render"
-          ? await renderer.video(input, file, spec.scene !== undefined ? { scene: spec.scene } : {})
-          : await renderer.gif(input, file, {
-              ...(spec.from !== undefined ? { from: spec.from } : {}),
-              ...(spec.to !== undefined ? { to: spec.to } : {}),
-              ...(spec.scene !== undefined ? { scene: spec.scene } : {}),
-              ...(spec.loop ? { loop: true } : {}),
-            });
-      out({ t: "result", kind: spec.kind, file: r.file, bytes: r.bytes, frames: r.frames, seconds: r.seconds, renderMs: r.renderMs });
+    if (outcome.ok) {
+      out(outcome.result);
+      return 0;
     }
-    return 0;
-  } catch (e) {
-    if (e instanceof MotionError) {
-      const code: WorkerErrorCode = e.code === "process_not_dedicated" ? "render_failed" : e.code;
-      return fail(code, e.message);
-    }
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/^(no scene|scene \d+ does not)/.test(msg)) return fail("scene_not_found", msg);
-    err(e instanceof Error ? (e.stack ?? msg) : msg);
-    return fail("render_failed", msg);
+    if (outcome.code === "render_failed") err(outcome.message);
+    return fail(outcome.code, outcome.message);
   } finally {
-    await renderer?.close();
     process.off("SIGTERM", onSignal);
     process.off("SIGINT", onSignal);
     process.off("SIGHUP", onSignal);
