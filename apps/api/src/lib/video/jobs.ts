@@ -1,16 +1,19 @@
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { mkdirSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { MotionAsset, MotionJob, MotionJobDetail, MotionJobKind } from "@blog/shared";
 import { config } from "../../config.js";
 import { db } from "../../db/index.js";
-import { motionAssets, motionJobs, posts } from "../../db/schema.js";
+import { motionAssets, motionJobs, motionUsage, posts } from "../../db/schema.js";
 import { recordAuditSafe } from "../audit.js";
-import { deleteStoredFile, storeFileFromPath } from "../media/store.js";
-import { fail, ok, type Actor, type ServiceResult } from "../posts/types.js";
+import { deleteStoredFile, listStoredObjects, storeFileFromPath } from "../media/store.js";
+import { fail, ok, SCHEDULER_ACTOR, type Actor, type ServiceResult } from "../posts/types.js";
+import type { Executor } from "../executor.js";
 import { loadMotion, type MotionTimeline, type StoryboardIssue } from "./motion.js";
 import { cacheDirOf, dataDir, jobDirOf, jobsRoot, motionDir } from "./paths.js";
 import { probeResources } from "./resources.js";
+import { localPreflight } from "./local-preflight.js";
+import { listUploadDirs, removeUploads } from "./uploads.js";
 import { killStaleWorker, runWorker, type RunReport, type WorkerSpec } from "./runner.js";
 
 type JobRow = typeof motionJobs.$inferSelect;
@@ -38,14 +41,20 @@ export const PREVIEW_MAX_SECONDS = 180;
 const STALE_QUEUE_MINUTES = 60;
 /** Ishchi o'z taymeridan keyin ham tugamasa, ota jarayon shuncha vaqtdan keyin butun guruhni o'ldiradi. */
 let killMarginMs = 20_000;
+/** Ishchi paket (bundle) qurilishi (sovuq ~10-25 s) ishchining O'Z soati boshlanishidan oldin bajariladi: tashqi o'ldirish taymeri shuncha ko'proq kutadi. */
+let bundleAllowanceMs = 180_000;
 /** Faqat testlar uchun. */
-export const setKillMarginForTests = (ms: number): void => {
+export const setKillMarginForTests = (ms: number, bundleMs = 0): void => {
   killMarginMs = ms;
+  bundleAllowanceMs = bundleMs;
 };
 
-/** Ko'rik vositasi ishni kutadigan eng uzun vaqt (240 soniyalik vosita chegarasidan ancha past). */
+/**
+ * Ko'rik vositasi ishni kutadigan eng uzun vaqt: `VIDEO_PREVIEW_WAIT_SECONDS` (standart 40, ko'pi bilan 50) — proksi 60 soniyada uzadi,
+ * shuning uchun vosita HECH QACHON undan uzoq kutmaydi; tayyor bo'lmasa ish raqami va `get_video_job` ko'rsatmasi qaytadi.
+ */
 let previewWaitOverrideMs: number | null = null;
-export const previewWaitMs = (): number => previewWaitOverrideMs ?? Math.min(PREVIEW_MAX_SECONDS, config.VIDEO_PREVIEW_TIMEOUT_SECONDS) * 1000 + 30_000;
+export const previewWaitMs = (): number => previewWaitOverrideMs ?? Math.min(50, Math.max(5, config.VIDEO_PREVIEW_WAIT_SECONDS)) * 1000;
 /** Faqat testlar uchun. */
 export const setPreviewWaitForTests = (ms: number | null): void => {
   previewWaitOverrideMs = ms;
@@ -226,51 +235,57 @@ export async function gifWindowSeconds(timeline: MotionTimeline, options: JobOpt
 // --------------------------------------------------------------------------- create
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Postgres advisory-lock key serialising "check quotas + insert" (works on PGlite and Postgres). */
+const CREATE_LOCK_KEY = 7_302_501;
 
-async function createdSince(kinds: MotionJobKind[], since: Date): Promise<number> {
-  const [r] = await db
+const bucketOf = (kind: MotionJobKind): "preview" | "render" => (kind === "preview" ? "preview" : "render");
+
+/** Daily usage counts from `motion_usage` (one row per created job; deleting jobs does NOT erase it). */
+async function usedSince(ex: Executor, bucket: "preview" | "render", since: Date): Promise<number> {
+  const [r] = await ex
     .select({ n: count() })
-    .from(motionJobs)
-    .where(and(inArray(motionJobs.kind, kinds), gte(motionJobs.createdAt, since)));
+    .from(motionUsage)
+    .where(and(eq(motionUsage.bucket, bucket), gte(motionUsage.createdAt, since)));
   return r?.n ?? 0;
 }
 
-export async function queueCounts(): Promise<{ queued: number; running: number }> {
-  const rows = await db.select({ status: motionJobs.status, n: count() }).from(motionJobs).where(inArray(motionJobs.status, ["queued", "running"])).groupBy(motionJobs.status);
+export async function queueCounts(ex: Executor = db): Promise<{ queued: number; running: number }> {
+  const rows = await ex.select({ status: motionJobs.status, n: count() }).from(motionJobs).where(inArray(motionJobs.status, ["queued", "running"])).groupBy(motionJobs.status);
   return { queued: rows.find((r) => r.status === "queued")?.n ?? 0, running: rows.find((r) => r.status === "running")?.n ?? 0 };
 }
 
-/** Quotas, one active job per post, queue length and server resources. Every refusal names what to do. */
-export async function checkQuotas(kind: MotionJobKind, postId: string | null): Promise<ServiceResult<null>> {
+/** Quotas, one active job per post, queue length and server resources. Every refusal names what to do. Runs inside the create transaction. */
+export async function checkQuotas(kind: MotionJobKind, postId: string | null, ex: Executor = db): Promise<ServiceResult<null>> {
   const since = new Date(Date.now() - DAY_MS);
   if (kind !== "preview" && postId) {
-    const [active] = await db
+    const [active] = await ex
       .select({ id: motionJobs.id })
       .from(motionJobs)
       .where(and(eq(motionJobs.postId, postId), inArray(motionJobs.kind, ["render", "gif"]), inArray(motionJobs.status, ["queued", "running"])))
       .limit(1);
     if (active) return fail("conflict", "Bu post uchun video allaqachon navbatda yoki tayyorlanmoqda", { code: "post_busy", activeJobId: active.id, hint: "Wait for it to finish or cancel it (cancel_video_job), then start again." });
   }
-  const q = await queueCounts();
+  const q = await queueCounts(ex);
   if (q.queued >= config.VIDEO_MAX_QUEUE) {
     return fail("rate_limited", "Video navbati to'la", { code: "queue_full", queued: q.queued, limit: config.VIDEO_MAX_QUEUE, retryAfterSeconds: 60, hint: "Wait for the running jobs to finish (get_video_job) and try again in a minute." });
   }
   if (kind === "preview") {
     const limit = config.VIDEO_MAX_PREVIEWS_PER_DAY;
-    if (limit > 0 && (await createdSince(["preview"], since)) >= limit) {
+    if (limit > 0 && (await usedSince(ex, "preview", since)) >= limit) {
       return fail("rate_limited", "Bugungi ko'rik (preview) chegarasiga yetildi", { code: "daily_previews", limit, env: "VIDEO_MAX_PREVIEWS_PER_DAY", retryAfterSeconds: 3600, hint: "Use validate_storyboard (free) to check the storyboard, or try again later; the owner can raise VIDEO_MAX_PREVIEWS_PER_DAY." });
     }
   } else {
     const limit = config.VIDEO_MAX_RENDERS_PER_DAY;
-    if (limit > 0 && (await createdSince(["render", "gif"], since)) >= limit) {
-      return fail("rate_limited", "Bugungi video render chegarasiga yetildi", { code: "daily_renders", limit, env: "VIDEO_MAX_RENDERS_PER_DAY", retryAfterSeconds: 3600, hint: "Renders are capped per rolling 24 hours; try later, or the owner can raise VIDEO_MAX_RENDERS_PER_DAY." });
+    if (limit > 0 && (await usedSince(ex, "render", since)) >= limit) {
+      return fail("rate_limited", "Bugungi video render chegarasiga yetildi", { code: "daily_renders", limit, env: "VIDEO_MAX_RENDERS_PER_DAY", retryAfterSeconds: 3600, hint: "Renders are capped per rolling 24 hours (deleting jobs does not reset the count); try later, or the owner can raise VIDEO_MAX_RENDERS_PER_DAY." });
     }
   }
   const res = probeResources();
   if (res.freeDiskMb !== null && res.freeDiskMb < config.VIDEO_MIN_FREE_DISK_MB) {
     return fail("rate_limited", "Serverda bo'sh disk yetarli emas", { code: "low_disk", freeDiskMb: res.freeDiskMb, minFreeDiskMb: config.VIDEO_MIN_FREE_DISK_MB, retryAfterSeconds: 600, hint: "The server is low on disk space. Ask the owner to free space (or lower VIDEO_MIN_FREE_DISK_MB)." });
   }
-  if (res.freeMemoryMb !== null && res.freeMemoryMb < config.VIDEO_MIN_FREE_MEMORY_MB) {
+  // Memory matters only when the render runs on this machine.
+  if (config.VIDEO_RUNNER === "local" && res.freeMemoryMb !== null && res.freeMemoryMb < config.VIDEO_MIN_FREE_MEMORY_MB) {
     return fail("rate_limited", "Serverda bo'sh xotira yetarli emas", { code: "low_memory", freeMemoryMb: res.freeMemoryMb, minFreeMemoryMb: config.VIDEO_MIN_FREE_MEMORY_MB, retryAfterSeconds: 120, hint: "The server is short of memory right now (the blog comes first). Try again in a few minutes." });
   }
   return ok(null);
@@ -287,8 +302,18 @@ export interface CreateJobInput {
   storyboard: unknown;
   postId?: string | null;
   options?: JobOptions;
-  /** Already validated by the caller (saves a second validation). */
+  /** Already validated by the caller (the storyboard is validated ONCE per request in the API). */
   validated?: ValidatedStoryboard;
+}
+
+/** Is the unique-index violation that protects "one active render per post" (any driver error shape)? */
+function isActivePostViolation(error: unknown): boolean {
+  for (let e: unknown = error, depth = 0; e && depth < 4; e = (e as { cause?: unknown }).cause, depth++) {
+    const err = e as { code?: unknown; message?: unknown; constraint?: unknown };
+    if (err.code === "23505" || err.constraint === "motion_jobs_one_active_per_post_idx") return true;
+    if (typeof err.message === "string" && err.message.includes("motion_jobs_one_active_per_post_idx")) return true;
+  }
+  return false;
 }
 
 export async function createJob(actor: Actor, input: CreateJobInput): Promise<ServiceResult<MotionJobDetail>> {
@@ -305,34 +330,60 @@ export async function createJob(actor: Actor, input: CreateJobInput): Promise<Se
   if (options.scene !== undefined && !findScene(timeline, options.scene)) return fail("unprocessable", "Sahna topilmadi", { code: "scene_not_found", hint: `no scene "${options.scene}"; use a scene id or its 1-based position` });
   if (input.kind === "preview" && options.at && options.at.length > PREVIEW_MAX_STILLS) return fail("unprocessable", "Ko'rik uchun juda ko'p kadr", { code: "too_many_stills", limit: PREVIEW_MAX_STILLS });
 
-  const quota = await checkQuotas(input.kind, input.postId ?? null);
-  if (!quota.ok) return quota;
+  const ready = await backendReadiness();
+  if (!ready.ok) return fail("unprocessable", "Video xizmati hali sozlanmagan", { code: ready.code, hint: ready.hint });
 
-  const [row] = await db
-    .insert(motionJobs)
-    .values({
-      kind: input.kind,
-      postId: input.postId ?? null,
-      storyboard,
-      options: options as Record<string, unknown>,
-      durationSeconds: timeline.totalSeconds,
-      requestedBy: actor.userId,
-      via: actor.via,
-      clientName: actor.mcp?.clientName ?? null,
-      ...(input.kind === "preview" ? { expiresAt: new Date(Date.now() + config.VIDEO_PREVIEW_TTL_HOURS * 3600_000) } : {}),
-    })
-    .returning();
-  if (!row) return fail("bad_request", "Ishni yaratib bo'lmadi");
+  try {
+    const created = await db.transaction(async (tx) => {
+      // One writer at a time: the checks and the insert below are one atomic step, so parallel calls cannot overshoot a quota.
+      await tx.execute(sql`select pg_advisory_xact_lock(${CREATE_LOCK_KEY})`);
+      const quota = await checkQuotas(input.kind, input.postId ?? null, tx);
+      if (!quota.ok) return quota;
+      const [row] = await tx
+        .insert(motionJobs)
+        .values({
+          kind: input.kind,
+          postId: input.postId ?? null,
+          storyboard,
+          options: options as Record<string, unknown>,
+          durationSeconds: timeline.totalSeconds,
+          requestedBy: actor.userId,
+          via: actor.via,
+          clientName: actor.mcp?.clientName ?? null,
+          ...(input.kind === "preview" ? { expiresAt: new Date(Date.now() + config.VIDEO_PREVIEW_TTL_HOURS * 3600_000) } : {}),
+        })
+        .returning();
+      if (!row) return fail("bad_request", "Ishni yaratib bo'lmadi");
+      await tx.insert(motionUsage).values({ bucket: bucketOf(input.kind) });
+      return ok(row);
+    });
+    if (!created.ok) return created;
+    const row = created.data;
+    await recordAuditSafe(actor, {
+      action: input.kind === "preview" ? "video.preview" : "video.render",
+      entityType: "video",
+      entityId: row.id,
+      summary: input.kind === "preview" ? "Video ko'rik kadrlari so'raldi" : input.kind === "gif" ? "GIF render boshlandi" : "Video render boshlandi",
+      meta: { kind: input.kind, postId: input.postId ?? null, seconds: Math.round(timeline.totalSeconds * 10) / 10, scenes: timeline.scenes.length, runner: config.VIDEO_RUNNER },
+    });
+    kickQueue();
+    return ok(toJobDetail(row, [], await queuePositionOf(row)));
+  } catch (error) {
+    if (isActivePostViolation(error)) {
+      return fail("conflict", "Bu post uchun video allaqachon navbatda yoki tayyorlanmoqda", { code: "post_busy", hint: "Wait for it to finish or cancel it (cancel_video_job), then start again." });
+    }
+    throw error;
+  }
+}
 
-  await recordAuditSafe(actor, {
-    action: input.kind === "preview" ? "video.preview" : "video.render",
-    entityType: "video",
-    entityId: row.id,
-    summary: input.kind === "preview" ? "Video ko'rik kadrlari so'raldi" : input.kind === "gif" ? "GIF render boshlandi" : "Video render boshlandi",
-    meta: { kind: input.kind, postId: input.postId ?? null, seconds: Math.round(timeline.totalSeconds * 10) / 10, scenes: timeline.scenes.length },
-  });
-  kickQueue();
-  return ok(toJobDetail(row, [], await queuePositionOf(row)));
+/** Is the chosen backend able to take a job right now? Refusing at creation keeps the queue from filling with jobs that cannot start. */
+export async function backendReadiness(): Promise<{ ok: true } | { ok: false; code: string; hint: string }> {
+  if (config.VIDEO_RUNNER === "github") {
+    const { githubReadiness } = await import("./runner-github.js");
+    return githubReadiness();
+  }
+  const pre = localPreflight();
+  return pre.ok ? { ok: true } : { ok: false, code: "local_preflight_missing", hint: pre.hint };
 }
 
 // --------------------------------------------------------------------------- queue / execution
@@ -346,11 +397,17 @@ export const kickQueue = (): void => {
   void tickQueue().catch((e: unknown) => console.error("Video navbati xatosi:", e instanceof Error ? e.message : e));
 };
 
-/** Atomik "claim": `queued -> running`. Bir vaqtda ishlayotganlar soni `VIDEO_MAX_RUNNING`dan oshmaydi. Ko'riklar oldin. */
-export async function claimNextJob(): Promise<JobRow | null> {
+/** Render soati (soniya): ko'rik yoki render/GIF. Runner va watchdog shu qiymatni ishlatadi. */
+export const jobTimeoutSeconds = (kind: MotionJobKind): number => (kind === "preview" ? Math.min(PREVIEW_MAX_SECONDS, config.VIDEO_PREVIEW_TIMEOUT_SECONDS) : config.VIDEO_RENDER_TIMEOUT_SECONDS);
+
+/** Bir vaqtda ishlayotganlar soni chegarasi: `local` backendda ko'pi bilan 2 (bitta kichik server), `github`da VIDEO_MAX_RUNNING. */
+const maxRunning = (runner: "github" | "local"): number => (runner === "local" ? Math.min(2, config.VIDEO_MAX_RUNNING) : config.VIDEO_MAX_RUNNING);
+
+/** Atomik "claim": `queued -> running`. Bir vaqtda ishlayotganlar soni chegaradan oshmaydi. Ko'riklar oldin. */
+export async function claimNextJob(runner: "github" | "local" = config.VIDEO_RUNNER): Promise<JobRow | null> {
   const [row] = await db
     .update(motionJobs)
-    .set({ status: "running", startedAt: new Date(), progress: 0, phase: "starting", message: "starting" })
+    .set({ status: "running", runner, startedAt: new Date(), progress: 0, phase: runner === "github" ? "dispatching" : "starting", message: runner === "github" ? "starting a GitHub runner" : "starting" })
     .where(
       and(
         eq(
@@ -358,7 +415,7 @@ export async function claimNextJob(): Promise<JobRow | null> {
           sql`(select id from motion_jobs where status = 'queued' order by (kind = 'preview') desc, created_at asc limit 1 for update skip locked)`,
         ),
         eq(motionJobs.status, "queued"),
-        sql`(select count(*) from motion_jobs where status = 'running') < ${config.VIDEO_MAX_RUNNING}`,
+        sql`(select count(*) from motion_jobs where status = 'running') < ${maxRunning(runner)}`,
       ),
     )
     .returning();
@@ -369,13 +426,20 @@ export async function tickQueue(): Promise<void> {
   if (ticking) return;
   ticking = true;
   try {
+    if (config.VIDEO_RUNNER === "github") {
+      const { tickGithub } = await import("./runner-github.js");
+      await tickGithub(claimNextJob);
+      return;
+    }
     await failStaleQueued();
-    while (running.size < config.VIDEO_MAX_RUNNING) {
+    // The local backend refuses to start anything until the setup script has proven this machine can render.
+    if (!localPreflight().ok) return;
+    while (running.size < maxRunning("local")) {
       const res = probeResources();
       const lowMem = res.freeMemoryMb !== null && res.freeMemoryMb < config.VIDEO_MIN_FREE_MEMORY_MB;
       const lowDisk = res.freeDiskMb !== null && res.freeDiskMb < config.VIDEO_MIN_FREE_DISK_MB;
       if (lowMem || lowDisk) break; // jobs wait in the queue; the blog comes first
-      const job = await claimNextJob();
+      const job = await claimNextJob("local");
       if (!job) break;
       running.add(job.id);
       void execute(job)
@@ -410,7 +474,7 @@ async function failStaleQueued(): Promise<void> {
     .where(and(eq(motionJobs.status, "queued"), lt(motionJobs.createdAt, new Date(Date.now() - STALE_QUEUE_MINUTES * 60_000))));
 }
 
-function phasePercent(phase: string, fraction: number | null): number {
+export function phasePercent(phase: string, fraction: number | null): number {
   const f = fraction ?? 0;
   switch (phase) {
     case "validate":
@@ -426,6 +490,8 @@ function phasePercent(phase: string, fraction: number | null): number {
       return Math.round(30 + 60 * f);
     case "encode":
       return Math.round(90 + 9 * f);
+    case "uploading":
+      return Math.round(95 + 4 * f);
     case "done":
       return 100;
     default:
@@ -444,17 +510,41 @@ export function safeMessage(text: string): string {
 const MESSAGES: Record<string, string> = {
   timeout: "The render did not finish within the time limit and was stopped.",
   memory: "The render used more memory than the limit and was stopped.",
-  browser_missing: "The headless browser is not installed on the server. The owner must run scripts/setup-motion-browser.sh once.",
+  browser_missing: "The headless browser is not available to the renderer (on the local backend the owner must run scripts/setup-motion-browser.sh; on GitHub the workflow installs it).",
   interrupted: "The API server restarted while this job was running. Start it again.",
   storage_failed: "The result could not be saved to the media storage.",
-  invalid_storyboard: "The storyboard did not pass validation inside the render worker.",
+  invalid_storyboard: "The storyboard did not pass validation inside the renderer.",
+  engine_mismatch: "The API accepted the storyboard but the render engine rejected it (the engine version on the runner differs from the API).",
+  disk_full: "The disk is full, so the result could not be written. The owner must free space.",
+  too_large: "The result is larger than the size limit. Shorten the storyboard.",
+  upload_failed: "The runner could not upload the result to the API.",
+  runner_failed: "The GitHub runner reported a failure.",
+  runner_timeout: "The GitHub runner did not finish within the time limit.",
+  runner_not_started: "No GitHub runner picked the job up in time.",
 };
 
-async function fail_(id: string, code: string, message: string | undefined, timings: Record<string, number>): Promise<void> {
-  await db
+/** Ishni `failed` qiladi (faqat hali `running` bo'lsa). `true` — shu chaqiruv o'zgartirdi. Natija jurnalga yoziladi. */
+export async function failJob(id: string, code: string, message: string | undefined, timings: Record<string, number>): Promise<boolean> {
+  const [row] = await db
     .update(motionJobs)
     .set({ status: "failed", errorCode: code, errorMessage: message ? safeMessage(message) : (MESSAGES[code] ?? "The render failed."), finishedAt: new Date(), timings, workerPid: null, phase: null })
-    .where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running")));
+    .where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running")))
+    .returning();
+  if (!row) return false;
+  removeUploads(id);
+  await auditOutcome(row);
+  return true;
+}
+
+/** Har bir ish natijasi (tayyor / muvaffaqiyatsiz) jurnalga yoziladi — mahalliy ham, GitHub ham bir xil amal bilan. */
+export async function auditOutcome(row: JobRow): Promise<void> {
+  await recordAuditSafe(SCHEDULER_ACTOR, {
+    action: "video.finish",
+    entityType: "video",
+    entityId: row.id,
+    summary: row.status === "ready" ? "Video ishi tayyor" : "Video ishi muvaffaqiyatsiz",
+    meta: { kind: row.kind, status: row.status, errorCode: row.errorCode, runner: row.runner, runId: row.runnerRunId, postId: row.postId },
+  });
 }
 
 async function execute(job: JobRow): Promise<void> {
@@ -464,9 +554,6 @@ async function execute(job: JobRow): Promise<void> {
   const queueMs = job.startedAt ? job.startedAt.getTime() - job.createdAt.getTime() : 0;
   const timings: Record<string, number> = { queueMs };
   try {
-    // 3rd validation: before a worker is started (untrusted input, stored data is not trusted either).
-    const checked = await validateInput(job.storyboard);
-    if (!checked.ok) return await fail_(job.id, "invalid_storyboard", undefined, timings);
     const [fresh] = await db.select({ cancelRequested: motionJobs.cancelRequested }).from(motionJobs).where(eq(motionJobs.id, job.id)).limit(1);
     if (fresh?.cancelRequested) {
       await db.update(motionJobs).set({ status: "cancelled", finishedAt: new Date(), timings }).where(and(eq(motionJobs.id, job.id), eq(motionJobs.status, "running")));
@@ -475,7 +562,8 @@ async function execute(job: JobRow): Promise<void> {
     mkdirSync(path.join(jobDir, "out"), { recursive: true });
     mkdirSync(cacheDirOf(), { recursive: true });
     const storyboardFile = path.join(jobDir, "storyboard.json");
-    writeFileSync(storyboardFile, JSON.stringify(checked.value.storyboard));
+    // The storyboard was validated once when the job was created; the worker validates it again with the engine itself.
+    writeFileSync(storyboardFile, JSON.stringify(job.storyboard));
     const options = job.options as JobOptions;
     const spec: WorkerSpec = {
       kind: job.kind,
@@ -483,12 +571,13 @@ async function execute(job: JobRow): Promise<void> {
       outDir: path.join(jobDir, "out"),
       cacheDir: cacheDirOf(),
       concurrency: config.VIDEO_CONCURRENCY,
+      maxOutputBytes: job.kind === "preview" ? config.VIDEO_MAX_STILL_BYTES : job.kind === "gif" ? config.VIDEO_MAX_GIF_BYTES : config.VIDEO_MAX_MP4_BYTES,
       ...(job.kind === "preview" ? { width: previewWidthOf(options), ...(options.at ? { at: options.at.slice(0, PREVIEW_MAX_STILLS) } : {}) } : { outName: job.kind === "gif" ? "clip.gif" : "video.mp4" }),
       ...(options.scene !== undefined ? { scene: options.scene } : {}),
       ...(job.kind === "gif" ? { ...(options.from !== undefined ? { from: options.from } : {}), ...(options.to !== undefined ? { to: options.to } : {}), ...(options.loop ? { loop: true } : {}) } : {}),
       ...(config.VIDEO_BROWSER_PATH ? { browserExecutable: config.VIDEO_BROWSER_PATH } : {}),
     };
-    const timeoutMs = (job.kind === "preview" ? Math.min(PREVIEW_MAX_SECONDS, config.VIDEO_PREVIEW_TIMEOUT_SECONDS) : config.VIDEO_RENDER_TIMEOUT_SECONDS) * 1000;
+    const timeoutMs = jobTimeoutSeconds(job.kind) * 1000;
     spec.timeoutMs = timeoutMs;
 
     let lastWrite = 0;
@@ -496,7 +585,8 @@ async function execute(job: JobRow): Promise<void> {
     const report: RunReport = await runWorker({
       jobId: job.id,
       spec,
-      timeoutMs: timeoutMs + killMarginMs,
+      // The worker builds the bundle BEFORE its own clock starts (cold: 10-25 s); the outer kill timer allows for it.
+      timeoutMs: timeoutMs + killMarginMs + bundleAllowanceMs,
       memoryLimitMb: config.VIDEO_WORKER_MEMORY_MB,
       signal: ac.signal,
       onSpawn: (pid) => void db.update(motionJobs).set({ workerPid: pid }).where(eq(motionJobs.id, job.id)).catch(() => undefined),
@@ -519,64 +609,109 @@ async function execute(job: JobRow): Promise<void> {
       await db.update(motionJobs).set({ status: "cancelled", finishedAt: new Date(), timings, workerPid: null, phase: null }).where(and(eq(motionJobs.id, job.id), eq(motionJobs.status, "running")));
       return;
     }
-    if (o.outcome === "timeout") return await fail_(job.id, "timeout", undefined, timings);
-    if (o.outcome === "memory") return await fail_(job.id, "memory", `The render used more than ${config.VIDEO_WORKER_MEMORY_MB} MB (peak ${o.peakRssMb} MB) and was stopped.`, timings);
-    if (o.outcome === "crashed") return await fail_(job.id, "crashed", o.message, timings);
-    if (o.outcome === "error") return await fail_(job.id, o.code, o.code === "browser_missing" ? MESSAGES.browser_missing : o.message, timings);
+    if (o.outcome === "timeout") {
+      await failJob(job.id, "timeout", undefined, timings);
+      return;
+    }
+    if (o.outcome === "memory") {
+      await failJob(job.id, "memory", o.unknown ? "The memory of the render could not be measured, so it was stopped for safety." : `The render used more than ${config.VIDEO_WORKER_MEMORY_MB} MB (peak ${o.peakRssMb} MB) and was stopped.`, timings);
+      return;
+    }
+    if (o.outcome === "crashed") {
+      await failJob(job.id, "crashed", o.message, timings);
+      return;
+    }
+    if (o.outcome === "error") {
+      await failJob(job.id, o.code, o.code === "browser_missing" ? MESSAGES.browser_missing : o.message, timings);
+      return;
+    }
     await finishWithResult(job, o.result, jobDir, timings);
   } catch (error) {
     console.error(`Video ishi (${job.id}) kutilmagan xato:`, error instanceof Error ? error.message : error);
-    await fail_(job.id, "internal_error", "The render failed unexpectedly. See the server log.", timings);
+    await failJob(job.id, "internal_error", "The render failed unexpectedly. See the server log.", timings);
   } finally {
     controllers.delete(job.id);
     rmSync(jobDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
 
-/** Natija fayllarini saqlash qatlamiga yuklaydi (hajm chegaralari bilan) va ishni `ready` qiladi. */
+/** Ichki ishchi natijasi (local backend): fayllarni saqlash qatlamiga yuklaydi (hajm chegaralari bilan) va ishni `ready` qiladi. */
 async function finishWithResult(job: JobRow, result: Extract<Awaited<ReturnType<typeof runWorker>>["outcome"], { outcome: "result" }>["result"], jobDir: string, timings: Record<string, number>): Promise<void> {
   const outRoot = path.resolve(jobDir, "out") + path.sep;
   const inside = (file: string): boolean => path.resolve(file).startsWith(outRoot);
+  const files: StagedFile[] = [];
+  const width = previewWidthOf(job.options as JobOptions);
+  if (result.kind === "preview") {
+    for (const s of result.stills) {
+      if (!inside(s.file)) throw new Error("worker reported a file outside its output directory");
+      files.push({ path: s.file, kind: "still", mime: "image/jpeg", ext: "jpg", width, height: Math.round((width * 9) / 16), seconds: s.seconds, sceneIndex: s.scene, sceneType: s.sceneType });
+    }
+  } else {
+    if (!inside(result.file)) throw new Error("worker reported a file outside its output directory");
+    timings.renderMs = result.renderMs;
+    files.push(
+      result.kind === "gif"
+        ? { path: result.file, kind: "gif", mime: "image/gif", ext: "gif", width: 800, height: 450, seconds: result.seconds }
+        : { path: result.file, kind: "mp4", mime: "video/mp4", ext: "mp4", width: 1920, height: 1080, seconds: result.seconds },
+    );
+  }
+  await storeAndFinalize(job, files, timings);
+}
+
+/** A verified result file waiting on disk to be moved into media storage. */
+export interface StagedFile {
+  path: string;
+  kind: "mp4" | "gif" | "still";
+  mime: string;
+  ext: string;
+  width: number | null;
+  height: number | null;
+  seconds: number | null;
+  sceneIndex?: number;
+  sceneType?: string;
+}
+
+/**
+ * Natija fayllarini saqlash qatlamiga yuklaydi (hajm chegaralari bilan) va YAGONA yakunlash tranzaksiyasini ishga tushiradi.
+ * Mahalliy ishchi ham, GitHub runner ham shu yo'ldan o'tadi. `true` — ish `ready` bo'ldi.
+ */
+export async function storeAndFinalize(job: JobRow, files: StagedFile[], timings: Record<string, number>): Promise<boolean> {
   const stored: Array<typeof motionAssets.$inferInsert> = [];
   const storedKeys: string[] = [];
   try {
-    if (result.kind === "preview") {
-      for (const s of result.stills) {
-        if (!inside(s.file)) throw new Error("worker reported a file outside its output directory");
-        const size = statSync(s.file).size;
-        if (size > config.VIDEO_MAX_STILL_BYTES) return await fail_(job.id, "too_large", `A preview frame is ${size} bytes; the limit is ${config.VIDEO_MAX_STILL_BYTES}.`, timings);
-        const up = await storeFileFromPath({ path: s.file, ext: "jpg", mime: "image/jpeg" });
-        storedKeys.push(up.key);
-        stored.push({ jobId: job.id, kind: "still", key: up.key, url: up.url, mime: "image/jpeg", size: up.size, width: previewWidthOf(job.options as JobOptions), height: Math.round((previewWidthOf(job.options as JobOptions) * 9) / 16), seconds: s.seconds, sceneIndex: s.scene, sceneType: s.sceneType });
+    for (const f of files) {
+      const size = statSync(f.path).size;
+      const limit = f.kind === "still" ? config.VIDEO_MAX_STILL_BYTES : f.kind === "gif" ? config.VIDEO_MAX_GIF_BYTES : config.VIDEO_MAX_MP4_BYTES;
+      if (size > limit) {
+        await Promise.all(storedKeys.map((k) => deleteStoredFile(k).catch(() => undefined)));
+        await failJob(job.id, "too_large", f.kind === "still" ? `A preview frame is ${size} bytes; the limit is ${limit}.` : `The ${f.kind === "gif" ? "GIF" : "MP4"} is ${Math.round(size / 1024 / 1024)} MB; the limit is ${Math.round(limit / 1024 / 1024)} MB. Shorten the storyboard.`, timings);
+        return false;
       }
-    } else {
-      if (!inside(result.file)) throw new Error("worker reported a file outside its output directory");
-      const size = statSync(result.file).size;
-      const limit = result.kind === "gif" ? config.VIDEO_MAX_GIF_BYTES : config.VIDEO_MAX_MP4_BYTES;
-      if (size > limit) return await fail_(job.id, "too_large", `The ${result.kind === "gif" ? "GIF" : "MP4"} is ${Math.round(size / 1024 / 1024)} MB; the limit is ${Math.round(limit / 1024 / 1024)} MB. Shorten the storyboard.`, timings);
-      timings.renderMs = result.renderMs;
-      const mime = result.kind === "gif" ? "image/gif" : "video/mp4";
-      const up = await storeFileFromPath({ path: result.file, ext: result.kind === "gif" ? "gif" : "mp4", mime });
+      const up = await storeFileFromPath({ path: f.path, ext: f.ext, mime: f.mime });
       storedKeys.push(up.key);
-      stored.push({ jobId: job.id, kind: result.kind === "gif" ? "gif" : "mp4", key: up.key, url: up.url, mime, size: up.size, width: result.kind === "gif" ? 800 : 1920, height: result.kind === "gif" ? 450 : 1080, seconds: result.seconds });
+      stored.push({ jobId: job.id, kind: f.kind, key: up.key, url: up.url, mime: f.mime, size: up.size, width: f.width, height: f.height, seconds: f.seconds, sceneIndex: f.sceneIndex ?? null, sceneType: f.sceneType ?? null });
     }
   } catch (error) {
     await Promise.all(storedKeys.map((k) => deleteStoredFile(k).catch(() => undefined)));
+    const code = (error as { code?: unknown } | null)?.code === "ENOSPC" ? "disk_full" : "storage_failed";
     console.error(`Video natijasini saqlashda xatolik (${job.id}):`, error instanceof Error ? error.message : error);
-    return await fail_(job.id, "storage_failed", undefined, timings);
+    await failJob(job.id, code, undefined, timings);
+    return false;
   }
-  const updated = await db.transaction(async (tx) => {
+  const settled = await db.transaction(async (tx) => {
     const [cur] = await tx.select({ status: motionJobs.status }).from(motionJobs).where(eq(motionJobs.id, job.id)).limit(1);
-    if (!cur || cur.status !== "running") return false; // deleted or settled meanwhile
+    if (!cur || cur.status !== "running") return null; // deleted, cancelled or settled meanwhile
     await tx.insert(motionAssets).values(stored);
-    await tx.update(motionJobs).set({ status: "ready", progress: 100, phase: "done", message: "ready", finishedAt: new Date(), timings, workerPid: null }).where(eq(motionJobs.id, job.id));
-    return true;
+    const [row] = await tx.update(motionJobs).set({ status: "ready", progress: 100, phase: "done", message: "ready", finishedAt: new Date(), timings, workerPid: null }).where(eq(motionJobs.id, job.id)).returning();
+    return row ?? null;
   });
-  if (!updated) {
+  if (!settled) {
     await Promise.all(storedKeys.map((k) => deleteStoredFile(k).catch(() => undefined)));
-    return;
+    return false;
   }
+  await auditOutcome(settled);
   if (job.postId && job.kind !== "preview") await pruneRendersForPost(job.postId).catch(() => undefined);
+  return true;
 }
 
 // --------------------------------------------------------------------------- cancel / delete
@@ -587,6 +722,12 @@ export async function cancelJob(actor: Actor, id: string): Promise<ServiceResult
   const { row } = found;
   if (row.status === "queued") {
     await db.update(motionJobs).set({ status: "cancelled", finishedAt: new Date(), cancelRequested: true }).where(and(eq(motionJobs.id, id), eq(motionJobs.status, "queued")));
+  } else if (row.status === "running" && row.runner === "github") {
+    // The state is in the database: the job is cancelled at once; the runner sees the flag at its next progress call and the run is cancelled (best effort).
+    await db.update(motionJobs).set({ status: "cancelled", cancelRequested: true, finishedAt: new Date(), phase: null }).where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running")));
+    removeUploads(id);
+    const { cancelWorkflowRun } = await import("./github.js");
+    void cancelWorkflowRun(row.runnerRunId);
   } else if (row.status === "running") {
     await db.update(motionJobs).set({ cancelRequested: true }).where(eq(motionJobs.id, id));
     const ac = controllers.get(id);
@@ -595,7 +736,7 @@ export async function cancelJob(actor: Actor, id: string): Promise<ServiceResult
   } else {
     return fail("conflict", "Bu ish allaqachon tugagan", { code: "job_finished", status: row.status, hint: "Only queued or running jobs can be cancelled; use delete_video_job to remove a finished one." });
   }
-  await recordAuditSafe(actor, { action: "video.cancel", entityType: "video", entityId: id, summary: "Video ishi bekor qilindi", meta: { kind: row.kind, wasStatus: row.status } });
+  await recordAuditSafe(actor, { action: "video.cancel", entityType: "video", entityId: id, summary: "Video ishi bekor qilindi", meta: { kind: row.kind, wasStatus: row.status, runner: row.runner, runId: row.runnerRunId } });
   const after = await getJob(id);
   return ok(toJobDetail(after!.row, after!.assets, await queuePositionOf(after!.row)));
 }
@@ -622,6 +763,7 @@ async function deleteJobRow(id: string): Promise<{ deleted: boolean; usedBy?: Ar
   if (usedBy.length > 0) return { deleted: false, usedBy };
   await removeJobFiles(id);
   await db.delete(motionJobs).where(eq(motionJobs.id, id));
+  removeUploads(id);
   return { deleted: true };
 }
 
@@ -675,7 +817,11 @@ export async function runRetention(now: Date = new Date()): Promise<RetentionRep
     if (status === "ready") report.renders++;
     else report.failed++;
   }
-  // 4) yetim ish papkalari (hech qaysi ish ishlamayotgan paytdagi qoldiqlar)
+  // 4) kvota hisobining eski qatorlari (kunlik oynadan tashqari)
+  await db.delete(motionUsage).where(lt(motionUsage.createdAt, new Date(now.getTime() - 2 * DAY_MS)));
+  // 5) yetim yuklash papkalari va ish qatori yo'q saqlash obyektlari
+  report.orphanDirs += await sweepRunnerOrphans(now);
+  // 6) yetim ish papkalari (hech qaysi ish ishlamayotgan paytdagi qoldiqlar)
   try {
     const activeIds = new Set(running);
     for (const name of readdirSync(jobsRoot())) {
@@ -705,14 +851,19 @@ export interface RecoveryReport {
  * ishchi guruhlari o'ldiriladi; ish papkalari tozalanadi. Ishchi hali ishlamagan `queued` ishlar navbatda qoladi.
  */
 export async function recoverVideoJobs(): Promise<RecoveryReport> {
-  const orphans = await db.select({ id: motionJobs.id, pid: motionJobs.workerPid }).from(motionJobs).where(eq(motionJobs.status, "running"));
+  // GitHub-backed jobs keep all their state in the database and the run lives on GitHub: a restart loses nothing, so they are NOT
+  // failed here (the watchdog still enforces their deadlines). Only jobs whose worker lived inside the previous API process are orphans.
+  const orphanWhere = and(eq(motionJobs.status, "running"), or(isNull(motionJobs.runner), ne(motionJobs.runner, "github")));
+  const orphans = await db.select({ id: motionJobs.id, pid: motionJobs.workerPid }).from(motionJobs).where(orphanWhere);
   let killedStale = 0;
   for (const o of orphans) if (o.pid && (await killStaleWorker(o.pid))) killedStale++;
   if (orphans.length > 0) {
-    await db
+    const failed = await db
       .update(motionJobs)
       .set({ status: "failed", errorCode: "interrupted", errorMessage: MESSAGES.interrupted, finishedAt: new Date(), workerPid: null, phase: null })
-      .where(eq(motionJobs.status, "running"));
+      .where(orphanWhere)
+      .returning();
+    for (const row of failed) await auditOutcome(row);
   }
   let sweptDirs = 0;
   try {
@@ -737,7 +888,8 @@ export const runningJobCount = (): number => running.size;
 /** Preview uchun: kutish o'rniga "band" deb javob berish kerakmi. */
 export async function previewQueueState(): Promise<{ busy: boolean; running: number; queued: number }> {
   const q = await queueCounts();
-  return { busy: q.running + q.queued > 0, ...q };
+  // Only the local backend (one machine, one job at a time) answers "busy"; GitHub runners are separate machines, a preview just queues.
+  return { busy: config.VIDEO_RUNNER === "local" && q.running + q.queued > 0, ...q };
 }
 
 /** Ish tugaguncha (yoki `budgetMs` o'tguncha) kutadi. */
@@ -754,6 +906,32 @@ export async function awaitJob(id: string, budgetMs: number): Promise<{ row: Job
 
 export const countCreatedToday = async (): Promise<{ renders: number; previews: number }> => {
   const since = new Date(Date.now() - DAY_MS);
-  return { renders: await createdSince(["render", "gif"], since), previews: await createdSince(["preview"], since) };
+  return { renders: await usedSince(db, "render", since), previews: await usedSince(db, "preview", since) };
 };
+
+/**
+ * Yetim qoldiqlar: (1) yuklash papkalari — ishi yo'q yoki endi `running` GitHub ishi bo'lmagan va 30 daqiqadan eski;
+ * (2) saqlash qatlamidagi `video/` obyektlari — hech bir `motion_assets` qatoriga tegishli bo'lmagan va 1 soatdan eski
+ * (yakunlash tranzaksiyasi yiqilgan bo'lsa qoladi), shuningdek `.tmp-` qoldiqlari.
+ */
+export async function sweepRunnerOrphans(now: Date = new Date()): Promise<number> {
+  let removed = 0;
+  const active = new Set((await db.select({ id: motionJobs.id }).from(motionJobs).where(and(eq(motionJobs.status, "running"), eq(motionJobs.runner, "github")))).map((r) => r.id));
+  for (const d of listUploadDirs()) {
+    if (active.has(d.jobId) || d.ageMs < 30 * 60_000) continue;
+    removeUploads(d.jobId);
+    removed++;
+  }
+  try {
+    const known = new Set((await db.select({ key: motionAssets.key }).from(motionAssets)).map((r) => r.key));
+    for (const o of await listStoredObjects("video/")) {
+      if (known.has(o.key) || now.getTime() - o.modifiedAt.getTime() < 60 * 60_000) continue;
+      await deleteStoredFile(o.key).catch(() => undefined);
+      removed++;
+    }
+  } catch (error) {
+    console.error("Video saqlash qoldiqlarini tozalab bo'lmadi:", error instanceof Error ? error.message : error);
+  }
+  return removed;
+}
 

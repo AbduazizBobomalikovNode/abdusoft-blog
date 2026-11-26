@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { copyFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { S3Client } from "@aws-sdk/client-s3";
@@ -260,8 +260,52 @@ export async function storeFileFromPath(input: { path: string; ext: string; mime
 
   const filePath = path.join(uploadsDir, key);
   await mkdir(path.dirname(filePath), { recursive: true });
-  await copyFile(input.path, filePath);
+  // Vaqtinchalik nom -> rename: yiqilish yarim yozilgan "yakuniy" faylni qoldirmaydi.
+  const tmpPath = `${filePath}.tmp-${nanoid(8)}`;
+  try {
+    await copyFile(input.path, tmpPath);
+    await rename(tmpPath, filePath);
+  } catch (error) {
+    await rm(tmpPath, { force: true });
+    throw error;
+  }
   return { key, url: `${config.API_ORIGIN}/uploads/${key}`, size };
+}
+
+/**
+ * Saqlash qatlamidagi obyektlar (kalit va oxirgi o'zgarish vaqti), `prefix` ostida. Yetim qoldiqlarni topish uchun (`runRetention`):
+ * mahalliy papka yoki R2 (`ListObjectsV2`, ko'pi bilan 5000 ta). `.tmp-` qoldiqlari ham ro'yxatga kiradi.
+ */
+export async function listStoredObjects(prefix: string): Promise<Array<{ key: string; modifiedAt: Date }>> {
+  const { r2 } = await getSettings();
+  const out: Array<{ key: string; modifiedAt: Date }> = [];
+  if (r2.enabled) {
+    const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+    const client = await getS3Client(r2);
+    let token: string | undefined;
+    for (let page = 0; page < 5; page++) {
+      const res = await client.send(new ListObjectsV2Command({ Bucket: r2.bucket, Prefix: prefix, ...(token ? { ContinuationToken: token } : {}) }));
+      for (const o of res.Contents ?? []) if (o.Key) out.push({ key: o.Key, modifiedAt: o.LastModified ?? new Date() });
+      if (!res.IsTruncated || !res.NextContinuationToken) break;
+      token = res.NextContinuationToken;
+    }
+    return out;
+  }
+  const walk = async (dir: string): Promise<void> => {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (e.isFile()) out.push({ key: path.relative(uploadsDir, full).split(path.sep).join("/"), modifiedAt: (await stat(full)).mtime });
+    }
+  };
+  await walk(path.join(uploadsDir, prefix));
+  return out;
 }
 
 /** Saqlangan faylni o'qiydi (R2 yoki mahalliy): kichik fayllar uchun (masalan ko'rik kadrlarini vosita javobiga qo'shish). */

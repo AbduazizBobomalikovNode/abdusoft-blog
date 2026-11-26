@@ -63,6 +63,6 @@ describe("VIDEO_ENABLED off - no surface", () => {
     const importers = walk(srcRoot).filter((f) => /from\s+["'](\.\.?\/)+(lib\/)?video\//.test(readFileSync(f, "utf8")) || /import\(["']\.\/video\//.test(readFileSync(f, "utf8")));
     const names = importers.map((f) => path.relative(srcRoot, f)).sort();
     // every importer is itself flag-gated (dynamic import / mounted only when the flag is on)
-    for (const n of names) expect(["lib/mcp/tools/video-tools.ts", "lib/scheduler.ts", "routes/admin-video.ts", "lib/mcp/tools/index.ts", "routes/admin.ts"]).toContain(n);
+    for (const n of names) expect(["lib/mcp/tools/video-tools.ts", "lib/scheduler.ts", "routes/admin-video.ts", "routes/runner-video.ts", "lib/mcp/tools/index.ts", "routes/admin.ts"]).toContain(n);
   });
 });

@@ -12,6 +12,7 @@ const env = vi.hoisted(() => {
   process.env.VIDEO_ENABLED = "true";
   process.env.VIDEO_DATA_DIR = `${dir}/data`;
   process.env.VIDEO_MAX_RUNNING = "1";
+  process.env.VIDEO_RUNNER = "local";
   return { dir };
 });
 
@@ -109,6 +110,7 @@ beforeAll(async () => {
   runner.setKillGraceForTests(300);
   jobs.setKillMarginForTests(500);
   resources.setResourceProbeForTests(() => ({ freeDiskMb: 100_000, freeMemoryMb: 100_000 }));
+  (await import("./local-preflight.js")).setPreflightForTests({ ok: true, hint: "", at: null });
 });
 
 beforeEach(() => {

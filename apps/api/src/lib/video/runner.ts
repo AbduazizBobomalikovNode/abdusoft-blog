@@ -1,4 +1,4 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn, spawnSync, execFile } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +39,7 @@ export interface WorkerSpec {
   from?: number;
   to?: number;
   loop?: boolean;
+  maxOutputBytes?: number;
 }
 
 export type RunOutcome =
@@ -46,7 +47,7 @@ export type RunOutcome =
   | { outcome: "error"; code: string; message: string; issues?: unknown[] }
   | { outcome: "timeout" }
   | { outcome: "cancelled" }
-  | { outcome: "memory"; peakRssMb: number }
+  | { outcome: "memory"; peakRssMb: number; unknown?: boolean }
   | { outcome: "crashed"; message: string };
 
 export interface RunReport {
@@ -78,10 +79,12 @@ export const setKillGraceForTests = (ms: number): void => {
   killGraceMs = ms;
 };
 const MEM_POLL_MS = 1000;
+/** Shuncha ketma-ket o'qib bo'lmagan o'lchovdan keyin (taxminan shuncha soniya) ish to'xtatiladi. */
+const MEM_UNKNOWN_LIMIT = 3;
 const MAX_LINE = 2 * 1024 * 1024;
 
 /** Hozir ishlayotgan ishchilar guruhi (pid = guruh rahbari). API to'xtaganda hammasi o'ldiriladi. */
-const live = new Map<number, { jobId: string }>();
+const live = new Map<number, { jobId: string; known: Set<number> }>();
 
 export const liveWorkerCount = (): number => live.size;
 
@@ -124,19 +127,85 @@ const killGroup = (pid: number, signal: NodeJS.Signals): void => {
   }
 };
 
-/** Bir martalik `ps` o'lchovi: guruhdagi barcha jarayonlar RSS yig'indisi (MB). */
-export function groupRssMb(pgid: number): Promise<number> {
+const killPid = (pid: number, signal: NodeJS.Signals): void => {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // jarayon allaqachon yo'q
+  }
+};
+
+interface ProcRow {
+  pid: number;
+  ppid: number;
+  rssKb: number;
+}
+
+/** `ps` jadvalini tahlil qiladi; xato/bo'sh natija = `null` ("noma'lum": hech qachon "0 MB" emas). */
+export function parsePs(stdout: string): ProcRow[] | null {
+  const rows: ProcRow[] = [];
+  for (const line of stdout.split("\n")) {
+    const [pid, ppid, rss] = line.trim().split(/\s+/).map(Number);
+    if (pid !== undefined && ppid !== undefined && Number.isFinite(pid) && Number.isFinite(ppid)) rows.push({ pid, ppid, rssKb: Number.isFinite(rss) ? (rss as number) : 0 });
+  }
+  return rows.length > 0 ? rows : null;
+}
+
+/** Ildizdan boshlab barcha avlodlar (ota pid bo'yicha): Chrome o'z jarayon guruhi/sessiyasida, lekin ota-bola zanjiri saqlanadi. */
+export function descendantsOf(rootPid: number, rows: ProcRow[]): ProcRow[] {
+  const byParent = new Map<number, ProcRow[]>();
+  for (const r of rows) byParent.set(r.ppid, [...(byParent.get(r.ppid) ?? []), r]);
+  const out: ProcRow[] = [];
+  const stack = [rootPid];
+  const seen = new Set<number>([rootPid]);
+  while (stack.length > 0) {
+    const cur = stack.pop() as number;
+    for (const child of byParent.get(cur) ?? []) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
+      out.push(child);
+      stack.push(child.pid);
+    }
+  }
+  return out;
+}
+
+function psAsync(): Promise<ProcRow[] | null> {
   return new Promise((resolve) => {
-    execFile("ps", ["-A", "-o", "pgid=,rss="], { timeout: 3000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return resolve(0);
-      let kb = 0;
-      for (const line of stdout.split("\n")) {
-        const [g, r] = line.trim().split(/\s+/);
-        if (Number(g) === pgid) kb += Number(r) || 0;
-      }
-      resolve(Math.round(kb / 1024));
-    });
+    execFile("ps", ["-A", "-o", "pid=,ppid=,rss="], { timeout: 3000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : parsePs(stdout)));
   });
+}
+
+function psSync(): ProcRow[] | null {
+  try {
+    const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,rss="], { timeout: 3000, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+    return r.status === 0 ? parsePs(r.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ishchi daraxtining (ildiz + barcha avlodlar) RSS yig'indisi, MB. O'qib bo'lmasa `null` — chaqiruvchi buni "noma'lum" deb ko'radi. */
+export async function treeRssMb(rootPid: number, ps: () => Promise<ProcRow[] | null> = psAsync): Promise<number | null> {
+  const rows = await ps();
+  if (!rows || !rows.some((r) => r.pid === rootPid)) return null;
+  const kb = rows.filter((r) => r.pid === rootPid).concat(descendantsOf(rootPid, rows)).reduce((a, r) => a + r.rssKb, 0);
+  return Math.round(kb / 1024);
+}
+
+/** Barcha avlodlarga (va guruhga) signal yuboradi; `known` — oldin ko'rilgan pidlar (ota o'lgandan keyin ham topiladi). */
+async function signalTree(rootPid: number, signal: NodeJS.Signals, known: Set<number>): Promise<void> {
+  const rows = await psAsync();
+  if (rows) for (const r of descendantsOf(rootPid, rows)) known.add(r.pid);
+  for (const pid of known) killPid(pid, signal);
+  killGroup(rootPid, signal);
+  killPid(rootPid, signal);
+}
+
+/** `treeRssMb` hisobiga o'xshash, lekin avlod pidlarini ham qaytaradi (yakuniy tozalash uchun). */
+async function treePids(rootPid: number): Promise<number[]> {
+  const rows = await psAsync();
+  return rows ? descendantsOf(rootPid, rows).map((r) => r.pid) : [];
 }
 
 export async function runWorker(opts: RunOptions): Promise<RunReport> {
@@ -157,7 +226,8 @@ export async function runWorker(opts: RunOptions): Promise<RunReport> {
   });
   const pid = child.pid;
   if (pid === undefined) return { outcome: { outcome: "crashed", message: "the render worker could not be started" }, peakRssMb: 0, wallMs: Date.now() - started };
-  live.set(pid, { jobId: opts.jobId });
+  const knownPids = new Set<number>([pid]);
+  live.set(pid, { jobId: opts.jobId, known: knownPids });
   opts.onSpawn?.(pid);
   try {
     os.setPriority(pid, config.VIDEO_WORKER_NICE);
@@ -196,11 +266,14 @@ export async function runWorker(opts: RunOptions): Promise<RunReport> {
     stderrTail = (stderrTail + chunk).slice(-4000);
   });
 
+  let unknownStreak = 0;
+  let memoryUnknown = false;
   const stop = (why: "timeout" | "cancelled" | "memory"): void => {
     if (reason || exited) return;
     reason = why;
-    killGroup(pid, "SIGTERM");
-    setTimeout(() => killGroup(pid, "SIGKILL"), killGraceMs).unref();
+    // SIGTERM to the worker AND its browser descendants; after the grace period SIGKILL to everything seen, so no browser stays behind.
+    void signalTree(pid, "SIGTERM", knownPids);
+    setTimeout(() => void signalTree(pid, "SIGKILL", knownPids), killGraceMs).unref();
   };
 
   const timer = setTimeout(() => stop("timeout"), opts.timeoutMs);
@@ -212,8 +285,18 @@ export async function runWorker(opts: RunOptions): Promise<RunReport> {
   const mem = setInterval(() => {
     if (polling || exited) return;
     polling = true;
-    void groupRssMb(pid)
-      .then((mb) => {
+    void Promise.all([treeRssMb(pid), treePids(pid)])
+      .then(([mb, pids]) => {
+        for (const p of pids) knownPids.add(p);
+        if (mb === null) {
+          // FAIL CLOSED: an unreadable process table is "unknown", never "0 MB". After a short grace the job is stopped.
+          if (++unknownStreak >= MEM_UNKNOWN_LIMIT && opts.memoryLimitMb > 0) {
+            memoryUnknown = true;
+            stop("memory");
+          }
+          return;
+        }
+        unknownStreak = 0;
         if (mb > peakRssMb) peakRssMb = mb;
         if (opts.memoryLimitMb > 0 && mb > opts.memoryLimitMb) stop("memory");
       })
@@ -230,7 +313,8 @@ export async function runWorker(opts: RunOptions): Promise<RunReport> {
   clearTimeout(timer);
   clearInterval(mem);
   opts.signal.removeEventListener("abort", onAbort);
-  // Chrome/ffmpeg bolalari qolgan bo'lishi mumkin: guruhni yakuniy o'ldirish (jarayon allaqachon tugagan bo'lsa ESRCH — jim).
+  // Chrome/ffmpeg bolalari (alohida guruh/sessiyada ham) qolgan bo'lishi mumkin: ko'rilgan hamma pid va guruhni yakuniy o'ldirish.
+  for (const p of knownPids) killPid(p, "SIGKILL");
   killGroup(pid, "SIGKILL");
   live.delete(pid);
   rmSync(path.join(jobDir, "tmp"), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -241,18 +325,24 @@ export async function runWorker(opts: RunOptions): Promise<RunReport> {
   let outcome: RunOutcome;
   if (reason === "timeout") outcome = { outcome: "timeout" };
   else if (reason === "cancelled") outcome = { outcome: "cancelled" };
-  else if (reason === "memory") outcome = { outcome: "memory", peakRssMb };
+  else if (reason === "memory") outcome = { outcome: "memory", peakRssMb, ...(memoryUnknown ? { unknown: true } : {}) };
   else if (final?.t === "result") outcome = { outcome: "result", result: final };
   else if (final?.t === "error") outcome = { outcome: "error", code: final.code, message: final.message, ...(final.issues ? { issues: final.issues } : {}) };
   else outcome = { outcome: "crashed", message: `the render worker ended unexpectedly (exit ${exitCode ?? "none"})${stderrTail ? `: ${stderrTail.trim().split("\n").slice(-2).join(" | ").slice(0, 300)}` : ""}` };
   return { outcome, peakRssMb, wallMs };
 }
 
-/** API to'xtaganda yoki xatoda: barcha ishchi guruhlarini SINXRON o'ldiradi (process 'exit' ichida ham ishlaydi). */
-export function killAllWorkersSync(): number {
+/**
+ * API to'xtaganda yoki xatoda: barcha ishchi daraxtlarini (guruh + barcha avlodlar, Chrome ham) SINXRON o'ldiradi
+ * (process 'exit' ichida ham ishlaydi). `signal` odatda SIGKILL; SIGTERM bilan yumshoq to'xtatish ham mumkin.
+ */
+export function killAllWorkersSync(signal: NodeJS.Signals = "SIGKILL"): number {
   let n = 0;
-  for (const pid of live.keys()) {
-    killGroup(pid, "SIGKILL");
+  const rows = psSync();
+  for (const [pid, entry] of live) {
+    if (rows) for (const r of descendantsOf(pid, rows)) entry.known.add(r.pid);
+    for (const p of entry.known) killPid(p, signal);
+    killGroup(pid, signal);
     n++;
   }
   return n;
@@ -266,6 +356,8 @@ export function killStaleWorker(pid: number): Promise<boolean> {
   return new Promise((resolve) => {
     execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 3000 }, (err, stdout) => {
       if (err || !stdout.includes("worker/main.ts")) return resolve(false);
+      const rows = psSync();
+      if (rows) for (const r of descendantsOf(pid, rows)) killPid(r.pid, "SIGKILL");
       killGroup(pid, "SIGKILL");
       resolve(true);
     });

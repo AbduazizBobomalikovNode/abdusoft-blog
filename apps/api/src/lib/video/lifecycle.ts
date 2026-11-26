@@ -1,11 +1,19 @@
 import { Cron } from "croner";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, ne, or } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { motionJobs } from "../../db/schema.js";
 import { abortAllRunning, kickQueue, recoverVideoJobs, runRetention, tickQueue } from "./jobs.js";
-import { killAllWorkersSync } from "./runner.js";
+import { config } from "../../config.js";
+import { killAllWorkersSync, liveWorkerCount } from "./runner.js";
 
 let shutdownInstalled = false;
+const SHUTDOWN_GRACE_MS = 3000;
+
+/** Ishchilar tugaguncha (yoki `ms` o'tguncha) kutadi. */
+async function waitForWorkers(ms: number): Promise<void> {
+  const end = Date.now() + ms;
+  while (liveWorkerCount() > 0 && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
+}
 
 /**
  * API to'xtaganda render ishchilarining butun jarayon guruhi o'ldiriladi (Chrome ham qolmaydi). `exit` ishlovchisi sinxron:
@@ -19,25 +27,33 @@ export function installVideoShutdown(exitProcess = true): void {
   });
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.once(sig, () => {
+      // SIGTERM to every worker AND its browser descendants first, a short wait, then SIGKILL: no orphan browser is left behind.
       abortAllRunning();
-      killAllWorkersSync();
-      void db
-        .update(motionJobs)
-        .set({ status: "failed", errorCode: "interrupted", errorMessage: "The API server was stopped while this job was running. Start it again.", finishedAt: new Date() })
-        .where(eq(motionJobs.status, "running"))
+      killAllWorkersSync("SIGTERM");
+      const code = sig === "SIGTERM" ? 143 : 130;
+      void waitForWorkers(SHUTDOWN_GRACE_MS)
+        .then(() => killAllWorkersSync("SIGKILL"))
+        .then(async () => {
+          await db
+            .update(motionJobs)
+            .set({ status: "failed", errorCode: "interrupted", errorMessage: "The API server was stopped while this job was running. Start it again.", finishedAt: new Date() })
+            // Only workers that lived in THIS process: GitHub-backed jobs survive an API restart (their state is in the database).
+            .where(and(eq(motionJobs.status, "running"), or(isNull(motionJobs.runner), ne(motionJobs.runner, "github"))));
+        })
         .catch(() => undefined)
         .finally(() => {
-          if (exitProcess) process.exit(sig === "SIGTERM" ? 143 : 130);
+          if (exitProcess) process.exit(code);
         });
       // Bazaga yozish osilib qolsa ham chiqamiz.
-      if (exitProcess) setTimeout(() => process.exit(sig === "SIGTERM" ? 143 : 130), 3000).unref();
+      if (exitProcess) setTimeout(() => process.exit(code), SHUTDOWN_GRACE_MS + 3000).unref();
     });
   }
 }
 
 /** `VIDEO_ENABLED=true` bo'lganda scheduler chaqiradi: tiklash, navbatni kuzatish (har 5 soniya), tozalash (har soat). */
 export async function startVideo(): Promise<Cron[]> {
-  installVideoShutdown();
+  // Local workers live inside this process tree and must die with it; GitHub runs are independent of this process.
+  if (config.VIDEO_RUNNER === "local") installVideoShutdown();
   try {
     const r = await recoverVideoJobs();
     if (r.failedRunning > 0 || r.killedStale > 0 || r.sweptDirs > 0) {

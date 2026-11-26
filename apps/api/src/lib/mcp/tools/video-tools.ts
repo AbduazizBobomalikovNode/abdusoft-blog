@@ -45,8 +45,19 @@ const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint
 
 export const VIDEO_SCOPE = "video:render";
 
-/** Inline image budget per tool call (base64 characters). Connector results are capped at ~150 000 characters in total. */
-export const IMAGE_BUDGET_CHARS = 90_000;
+/**
+ * Connector results are capped (`ctx.limits.resultMaxChars`, ~150 000 characters) for text AND inline images together.
+ * Images get what is left after the text, minus a safety margin; paging continues through `image_offset`.
+ */
+export const IMAGE_MARGIN_CHARS = 6_000;
+/** The echoed storyboard (include_storyboard) is capped so it can never starve the images or the limit. */
+export const STORYBOARD_ECHO_MAX_CHARS = 24_000;
+
+/** Characters left for base64 images once the text part (`data`, with room for the frame notes) is accounted for. */
+export function imageBudgetChars(resultMaxChars: number, data: Record<string, unknown>, frameCount: number): number {
+  const text = JSON.stringify(data).length + frameCount * 320 + 800;
+  return Math.max(0, resultMaxChars - text - IMAGE_MARGIN_CHARS);
+}
 
 const storyboardField = z
   .record(z.string(), z.unknown())
@@ -107,8 +118,8 @@ export const WORKFLOW = [
   "1. get_storyboard_guide (this) - learn the schema and limits.",
   "2. Write the storyboard (pure JSON data; Uzbek text is fine; no narration - videos are silent).",
   "3. validate_storyboard - instant; returns the exact fixes or the computed timeline. Repeat until valid.",
-  "4. preview_storyboard - a few small still frames come back as images; look at them, fix text that does not fit or looks wrong, validate again.",
-  "5. start_video_render with post_id - returns a job id at once; poll get_video_job until status is 'ready' (renders take about a minute or more).",
+  "4. preview_storyboard - a few small still frames come back as images; look at them, fix text that does not fit or looks wrong, validate again. It waits at most ~40 s: if the answer is 'still rendering', call get_video_job with the job_id a little later and the frames arrive as images.",
+  "5. start_video_render with post_id - returns a job id at once; poll get_video_job every 10-20 s until status is 'ready' (the video is rendered on a GitHub-hosted runner: allow about a minute for it to start, then roughly 2-4 s per video second).",
   "6. Use the MP4/GIF url from get_video_job (attach it, or hand it to distribution). Nothing is published by these tools.",
 ];
 
@@ -204,10 +215,10 @@ export const validateStoryboardTool = defineTool({
 
 // --------------------------------------------------------------------------- images
 
-async function inlineImages(assets: Array<{ key: string; mime: string; url: string; seconds: number | null; sceneIndex: number | null; sceneType: string | null }>, offset: number): Promise<{ images: ToolImage[]; frames: Array<Record<string, unknown>>; next: number | null }> {
+async function inlineImages(assets: Array<{ key: string; mime: string; url: string; seconds: number | null; sceneIndex: number | null; sceneType: string | null }>, offset: number, budgetChars: number): Promise<{ images: ToolImage[]; frames: Array<Record<string, unknown>>; next: number | null }> {
   const images: ToolImage[] = [];
   const frames: Array<Record<string, unknown>> = [];
-  let budget = IMAGE_BUDGET_CHARS;
+  let budget = budgetChars;
   let i = offset;
   for (; i < assets.length; i++) {
     const a = assets[i]!;
@@ -243,8 +254,8 @@ export const previewStoryboardTool = defineTool({
   description:
     "Render a handful of small still frames of a storyboard and get them back as IMAGES (plus a short text summary) so you can look at the result and fix it before a full render. " +
     "Choose `at` (seconds, up to 4) or `scene` (4 frames of one scene: start, early, middle, end); with neither you get one representative frame per scene (the first few are inlined; the rest via get_video_job image_offset). " +
-    `It runs through the render worker and answers synchronously (a cold first run takes ~10-60 s; later ones ~5-20 s; hard limit ${PREVIEW_MAX_SECONDS} s). ` +
-    "If another render is running or queued it does NOT wait: it answers 'busy' with the queue state - retry in a minute. Needs the storyboard to be valid (validate_storyboard first). Counts toward a daily preview quota. Publishes nothing.",
+    `The preview is rendered on a GitHub-hosted runner, which needs about a minute to start, so this call waits at most ${config.VIDEO_PREVIEW_WAIT_SECONDS} s: when the frames are not ready yet it answers 'still rendering' with the job_id - then call get_video_job with that job_id every 10-20 s and the frames arrive as images (a typical preview is ready after ~1-2 minutes; hard limit ${PREVIEW_MAX_SECONDS} s of rendering). ` +
+    "Needs the storyboard to be valid (validate_storyboard first). Counts toward a daily preview quota. Publishes nothing.",
   scope: VIDEO_SCOPE,
   inputSchema: {
     storyboard: storyboardField,
@@ -256,6 +267,7 @@ export const previewStoryboardTool = defineTool({
   annotations: ADDITIVE,
   kind: "write",
   async handler(args, ctx) {
+    // Only the optional `local` backend (one machine) answers "busy"; hosted runners are separate machines and previews just queue.
     const state = await previewQueueState();
     if (state.busy) {
       throw new ToolError("rate_limited", "The render machine is busy right now (the server renders one job at a time).", "Try the preview again in about a minute; meanwhile use validate_storyboard. Long renders can take several minutes.", {
@@ -274,10 +286,23 @@ export const previewStoryboardTool = defineTool({
       throw new ToolError(row.status === "cancelled" ? "conflict" : "unprocessable", `The preview ${row.status}: ${row.errorMessage ?? "no details"}`, row.errorCode === "browser_missing" ? "The owner must install the browser once (scripts/setup-motion-browser.sh)." : "Fix the storyboard or try again.", { jobId: row.id, errorCode: row.errorCode }, ["error.message"]);
     }
     if (row.status !== "ready") {
-      return { data: { ok: true, jobId: row.id, status: row.status, progress: row.progress, summary: "The preview is still being rendered. Call get_video_job with this job_id in a few seconds to get the images.", ...untrusted([]) } };
+      return {
+        data: {
+          ok: true,
+          stillRendering: true,
+          jobId: row.id,
+          status: row.status,
+          stage: row.phase,
+          progress: row.progress,
+          summary: `The preview is still being rendered on the ${config.VIDEO_RUNNER === "github" ? "GitHub-hosted runner (starting one takes about a minute)" : "server"}. Nothing is wrong - this call only waits ${config.VIDEO_PREVIEW_WAIT_SECONDS} s; call get_video_job with this job_id to get the frames when it is ready.`,
+          next: `Call get_video_job with job_id "${row.id}" in 10-20 seconds (repeat until status is 'ready'); the preview frames are then attached as images.`,
+          ...untrusted([]),
+        },
+      };
     }
     const stills = assets.filter((a) => a.kind === "still");
-    const { images, frames, next } = await inlineImages(stills, 0);
+    const head = { ok: true, jobId: row.id, renderedMs: (row.timings as { wallMs?: number }).wallMs ?? null };
+    const { images, frames, next } = await inlineImages(stills, 0, imageBudgetChars(ctx.limits.resultMaxChars, head, stills.length));
     return {
       images,
       data: {
@@ -286,7 +311,7 @@ export const previewStoryboardTool = defineTool({
         summary: `${images.length} of ${stills.length} preview frame(s) are attached as images (${options.width ?? 480}px wide). Total storyboard length ${row.durationSeconds.toFixed(1)} s.${next !== null ? ` ${stills.length - next} more frame(s): call get_video_job with job_id and image_offset=${next}.` : ""}`,
         frames,
         moreImagesFrom: next,
-        renderedMs: (row.timings as { wallMs?: number }).wallMs ?? null,
+        renderedMs: head.renderedMs,
         next: "Look at the images. Fix anything that is cut off, too dense or wrong, validate_storyboard again, then start_video_render when it looks right.",
       },
     };
@@ -301,7 +326,7 @@ export const startVideoRenderTool = defineTool({
   name: "start_video_render",
   title: "Start a video render for a post",
   description:
-    "Queue a render of a (validated) storyboard for a post and return a job id IMMEDIATELY (the server renders one job at a time; get_video_job shows progress and finally the file URL). " +
+    "Queue a render of a (validated) storyboard for a post and return a job id IMMEDIATELY (it is rendered on a GitHub-hosted runner, which takes about a minute to start; get_video_job shows progress and finally the file URL). " +
     "format 'mp4' (default) renders the whole video (silent H.264, 1920x1080, <= 60 s). format 'gif' renders ONE short clip: give `scene` (id or position; add loop=true on a closing scene for its seamless hold) or from/to seconds - at most 15 s, 800 px wide. " +
     "dry_run=true validates, checks quotas and server resources and returns the duration and an estimated render time without queueing anything. One active render per post; daily render quota and a queue limit apply. " +
     "It never publishes anything and does not attach the video to the post: use the finished URL yourself. Pass idempotency_key so a retry does not queue twice.",
@@ -352,11 +377,20 @@ export const startVideoRenderTool = defineTool({
           format: kind === "gif" ? "gif" : "mp4",
           videoSeconds: Math.round(clipSeconds * 10) / 10,
           timeline: timelineSummary(timeline),
-          estimate: { renderSeconds: est.seconds, basis: est.basis, note: "Starts when it reaches the front of the queue; the first render after a deploy also builds the bundle (+10-25 s)." },
+          estimate: {
+            renderSeconds: est.seconds,
+            basis: est.basis,
+            note:
+              status.runner === "github"
+                ? "Rendered on a GitHub-hosted runner: starting one adds roughly a minute (not included in renderSeconds); a cold bundle cache adds another 10-25 s."
+                : "Starts when it reaches the front of the queue; the first render after a deploy also builds the bundle (+10-25 s).",
+          },
+          runner: status.runner,
+          ...(status.github ? { githubConfigured: status.github.tokenConfigured && status.github.secretConfigured && status.github.repoConfigured } : {}),
           queue: status.queue,
           quotas: status.quotas,
-          browserInstalled: status.browser.installed,
-          ...(status.browser.installed ? {} : { browserHint: status.browser.hint }),
+          ...(status.browser ? { browserInstalled: status.browser.installed, ...(status.browser.installed ? {} : { browserHint: status.browser.hint }) } : {}),
+          ...(status.local ? { localPreflightOk: status.local.preflightOk } : {}),
         },
       };
     }
@@ -367,7 +401,7 @@ export const startVideoRenderTool = defineTool({
       return {
         data: {
           ok: true,
-          summary: `Queued (${kind === "gif" ? "GIF" : "MP4"}, ${clipSeconds.toFixed(1)} s of video). Poll get_video_job with this jobId; it is usually ready in about ${Math.max(1, Math.round(est.seconds / 60))}-${Math.max(2, Math.round((est.seconds * 2) / 60))} min once started.`,
+          summary: `Queued (${kind === "gif" ? "GIF" : "MP4"}, ${clipSeconds.toFixed(1)} s of video). Poll get_video_job with this jobId every 10-20 s; allow about a minute for the runner to start, then it is usually ready in about ${Math.max(1, Math.round(est.seconds / 60))}-${Math.max(2, Math.round((est.seconds * 2) / 60))} min.`,
           jobId: created.id,
           status: created.status,
           queuePosition: created.queuePosition,
@@ -400,17 +434,20 @@ export const getVideoJobTool = defineTool({
   },
   annotations: READ_ONLY,
   kind: "read",
-  async handler(args) {
+  async handler(args, ctx) {
     const found = await getJob(args.job_id);
     if (!found) throw new ToolError("not_found", "No video job with this id.", "Use list_post_videos to find job ids.");
     const detail = toJobDetail(found.row, found.assets, null);
     const dto = toJobDto(found.row, found.assets, null);
     const { storyboard, options: _o, ...job } = detail;
     void _o;
+    const storyboardText = args.include_storyboard ? JSON.stringify(storyboard) : "";
+    const echoed = args.include_storyboard && storyboardText.length <= STORYBOARD_ECHO_MAX_CHARS;
     const base: Record<string, unknown> = {
       job: { ...job, assets: job.assets.map((a) => ({ id: a.id, kind: a.kind, url: a.url, mime: a.mime, sizeBytes: a.size, seconds: a.seconds, scene: a.sceneIndex !== null ? a.sceneIndex + 1 : null, sceneType: a.sceneType })) },
-      ...(args.include_storyboard ? { storyboard } : {}),
-      ...untrusted(["job.title", "job.message", "job.errorMessage", ...(args.include_storyboard ? ["storyboard"] : [])]),
+      ...(echoed ? { storyboard } : {}),
+      ...(args.include_storyboard && !echoed ? { storyboardOmitted: { sizeChars: storyboardText.length, limitChars: STORYBOARD_ECHO_MAX_CHARS, hint: "The stored storyboard is too long to echo; read it from the admin panel." } } : {}),
+      ...untrusted(["job.title", "job.message", "job.errorMessage", ...(echoed ? ["storyboard"] : [])]),
     };
     if (dto.status === "queued") {
       const state = await previewQueueState();
@@ -419,7 +456,7 @@ export const getVideoJobTool = defineTool({
     let images: ToolImage[] | undefined;
     if (dto.kind === "preview" && dto.status === "ready" && args.include_images !== false) {
       const stills = found.assets.filter((a) => a.kind === "still");
-      const inline = await inlineImages(stills, args.image_offset ?? 0);
+      const inline = await inlineImages(stills, args.image_offset ?? 0, imageBudgetChars(ctx.limits.resultMaxChars, base, stills.length - (args.image_offset ?? 0)));
       images = inline.images;
       base.frames = inline.frames;
       base.moreImagesFrom = inline.next;
@@ -471,7 +508,7 @@ export const listPostVideosTool = defineTool({
 export const getVideoStatusTool = defineTool({
   name: "get_video_status",
   title: "Video service status",
-  description: "Is the video service ready: headless browser installed, queue length, how many renders and previews were used today versus the daily caps, and free disk/memory against the minimums. Use it when a render is refused or stuck. Read-only.",
+  description: "Is the video service ready: which backend renders (GitHub-hosted runner by default), whether the GitHub token, runner secret and repository are configured (never their values), the time of the last successful run, queue length, how many renders and previews were used today versus the daily caps, and free disk against the minimum. Use it when a render is refused or stuck. Read-only.",
   scope: "blog:read",
   inputSchema: {},
   annotations: READ_ONLY,

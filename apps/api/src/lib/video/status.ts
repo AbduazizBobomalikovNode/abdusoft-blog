@@ -1,9 +1,15 @@
 import { execFile } from "node:child_process";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 import type { MotionStatus } from "@blog/shared";
 import { config } from "../../config.js";
+import { db } from "../../db/index.js";
+import { motionJobs } from "../../db/schema.js";
 import { cliEntry, motionDir } from "./paths.js";
 import { countCreatedToday, queueCounts } from "./jobs.js";
+import { getGithubConfig } from "./github.js";
+import { localPreflight } from "./local-preflight.js";
 import { probeResources } from "./resources.js";
+import { runnerSecretConfigured } from "./runner-token.js";
 
 export interface BrowserInfo {
   installed: boolean;
@@ -43,14 +49,36 @@ export async function getBrowserInfo(force = false): Promise<BrowserInfo> {
   return value;
 }
 
+async function lastSuccessAt(): Promise<string | null> {
+  const [row] = await db
+    .select({ at: motionJobs.finishedAt })
+    .from(motionJobs)
+    .where(and(eq(motionJobs.runner, "github"), eq(motionJobs.status, "ready"), isNotNull(motionJobs.finishedAt)))
+    .orderBy(desc(motionJobs.finishedAt))
+    .limit(1);
+  return row?.at?.toISOString() ?? null;
+}
+
+/** Holat: backend, nima sozlangani (qiymatlarsiz) va oxirgi muvaffaqiyatli run. `github` backendda serverda brauzer TEKSHIRILMAYDI. */
 export async function videoStatus(): Promise<MotionStatus> {
-  const [browser, q, today] = await Promise.all([getBrowserInfo(), queueCounts(), countCreatedToday()]);
+  const github = config.VIDEO_RUNNER === "github";
+  const [q, today] = await Promise.all([queueCounts(), countCreatedToday()]);
   const res = probeResources();
+  let githubInfo: MotionStatus["github"] = null;
+  if (github) {
+    const c = await getGithubConfig();
+    githubInfo = { tokenConfigured: Boolean(c.token), secretConfigured: runnerSecretConfigured(), repoConfigured: Boolean(c.repo), repo: c.repo || null, lastSuccessAt: await lastSuccessAt() };
+  }
+  const pre = github ? null : localPreflight();
+  const browser = github ? null : await getBrowserInfo();
   return {
     enabled: true,
-    browser: { installed: browser.installed, hint: browser.hint },
-    queue: { queued: q.queued, running: q.running, maxQueue: config.VIDEO_MAX_QUEUE, maxRunning: config.VIDEO_MAX_RUNNING },
+    runner: config.VIDEO_RUNNER,
+    github: githubInfo,
+    local: pre ? { preflightOk: pre.ok, hint: pre.ok ? null : pre.hint } : null,
+    browser: browser ? { installed: browser.installed, hint: browser.hint } : null,
+    queue: { queued: q.queued, running: q.running, maxQueue: config.VIDEO_MAX_QUEUE, maxRunning: github ? config.VIDEO_MAX_RUNNING : Math.min(2, config.VIDEO_MAX_RUNNING) },
     quotas: { rendersToday: today.renders, maxRendersPerDay: config.VIDEO_MAX_RENDERS_PER_DAY, previewsToday: today.previews, maxPreviewsPerDay: config.VIDEO_MAX_PREVIEWS_PER_DAY },
-    resources: { freeDiskMb: res.freeDiskMb, freeMemoryMb: res.freeMemoryMb, minFreeDiskMb: config.VIDEO_MIN_FREE_DISK_MB, minFreeMemoryMb: config.VIDEO_MIN_FREE_MEMORY_MB },
+    resources: { freeDiskMb: res.freeDiskMb, freeMemoryMb: github ? null : res.freeMemoryMb, minFreeDiskMb: config.VIDEO_MIN_FREE_DISK_MB, minFreeMemoryMb: github ? 0 : config.VIDEO_MIN_FREE_MEMORY_MB },
   };
 }

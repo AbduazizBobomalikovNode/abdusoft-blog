@@ -11,6 +11,7 @@ import { FAKE_WORKER, sbOf, waitFor } from "../../test/video-harness.js";
 const env = vi.hoisted(() => {
   const dir = `${process.env.TMPDIR ?? "/tmp"}/video-tools-test-${process.pid}`;
   process.env.VIDEO_ENABLED = "true";
+  process.env.VIDEO_RUNNER = "local";
   process.env.VIDEO_DATA_DIR = `${dir}/data`;
   process.env.MCP_ENABLED = "true";
   process.env.MCP_WRITE_TOOLS_ENABLED = "true";
@@ -75,6 +76,7 @@ beforeAll(async () => {
   jobs = await import("../video/jobs.js");
   const runner = await import("../video/runner.js");
   const resources = await import("../video/resources.js");
+  (await import("../video/local-preflight.js")).setPreflightForTests({ ok: true, hint: "", at: null });
   const cwd = path.join(env.dir, "cwd");
   mkdirSync(cwd, { recursive: true });
   runner.setWorkerLaunchForTests((_spec, specFile) => ({ command: process.execPath, args: [FAKE_WORKER, specFile], cwd }));
