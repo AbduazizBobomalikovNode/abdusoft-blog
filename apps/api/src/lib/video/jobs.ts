@@ -159,15 +159,16 @@ export async function listJobs(filter: { postId?: string; kind?: MotionJobKind; 
 // --------------------------------------------------------------------------- estimate
 
 /**
- * Taxminiy ishlash vaqti. Boshlang'ich qiymatlar `docs/video.md`dagi o'lchovlardan (M1 noutbuk ~1.9 s/soniya, kichik server uchun ~2x zaxira bilan; concurrency 1);
- * kamida 3 ta tugagan ish bo'lsa, ularning haqiqiy tezligi (kadr/soniya) ishlatiladi.
+ * Taxminiy ISHLASH vaqti (runner ishga tushishi QO'SHILMAGAN: GitHub hosted runner odatda taxminan bir daqiqa qo'shadi). Boshlang'ich qiymatlar
+ * mahalliy end-to-end o'lchovdan (M1, 8 yadro, 4 parallel kadr, sovuq bundle): showcase 56.6 s video = 60 s render (~1.06 s/soniya), 9 kadrli
+ * ko'rik 6.8 s. Hosted runner (4 vCPU) bundan sekinroq bo'lishi mumkin, shuning uchun ~2x zaxira; kamida 3 ta tugagan ish bo'lsa, haqiqiy tezlik ishlatiladi.
  */
 export const ESTIMATE_DEFAULTS = {
   previewBaseSeconds: 10,
   previewPerStillSeconds: 0.8,
   renderBaseSeconds: 12,
-  renderSecondsPerVideoSecond: 4,
-  gifSecondsPerVideoSecond: 3,
+  renderSecondsPerVideoSecond: 2,
+  gifSecondsPerVideoSecond: 1.5,
 };
 
 export async function estimateSeconds(kind: MotionJobKind, videoSeconds: number, stills = 0): Promise<{ seconds: number; basis: "measured" | "default" }> {

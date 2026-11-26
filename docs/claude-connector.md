@@ -325,24 +325,26 @@ Hamma o'zgarish **jurnalda** (`via: mcp`, qaysi ilova, qaysi vosita, nishon, o'z
 
 ### 18. Video: qisqa animatsiyali tushuntirish (ixtiyoriy, `VIDEO_ENABLED`)
 
-Yoqilganda (`VIDEO_ENABLED=true`, serverda brauzer o'rnatilgan — [docs/video.md](video.md)) Claude post uchun **ovozsiz, ≤ 60 soniyalik** tushuntirish videosi tayyorlay oladi. **Serverda AI yo'q:** storyboard'ni (sof JSON ma'lumot) Claude yozadi, server faqat tekshiradi va renderlaydi. Hech narsa o'zi chop etilmaydi va postga biriktirilmaydi.
+Yoqilganda (`VIDEO_ENABLED=true`; render GitHub Actions runner'ida bajariladi, sozlash — [docs/video.md](video.md)) Claude post uchun **ovozsiz, ≤ 60 soniyalik** tushuntirish videosi tayyorlay oladi. **Serverda AI yo'q:** storyboard'ni (sof JSON ma'lumot) Claude yozadi, server faqat tekshiradi va renderlaydi. Hech narsa o'zi chop etilmaydi va postga biriktirilmaydi.
 
-**Ish tartibi.** `get_storyboard_guide` (sxema, chegaralar, sahna turlari, 6 ta intro/closing varianti, 4 ta uslub, misol) → storyboard yozish → `validate_storyboard` (tez; aniq xatolar yoki hisoblangan vaqt jadvali) → `preview_storyboard` (bir necha kichik kadr **rasm** sifatida qaytadi; Claude ularni ko'rib tuzatadi) → `start_video_render` (post uchun; ish raqami darhol qaytadi, `dry_run` bilan avval taxmin) → `get_video_job` (holat/progress, tayyor bo'lganda MP4/GIF havolasi) → havolani ishlating (biriktirish yoki tarqatish).
+**Ish tartibi.** `get_storyboard_guide` (sxema, chegaralar, sahna turlari, 6 ta intro/closing varianti, 4 ta uslub, misol) → storyboard yozish → `validate_storyboard` (tez; aniq xatolar yoki hisoblangan vaqt jadvali; storyboard faqat shu yerda bir marta tekshiriladi) → `preview_storyboard` (≤ 40 s kutadi; kadrlar tayyor bo'lsa **rasm** sifatida qaytadi, bo'lmasa **"still rendering"** va `job_id` — shunda `get_video_job` ni 10–20 s oralig'ida chaqiring, kadrlar rasm bo'lib keladi; hosted runner ishga tushishi ~1 daqiqa oladi) → kadrlarni ko'rib storyboard'ni tuzatish → `start_video_render` (post uchun; ish raqami darhol qaytadi, `dry_run` bilan avval taxmin) → `get_video_job` (holat/progress, tayyor bo'lganda MP4/GIF havolasi) → havolani ishlating (biriktirish yoki tarqatish).
 
 | Vosita | Ruxsat | Vazifa |
 |---|---|---|
 | `get_storyboard_guide` | `blog:read` | Sxema (bo'limlar: overview / scene / schema), chegaralar, misol |
 | `validate_storyboard` | `blog:read` | Render qilmasdan tekshiradi; to'g'ri bo'lsa vaqt jadvali va taxmin |
-| `get_video_job`, `list_post_videos`, `get_video_status` | `blog:read` | Ish holati va natija havolalari; post videolari; xizmat holati |
-| `preview_storyboard` | `video:render` | Kadrlarni tasvir sifatida qaytaradi; band bo'lsa kutmaydi ("busy") |
+| `get_video_job`, `list_post_videos`, `get_video_status` | `blog:read` | Ish holati va natija havolalari (tayyor ko'rik kadrlari rasm bo'lib, `image_offset` bilan sahifalanadi); post videolari; xizmat holati: backend, token/sir/repozitoriy sozlanganmi (qiymatsiz), oxirgi muvaffaqiyatli run |
+| `preview_storyboard` | `video:render` | Kadrlarni tasvir sifatida qaytaradi; ko'pi bilan `VIDEO_PREVIEW_WAIT_SECONDS` (40 s) kutadi, tayyor bo'lmasa ish raqami + bosqich + `get_video_job` ko'rsatmasi |
 | `start_video_render` | `video:render` | MP4 yoki bitta sahnaning GIF'i; `dry_run`, `idempotency_key` |
 | `cancel_video_job`, `delete_video_job` | `video:render` | Bekor qilish; fayllari bilan o'chirish (post ishlatayotgan video o'chirilmaydi) |
 
 **Ruxsat.** `video:render` — "Yozish" guruhidagi yangi ruxsat ("Video yaratish"); faqat `VIDEO_ENABLED` **va** `MCP_WRITE_TOOLS_ENABLED` yoqilganda beriladi. Mavjud ulanish uni o'zi olmaydi: konnektorni qayta ulab, rozilik sahifasida belgilash kerak.
 
-**Chegaralar.** Video ≤ 60 s, ≤ 16 sahna, ovoz yo'q, faqat 1920×1080 landshaft; GIF — bitta qisqa sahna yoki oyna, ≤ 15 s, 800 px. Storyboard ≤ 256 KiB. Server: mashinada bir vaqtda 1 ta render, post uchun 1 ta faol render, navbat ≤ `VIDEO_MAX_QUEUE`, kunlik chegaralar (render/ko'rik), bo'sh xotira/disk yetmasa rad (har bir rad sababi va yechimi bilan). Ko'rik 240 soniyalik vosita chegarasidan ancha oldin javob beradi (≤ 150 s) va javobga ~90 000 belgigacha rasm sig'adi (qolgan kadrlar `get_video_job` `image_offset` bilan). Natijalar ko'rik uchun 6 soat saqlanadi; har bir postda oxirgi 3 ta render qoladi (postda ishlatilgani hech qachon o'chirilmaydi).
+**Chegaralar.** Video ≤ 60 s, ≤ 16 sahna, ovoz yo'q, faqat 1920×1080 landshaft; GIF — bitta qisqa sahna yoki oyna, ≤ 15 s, 800 px. Storyboard ≤ 256 KiB. Server: bir vaqtda 1 ta render (`VIDEO_MAX_RUNNING`), post uchun 1 ta faol render (bazaning o'zi kafolatlaydi), navbat ≤ `VIDEO_MAX_QUEUE`, kunlik chegaralar (render/ko'rik; ishlarni o'chirish hisobni qaytarmaydi), runner sozlanmagan bo'lsa yoki disk yetmasa rad (har bir rad sababi va yechimi bilan). Har bir vosita chaqiruvi proksining 60 soniyalik chegarasidan ancha oldin javob beradi; javob hajmi chegarasi (~150 000 belgi) matn + rasm uchun birgalikda hisoblanadi: rasmlarga `limit − matn − zaxira` ajratiladi, qolgan kadrlar `get_video_job` `image_offset` bilan; `include_storyboard` 24 000 belgigacha qaytadi. Natijalar ko'rik uchun 6 soat saqlanadi; har bir postda oxirgi 3 ta render qoladi (postda ishlatilgani hech qachon o'chirilmaydi).
 
-**Tasdiq bo'yicha tavsiya.** `preview_storyboard` va `start_video_render` server resursini sarflaydi, lekin hech narsani chop etmaydi — Claude'ga "tasdiq so'ramasdan" ruxsat berish mumkin; videoni **chop etish/tarqatish** esa alohida qadam (`posts:publish` va h.k.) bo'lib, har safar tasdiq so'rashda qoldiring. Storyboard matni va ish nomlari "ishonchsiz" deb belgilanadi (javobda `untrusted`).
+**Maxfiylik.** Chop etilmagan postning storyboard'i vaqtinchalik GitHub-hosted runner'ga yuboriladi; ommaviy logga yoki artifact'ga hech narsa chiqmaydi ([docs/video.md](video.md)).
+
+**Tasdiq bo'yicha tavsiya.** `preview_storyboard` va `start_video_render` render daqiqalari va kvotani sarflaydi, lekin hech narsani chop etmaydi — Claude'ga "tasdiq so'ramasdan" ruxsat berish mumkin; videoni **chop etish/tarqatish** esa alohida qadam (`posts:publish` va h.k.) bo'lib, har safar tasdiq so'rashda qoldiring. Storyboard matni va ish nomlari "ishonchsiz" deb belgilanadi (javobda `untrusted`).
 
 
 ## English
@@ -508,21 +510,23 @@ Every change is in the **audit log** (`via: mcp`, client, tool, target, changed 
 
 ### 18. Video: short animated explainer (optional, `VIDEO_ENABLED`)
 
-When enabled (`VIDEO_ENABLED=true` with the browser installed on the server - see [docs/video.md](video.md)) Claude can make a **silent video of at most 60 seconds** for a post. **There is no AI on the server:** Claude writes the storyboard (pure JSON data); the server only validates and renders it. Nothing is published or attached to the post by itself.
+When enabled (`VIDEO_ENABLED=true`; rendering runs on a GitHub-hosted runner - setup in [docs/video.md](video.md)) Claude can make a **silent video of at most 60 seconds** for a post. **There is no AI on the server:** Claude writes the storyboard (pure JSON data); the server only validates and renders it. Nothing is published or attached to the post by itself.
 
-**Workflow.** `get_storyboard_guide` (schema, limits, scene types, the six intro/closing variants, four style presets, an example) → write the storyboard → `validate_storyboard` (instant; exact fixes or the computed timeline) → `preview_storyboard` (a few small frames come back as **images**; Claude looks and revises) → `start_video_render` for the post (returns a job id at once; `dry_run` first for an estimate) → `get_video_job` (status/progress, the MP4/GIF URL when ready) → use the URL (attach it or hand it to distribution).
+**Workflow.** `get_storyboard_guide` (schema, limits, scene types, the six intro/closing variants, four style presets, an example) → write the storyboard → `validate_storyboard` (instant; exact fixes or the computed timeline; the storyboard is validated once in the API) → `preview_storyboard` (waits at most 40 s; when the frames are ready they come back as **images**, otherwise it answers **"still rendering"** with a `job_id` - then call `get_video_job` every 10-20 s and the frames arrive as images; a hosted runner needs about a minute to start) → look at the frames and revise → `start_video_render` for the post (returns a job id at once; `dry_run` first for an estimate) → `get_video_job` (status/progress, the MP4/GIF URL when ready) → use the URL (attach it or hand it to distribution).
 
 | Tool | Permission | What it does |
 |---|---|---|
 | `get_storyboard_guide` | `blog:read` | Schema (sections overview / scene / schema), limits, example |
 | `validate_storyboard` | `blog:read` | Checks without rendering; the timeline and an estimate when valid |
-| `get_video_job`, `list_post_videos`, `get_video_status` | `blog:read` | Job status and result URLs; a post's videos; service status |
-| `preview_storyboard` | `video:render` | Returns frames as images; answers "busy" instead of waiting when a job runs |
+| `get_video_job`, `list_post_videos`, `get_video_status` | `blog:read` | Job status and result URLs (a finished preview's frames are attached as images, paged by `image_offset`); a post's videos; service status: backend, whether token/secret/repository are configured (never their values), time of the last successful run |
+| `preview_storyboard` | `video:render` | Returns frames as images; waits at most `VIDEO_PREVIEW_WAIT_SECONDS` (40 s), otherwise returns the job id, the stage and the `get_video_job` instruction |
 | `start_video_render` | `video:render` | MP4, or a GIF of one short scene; `dry_run`, `idempotency_key` |
 | `cancel_video_job`, `delete_video_job` | `video:render` | Cancel; delete with the files (a video a post links to is never deleted) |
 
 **Permission.** `video:render` is a new permission in the "Write" group ("Video yaratish"); it is grantable only when `VIDEO_ENABLED` **and** `MCP_WRITE_TOOLS_ENABLED` are on. An existing connection never gains it silently: reconnect the connector and tick it on the consent page.
 
-**Limits.** Video ≤ 60 s, ≤ 16 scenes, no audio, 1920x1080 landscape only; GIF is one short scene or window, ≤ 15 s, 800 px wide. Storyboard ≤ 256 KiB. Server side: one render at a time on the machine, one active render per post, queue ≤ `VIDEO_MAX_QUEUE`, daily caps (renders/previews), refusal when free memory or disk is low - each refusal names the reason and the fix. A preview answers well inside the 240 s tool limit (≤ 150 s) and up to ~90,000 characters of images fit one answer (more frames via `get_video_job` `image_offset`). Previews are kept 6 hours; each post keeps its last 3 renders (a video a post uses is never removed).
+**Limits.** Video ≤ 60 s, ≤ 16 scenes, no audio, 1920x1080 landscape only; GIF is one short scene or window, ≤ 15 s, 800 px wide. Storyboard ≤ 256 KiB. Server side: one render at a time (`VIDEO_MAX_RUNNING`), one active render per post (guaranteed by the database), queue ≤ `VIDEO_MAX_QUEUE`, daily caps (renders/previews; deleting jobs does not give them back), refusal when the runner is not configured or the disk is low - each refusal names the reason and the fix. Every tool call answers well inside the proxy's 60 s limit; the connector's result limit (~150,000 characters) counts text and images together: images get `limit - text - margin`, more frames come via `get_video_job` `image_offset`, and `include_storyboard` echoes at most 24,000 characters. Previews are kept 6 hours; each post keeps its last 3 renders (a video a post uses is never removed).
 
-**Approval guidance.** `preview_storyboard` and `start_video_render` spend server resources but publish nothing, so "don't ask" is reasonable; **publishing or distributing** the video is a separate step (`posts:publish` and so on) - keep asking every time. Storyboard text and job titles are labelled untrusted (`untrusted` in the result).
+**Privacy.** The storyboard of an unpublished post is sent to an ephemeral GitHub-hosted runner; nothing goes to public logs or artifacts ([docs/video.md](video.md)).
+
+**Approval guidance.** `preview_storyboard` and `start_video_render` spend render minutes and quota but publish nothing, so "don't ask" is reasonable; **publishing or distributing** the video is a separate step (`posts:publish` and so on) - keep asking every time. Storyboard text and job titles are labelled untrusted (`untrusted` in the result).
