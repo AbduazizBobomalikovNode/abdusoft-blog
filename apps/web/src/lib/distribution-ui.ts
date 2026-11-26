@@ -1,4 +1,5 @@
 import {
+  DISTRIBUTION_STATUS_LABELS,
   socialCounterState,
   type ChannelCheck,
   type CounterState,
@@ -14,6 +15,14 @@ import {
  * "Tarqatish" (LinkedIn, X, Threads, Instagram, GitHub README) UI mantig'i: holat ranglari, qaysi tugma qachon ruxsat etiladi,
  * jonli uzunlik hisoblagichi, token muddati matni, vaqt kiritish. Sof funksiyalar — testlanadi.
  */
+
+/**
+ * Jadvaldan faqat O'Z kalit bo'yicha qiymat oladi (`constructor`, `__proto__`, `toString` kabi prototip kalitlari `fallback` beradi).
+ * Kalit tashqaridan (URL, server javobi) kelishi mumkin bo'lgan har bir qidiruv shu orqali o'tadi.
+ */
+export function own<V, F = V>(map: Readonly<Record<string, V>>, key: string | null | undefined, fallback: F): V | F {
+  return typeof key === "string" && Object.hasOwn(map, key) ? (map[key] as V) : fallback;
+}
 
 export type Tone = "neutral" | "info" | "warn" | "success" | "danger";
 
@@ -34,6 +43,10 @@ export const TONE_CLASS: Record<Tone, string> = {
   success: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   danger: "bg-destructive/10 text-destructive",
 };
+
+export function statusPill(status: DistributionStatus): { className: string; label: string } {
+  return { className: TONE_CLASS[own(STATUS_TONE, status, "neutral")], label: own(DISTRIBUTION_STATUS_LABELS, status, status) };
+}
 
 export const ERROR_KIND_TEXT: Record<DistributionErrorKindDto, string> = {
   auth_expired: "Token yaroqsiz yoki muddati tugagan — akkauntni qayta ulang",
@@ -184,12 +197,12 @@ const PROVIDER_NAMES: Record<string, string> = { linkedin: "LinkedIn", x: "X", t
 export function callbackToast(params: { get(name: string): string | null }): { kind: "success" | "error"; text: string } | null {
   const dist = params.get("dist");
   if (dist === "connected") {
-    const name = PROVIDER_NAMES[params.get("provider") ?? ""];
+    const name = own(PROVIDER_NAMES, params.get("provider"), "");
     return { kind: "success", text: name ? `${name} ulandi` : "Akkaunt ulandi" };
   }
   if (dist === "error") {
     const reason = params.get("reason") ?? "";
-    return { kind: "error", text: Object.hasOwn(CALLBACK_REASON_TEXT, reason) ? CALLBACK_REASON_TEXT[reason]! : CALLBACK_REASON_FALLBACK };
+    return { kind: "error", text: own(CALLBACK_REASON_TEXT, reason, CALLBACK_REASON_FALLBACK) };
   }
   return null;
 }
@@ -201,5 +214,45 @@ export const LOGIN_NOTICE_TEXT: Record<string, string> = {
 
 export function loginNotice(search: string): string | null {
   const code = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search).get("notice") ?? "";
-  return Object.hasOwn(LOGIN_NOTICE_TEXT, code) ? LOGIN_NOTICE_TEXT[code]! : null;
+  return own(LOGIN_NOTICE_TEXT, code, null);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Savatdagi post: avval yuborilganlar va kutayotganlar ko'rinadi (faqat o'qish); yangi yuborish/rejalashtirish yo'q.
+// ---------------------------------------------------------------------------------------------
+
+export interface TrashedActions {
+  /** Rejalashtirilgan yuborishni bekor qilish (savatdagi post baribir yuborilmaydi — qator "xato" bilan tugamasin). */
+  cancel: boolean;
+  /** "Tekshirish kerak"ni hal qilish: «yuborilgan» deb belgilash yoki «platformada yo'q». Qayta urinish yo'q (post savatda). */
+  resolve: boolean;
+  remove: boolean;
+}
+
+export function trashedItemActions(item: DistributionItemDto, caps: Pick<DistributionProviderCapabilitiesDto, "delete"> | null): TrashedActions {
+  return { cancel: item.status === "scheduled", resolve: item.status === "needs_checking", remove: itemActions(item, false, caps).remove };
+}
+
+/** Savatdagi post dialogida ko'rsatiladigan qatorlar: faol, yuborilgan va olib tashlanganlar (oddiy bekor qilinganlar yashiriladi). */
+export function trashedVisibleItems(items: DistributionItemDto[]): DistributionItemDto[] {
+  return items.filter((d) => d.status !== "cancelled" || Boolean(d.removedAt));
+}
+
+/** Tarmoq nomi (tablardagi kabi: qavs ichidagi izoh olib tashlanadi). */
+export function channelShortName(channels: { id: string; name: string }[], provider: string): string {
+  const ch = channels.find((c) => c.id === provider);
+  return (ch?.name ?? provider).replace(/ \(.*\)/, "");
+}
+
+/**
+ * Postni BUTUNLAY o'chirishdan oldingi ogohlantirish: platformaga yuborilgan (va olib tashlanmagan) postlar bo'lsa, o'chirgandan
+ * keyin ularni panel orqali olib tashlab bo'lmaydi. Yuborilgani yo'q bo'lsa `null`.
+ */
+export function purgeDistributionWarning(items: DistributionItemDto[], channels: { id: string; name: string }[]): string | null {
+  const providers = [...new Set(items.filter((d) => d.status === "sent" && !d.removedAt).map((d) => d.provider))];
+  if (providers.length === 0) return null;
+  const names = providers.map((p) => channelShortName(channels, p)).join(", ");
+  return `Diqqat: bu post quyidagi tarmoqlarga yuborilgan: ${names}. Butunlay o'chirilgandan keyin bu postlarni panel orqali tarmoqlardan olib tashlab bo'lmaydi (faqat platformaning o'zida qo'lda o'chirish mumkin). Kerak bo'lsa, avval «Tarqatish» orqali olib tashlang.`;
+}
+
+export const PURGE_CHECK_FAILED_WARNING = "Bu postning tarmoqlarga yuborilgan-yuborilmaganini tekshirib bo'lmadi. Yuborilgan bo'lsa, butunlay o'chirilgandan keyin uni panel orqali tarmoqdan olib tashlab bo'lmaydi.";

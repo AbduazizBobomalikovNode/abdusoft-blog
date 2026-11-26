@@ -225,7 +225,16 @@ async function requeue(actor: Actor, row: DistributionRow, action: string, summa
   const now = distNow();
   const [updated] = await db
     .update(distributions)
-    .set({ status: "scheduled", scheduledAt: now, nextAttemptAt: null, attempts: 0, updatedAt: now })
+    .set({
+      status: "scheduled",
+      // Egasi boshlagan qayta urinish: yuboriladigan matn aynan hozir ko'rsatilgan (saqlangan tahrir bilan) matn. Avtomatik qayta urinish
+      // (runner) bu yerdan o'tmaydi va avval muzlatilgan matnni saqlaydi. GitHub bloki har safar qayta yig'iladi.
+      renderedText: row.provider === "github" ? null : plan.text,
+      scheduledAt: now,
+      nextAttemptAt: null,
+      attempts: 0,
+      updatedAt: now,
+    })
     .where(and(eq(distributions.id, row.id), inArray(distributions.status, ["failed", "needs_checking"])))
     .returning();
   if (!updated) return fail("conflict", "Holat o'zgargan — qayta urinib ko'ring");
