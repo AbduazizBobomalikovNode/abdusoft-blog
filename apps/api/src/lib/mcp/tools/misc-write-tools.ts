@@ -103,9 +103,17 @@ export function sniffImageMime(buf: Buffer): AllowedImageMime | null {
   if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
   if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
   if (buf.length >= 6 && (buf.subarray(0, 6).toString("latin1") === "GIF87a" || buf.subarray(0, 6).toString("latin1") === "GIF89a")) return "image/gif";
-  if (buf.length >= 12 && buf.subarray(0, 4).toString("latin1") === "RIFF" && buf.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  if (buf.length >= 12 && buf.subarray(0, 4).toString("latin1") === "RIFF" && buf.subarray(8, 12).toString("latin1") === "WEBP" && buf.length >= 16 && ["VP8 ", "VP8L", "VP8X"].includes(buf.subarray(12, 16).toString("latin1"))) return "image/webp";
   return null;
 }
+
+/** Dekoder aniqlagan format (`sharp` metadata) — qat'iy magic-number bilan aniqlangan tur bilan BIR XIL bo'lishi shart (SVG/PDF/va h.k. o'tmaydi). */
+const DECODER_FORMAT_MIME: Record<string, AllowedImageMime> = { png: "image/png", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+export function decoderFormatMatches(format: string | undefined, sniffed: AllowedImageMime): boolean {
+  return format !== undefined && DECODER_FORMAT_MIME[format] === sniffed;
+}
+
+class FormatMismatch extends Error {}
 
 const UPLOAD_CONCURRENCY = 2;
 const uploadGate = new Gate(UPLOAD_CONCURRENCY, 6);
@@ -153,7 +161,9 @@ export const uploadImageTool = defineTool({
         try {
           const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
           if (!meta.width || !meta.height) throw new Error("no dimensions");
-        } catch {
+          if (!decoderFormatMatches(meta.format, mime)) throw new FormatMismatch();
+        } catch (error) {
+          if (error instanceof FormatMismatch) throw new ToolError("invalid_input", "The file content is not a PNG, JPEG, GIF or WebP image (the image decoder recognised it as something else).", "Only these four formats are accepted (SVG and other files are refused).");
           throw new ToolError("invalid_input", "The file looks like an image but cannot be decoded (corrupt, or more than 40 megapixels).");
         }
         return unwrap(await createMediaFromBuffer(ctx.actor, { buffer, mime, alt: args.alt }));

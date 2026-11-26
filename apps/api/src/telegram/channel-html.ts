@@ -29,10 +29,16 @@ export function validateRestrictedDoc(doc: unknown): string | null {
   const root = doc as TiptapNode;
   if (root.type !== "doc") return "Kontent Tiptap hujjati (type: doc) bo'lishi kerak";
   let error: string | null = null;
-  const walk = (node: TiptapNode): void => {
+  // Chegaralar: kanal matni (Telegram: 1024/4096 belgi) uchun juda ko'p; ammo chuqur/juda katta hujjat rekursiyani va xotirani yemasin.
+  let count = 0;
+  const walk = (node: TiptapNode, depth = 0): void => {
     if (error) return;
-    if (!node.type || !ALLOWED_NODES.has(node.type)) {
-      error = `Qo'llab-quvvatlanmaydigan tugun: ${String(node.type)}`;
+    if (depth > 40 || ++count > 20_000) {
+      error = "Kanal versiyasi hujjati juda katta yoki juda chuqur";
+      return;
+    }
+    if (!node || typeof node !== "object" || !node.type || !ALLOWED_NODES.has(node.type)) {
+      error = `Qo'llab-quvvatlanmaydigan tugun: ${String((node as TiptapNode | null)?.type)}`;
       return;
     }
     for (const mark of node.marks ?? []) {
@@ -41,7 +47,7 @@ export function validateRestrictedDoc(doc: unknown): string | null {
         return;
       }
     }
-    for (const child of node.content ?? []) walk(child);
+    for (const child of node.content ?? []) walk(child, depth + 1);
   };
   walk(root);
   return error;

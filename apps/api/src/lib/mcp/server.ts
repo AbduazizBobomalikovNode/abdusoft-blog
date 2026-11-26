@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
 import { config } from "../../config.js";
 import type { McpPrincipal } from "./principal.js";
 import { runTool } from "./tools/run.js";
@@ -54,8 +55,50 @@ function isUploadCall(text: string): boolean {
   }
 }
 
+/** MCP spec (2026-07-28) `UnsupportedProtocolVersionError`. */
+export const UNSUPPORTED_PROTOCOL_VERSION_CODE = -32022;
+
+/**
+ * `MCP-Protocol-Version` sarlavhasi bu server (SDK) biladigan versiyalar ro'yxatida bo'lmasa — 400 + `UnsupportedProtocolVersionError`
+ * (`-32022`, `data.supported`/`data.requested`). SDK'ning o'z javobi (`-32000`, `supported`siz) zamonaviy mijoz uchun "tanilgan xato"
+ * emas: mijoz tarkibini tushunmay, ro'yxatdan mos versiyani tanlay olmaydi. `initialize` istisno (versiya kelishuvi `initialize`
+ * javobida bo'ladi; SDK ham sarlavhani unda tekshirmaydi).
+ */
+export function unsupportedVersionResponse(headerValue: string | null, bodyText: string): Response | null {
+  if (headerValue === null || (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(headerValue)) return null;
+  let id: string | number | null = null;
+  try {
+    const parsed = JSON.parse(bodyText) as unknown;
+    const first = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (first && typeof first === "object") {
+      const m = first as { method?: unknown; id?: unknown };
+      if (m.method === "initialize") return null;
+      if (typeof m.id === "string" || typeof m.id === "number") id = m.id;
+    }
+  } catch {
+    // tahlil qilinmasa — SDK o'zining "Parse error" javobini beradi
+    return null;
+  }
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      error: { code: UNSUPPORTED_PROTOCOL_VERSION_CODE, message: "Unsupported protocol version", data: { supported: [...SUPPORTED_PROTOCOL_VERSIONS], requested: headerValue.slice(0, 40) } },
+    }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  );
+}
+
 export async function handleMcpRequest(original: Request, principal: McpPrincipal): Promise<Response> {
   let req = original;
+  {
+    const version = original.headers.get("mcp-protocol-version");
+    if (version !== null && !(SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(version)) {
+      const text = await original.clone().text();
+      const refused = unsupportedVersionResponse(version, text);
+      if (refused) return refused;
+    }
+  }
   const declared = Number(original.headers.get("content-length") ?? "0");
   if (declared > STANDARD_BODY_LIMIT || !original.headers.has("content-length")) {
     const text = await original.text();

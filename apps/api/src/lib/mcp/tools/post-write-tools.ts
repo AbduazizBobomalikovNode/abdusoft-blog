@@ -6,6 +6,7 @@ import {
   markdownToDoc,
   type ChecklistItem,
   type ContentNode,
+  isSafeConnectorUrl,
 } from "@blog/shared";
 import { config } from "../../../config.js";
 import { validateConnectorDocument } from "../../content/validate.js";
@@ -95,7 +96,7 @@ async function resolveCover(args: { cover_media_id?: string | null | undefined; 
 }
 
 /** Markdown -> hujjat (o'lcham, `# ` sarlavha va render tekshiruvi bilan). */
-async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
+export async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
   if (markdown.length > CONTENT_MAX_CHARS) {
     throw new ToolError("invalid_input", `content_markdown is ${markdown.length} characters; the limit is ${CONTENT_MAX_CHARS}.`, "Shorten the text or split it into several posts.");
   }
@@ -114,10 +115,63 @@ async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
       "Put the title in the 'title' field and start the Markdown at a '## ' heading or paragraph. Use ## and ### for headings inside the post.",
     );
   }
+  assertSafeUrls(doc);
+  await assertOnlyOwnImages(doc);
   return doc;
 }
 
-async function validatedDocument(doc: unknown): Promise<ContentNode> {
+/** Markdown'dan chiqqan havola/rasm manzillari ham tuzilmaviy hujjat bilan BIR XIL URL qoidasidan o'tadi (`//host`, `/\\host`, boshqaruv belgilari rad). */
+function assertSafeUrls(doc: ContentNode): void {
+  const stack: ContentNode[] = [doc];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    const attrs = (node as { attrs?: Record<string, unknown> }).attrs;
+    if (node.type === "image" && typeof attrs?.src === "string" && !isSafeConnectorUrl(attrs.src)) {
+      throw new ToolError("invalid_input", "An image URL in content_markdown is not allowed (protocol-relative '//host', '/\\host', or it contains spaces or control characters).", "Use an image of this blog (upload_image) or an absolute https:// URL.");
+    }
+    for (const mark of (node as { marks?: { type: string; attrs?: Record<string, unknown> }[] }).marks ?? []) {
+      const href = mark.attrs?.href;
+      if (mark.type === "link" && typeof href === "string" && !isSafeConnectorUrl(href)) {
+        throw new ToolError("invalid_input", "A link URL in content_markdown is not allowed (protocol-relative '//host', '/\\host', or it contains spaces or control characters).", "Use https://..., mailto:..., #anchor or a site path starting with a single '/'.");
+      }
+    }
+    for (const child of node.content ?? []) stack.push(child);
+  }
+}
+
+/**
+ * Bitta qoida ikkala yo'l uchun (tuzilmaviy hujjat `validateConnectorDocument`da, Markdown — tahlildan KEYIN shu yerda):
+ * hujjatdagi rasmlar faqat blogning o'z media manzillari bo'lishi mumkin. Aks holda server tashqi manzilni Telegram uchun yuklab
+ * olishga majbur bo'lardi (SSRF yuzasi) va tashqi rasm sayt sahifasida kuzatuvchi sifatida ishlardi.
+ */
+async function assertOnlyOwnImages(doc: ContentNode): Promise<void> {
+  const isOwn = await ownMediaMatcher();
+  const stack: ContentNode[] = [doc];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (node.type === "image") {
+      const src = (node.attrs as { src?: unknown } | undefined)?.src;
+      if (typeof src !== "string" || !isOwn(src)) {
+        // Faqat host ko'rsatiladi: manzil so'rovi imzo/token tashishi mumkin.
+        let host = "";
+        try {
+          host = typeof src === "string" ? new URL(src).host.slice(0, 80) : "";
+        } catch {
+          host = "";
+        }
+        const shown = host ? ` (host: ${host})` : "";
+        throw new ToolError(
+          "invalid_input",
+          `content_markdown contains an image that is not one of this blog's own media${shown}. Nothing was written.`,
+          "Upload the image first with upload_image (it needs the media:upload permission) and use the returned url, as ![alt](url). External image addresses are not accepted.",
+        );
+      }
+    }
+    for (const child of node.content ?? []) stack.push(child);
+  }
+}
+
+export async function validatedDocument(doc: unknown): Promise<ContentNode> {
   const text = JSON.stringify(doc) ?? "";
   if (text.length > CONTENT_MAX_CHARS * 5) {
     throw new ToolError("invalid_input", "The structured document is too large.", `Keep it under ${CONTENT_MAX_CHARS * 5} characters of JSON.`);
@@ -469,7 +523,7 @@ export const publishPostTool = defineTool({
   description:
     U + "Publish a post on the public site NOW (status becomes published; it appears on the home page and in feeds immediately). " +
     "It refuses when the pre-publish checks BLOCK (default title or empty body) and returns the warnings (missing cover, tags, alt text, slug) with the result. " +
-    "Optional send_to_channel=true also sends the post's marked Telegram version to the channel after publishing; this needs the channels:send permission and a version marked in the web panel. " +
+    "The Telegraph mirror page (if enabled for the post) is created or refreshed on publishing with or without the channels:send permission. Optional send_to_channel=true also sends the post's marked Telegram version to the channel after publishing; this needs the channels:send permission and a version marked in the web panel. " +
     "dry_run=true reports exactly what would happen (checks, channel preflight) and changes nothing. Posts in review must be approved with approve_post instead. " +
     "expected_updated_at is REQUIRED. Already published is reported as such, nothing is repeated. Reversible with unpublish_post.",
   scope: "posts:publish",

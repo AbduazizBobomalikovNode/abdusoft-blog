@@ -81,3 +81,15 @@ export async function replyToComment(
   });
   return ok({ id: created.id, postId: created.postId });
 }
+
+/**
+ * Admin javobini Telegram guruhiga qayta yuborish (`POST /admin/comments/:id/send-to-telegram` va MCP `resend_reply_to_telegram`):
+ * amal + jurnal. `null` — topilmadi; `TelegramReplyError` o'zgarishsiz uzatiladi.
+ */
+export async function sendReplyToTelegram(actor: Actor, id: string): Promise<{ id: string; postId: string } | null> {
+  const { sendAdminReplyToTelegram } = await import("./comments-admin.js");
+  const sent = await sendAdminReplyToTelegram(id);
+  if (!sent) return null;
+  await recordAuditSafe(actor, { action: "comment.send_to_telegram", entityType: "comment", entityId: sent.id, summary: "Admin javobi Telegramga yuborildi" });
+  return sent;
+}

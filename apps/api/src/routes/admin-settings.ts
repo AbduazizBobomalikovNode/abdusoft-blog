@@ -2,14 +2,13 @@ import { Hono } from "hono";
 import { SettingsPatchSchema, SettingsSectionSchema, type SettingsTestResult } from "@blog/shared";
 import { bootedGithubConfig } from "../lib/auth.js";
 import { requireAdmin } from "../lib/require-admin.js";
-import { recordAuditSafe } from "../lib/audit.js";
+import { saveSettingsAudited } from "../lib/site-admin.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
 import {
   SettingsValidationError,
   generateRandomSecret,
   getSettings,
   getSettingsForAdmin,
-  saveSettings,
 } from "../lib/settings.js";
 import { testTelegraphConnection } from "../telegram/telegraph.js";
 import { bot } from "../telegram/client.js";
@@ -119,24 +118,13 @@ export const adminSettingsRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
 
     try {
-      await saveSettings(parsed.data);
+      await saveSettingsAudited(actorFromAdminUser(c.get("adminUser")), parsed.data);
     } catch (error) {
       if (error instanceof SettingsValidationError) {
         return c.json({ error: "Sozlamalarda xatolik topildi", fields: error.fields }, 400);
       }
       throw error;
     }
-
-    // Faqat BO'LIM nomlari yoziladi — qiymatlar (token, kalit, parol) jurnalga hech qachon tushmaydi.
-    const sections = Object.entries(parsed.data)
-      .filter(([, value]) => value !== undefined)
-      .map(([name]) => name);
-    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-      action: "settings.update",
-      entityType: "settings",
-      summary: `Sozlamalar yangilandi: ${sections.join(", ") || "—"}`,
-      meta: { sections },
-    });
 
     const admin = await getSettingsForAdmin();
     const current = await getSettings();

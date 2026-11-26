@@ -42,7 +42,9 @@ for (const [addr, prefix] of [
 for (const [addr, prefix] of [
   ["::", 128],
   ["::1", 128],
+  ["::", 96], // IPv4-compatible (eskirgan): `::7f00:1` kabi manzillar ichki IPv4'ni yashiradi
   ["64:ff9b::", 96], // NAT64
+  ["64:ff9b:1::", 48], // NAT64 local-use (RFC 8215)
   ["100::", 64],
   ["2001::", 32], // Teredo
   ["2001:db8::", 32],
@@ -64,6 +66,32 @@ export function isBlockedAddress(address: string): boolean {
     if (/^\[(?:0:0:0:0:0:ffff|::ffff):/i.test(canonical)) return true;
   }
   return blocked.check(address, family === 4 ? "ipv4" : "ipv6");
+}
+
+/**
+ * Baytlarning o'ziga qarab rasterli rasm formatini aniqlaydi (e'lon qilingan turga ishonilmaydi). Konveyer (sharp -> JPEG) o'qiy
+ * oladigan rasterli formatlar: PNG, JPEG, GIF, WebP, AVIF, TIFF. SVG/HTML/XML va boshqa hamma narsa — `null`.
+ */
+export function detectRasterFormat(buf: Buffer): "png" | "jpeg" | "gif" | "webp" | "avif" | "tiff" | null {
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpeg";
+  if (buf.length >= 6) {
+    const head = buf.subarray(0, 6).toString("latin1");
+    if (head === "GIF87a" || head === "GIF89a") return "gif";
+  }
+  if (buf.length >= 12 && buf.subarray(0, 4).toString("latin1") === "RIFF" && buf.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+  if (buf.length >= 12 && buf.subarray(4, 8).toString("latin1") === "ftyp") {
+    const brand = buf.subarray(8, 12).toString("latin1");
+    if (brand === "avif" || brand === "avis") return "avif";
+  }
+  if (buf.length >= 4 && ((buf[0] === 0x49 && buf[1] === 0x49 && buf[2] === 0x2a && buf[3] === 0x00) || (buf[0] === 0x4d && buf[1] === 0x4d && buf[2] === 0x00 && buf[3] === 0x2a))) return "tiff";
+  return null;
+}
+
+/** Matn/belgilash (SVG, HTML, XML) ko'rinishidagi boshlanish — e'lon qilingan tur qanday bo'lmasin, bunday "rasm" rad etiladi. */
+function looksLikeMarkup(buf: Buffer): boolean {
+  const head = buf.subarray(0, 512).toString("utf8").replace(/^\uFEFF/, "").trimStart().toLowerCase();
+  return head.startsWith("<");
 }
 
 export interface SafeFetchDeps {
@@ -151,7 +179,9 @@ export function createSafeFetcher(deps: SafeFetchDeps = {}) {
             return;
           }
           const type = String(res.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
-          if (opts.imageOnly && (!type.startsWith("image/") || type === "image/svg+xml")) {
+          // Turi yo'q yoki umumiy ikkilik (`application/octet-stream`) bo'lsa — qaror yuklangandan keyin BAYTLAR bo'yicha (pastda).
+          const typeUndecided = type === "" || type === "application/octet-stream" || type === "binary/octet-stream";
+          if (opts.imageOnly && !typeUndecided && (!type.startsWith("image/") || type === "image/svg+xml")) {
             res.resume();
             finish(() => reject(new SafeFetchError("Manzil rasm emas (yoki ruxsat etilmagan rasm turi)", "not_image")));
             return;
@@ -173,7 +203,19 @@ export function createSafeFetcher(deps: SafeFetchDeps = {}) {
             }
             chunks.push(chunk);
           });
-          res.on("end", () => finish(() => resolve({ redirect: null, buffer: Buffer.concat(chunks), headers: res.headers })));
+          res.on("end", () =>
+            finish(() => {
+              const buffer = Buffer.concat(chunks);
+              if (opts.imageOnly) {
+                // Haqiqiy baytlar: SVG/HTML hech qachon; turi aniqlanmagan javob esa faqat taniladigan rasterli format bo'lsa.
+                if (looksLikeMarkup(buffer) || (typeUndecided && detectRasterFormat(buffer) === null)) {
+                  reject(new SafeFetchError("Manzil rasm emas (yoki ruxsat etilmagan rasm turi)", "not_image"));
+                  return;
+                }
+              }
+              resolve({ redirect: null, buffer, headers: res.headers });
+            }),
+          );
           res.on("error", () => finish(() => reject(new SafeFetchError("Rasmga ulanib bo'lmadi", "unreachable"))));
           res.on("close", () => finish(() => reject(new SafeFetchError("Rasmga ulanib bo'lmadi", "unreachable"))));
         },

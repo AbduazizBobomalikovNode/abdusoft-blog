@@ -405,6 +405,10 @@ Avtomatik deploy sozlanmagan bo'lsa, hech narsa avtomatik deploy qilinmaydi. Aso
 | `pnpm install` lockfile xatosi beryapti | Loyiha **faqat pnpm** bilan ishlaydi — `npm install`/`yarn install` ishlatilmasin, `pnpm-lock.yaml` shikastlanadi |
 | Prod'da Turnstile'siz izohlar o'tib ketyapti | Default — fail-open (kalit bo'sh bo'lsa tekshiruv o'tkazib yuboriladi); qat'iy rejim uchun `REQUIRE_TURNSTILE=true` qiling |
 
+#### Yangi admin imkoniyati qo'shsangiz — assistent vositasi ham kerak
+
+Blog to'liq Claude konnektori orqali boshqarilishi kerak. Yangi `/admin/*` marshrut qo'shgan PR **yo** unga mos MCP vositasini (`apps/api/src/lib/mcp/tools`, bir xil xizmat funksiyalari bilan) qo'shib `apps/api/src/lib/mcp/admin-coverage.ts`dagi `ADMIN_ROUTE_TOOLS`ga yozishi, **yo** `ADMIN_ROUTE_EXCLUSIONS`ga sababi bilan istisno qo'shishi shart (sirlar, parol havolalari, konnektorning o'zini boshqarish — istisno). `admin-coverage.test.ts` aks holda CI'da yiqiladi. Batafsil: `docs/claude-connector.md`.
+
 ### 10. Litsenziya va Muallif
 
 **Litsenziya**: barcha huquqlar himoyalangan (All rights reserved). Repo ochiq (public) va kodni GitHub'da ko'rish mumkin, lekin ochiq-manbali litsenziya hali belgilanmagan — shu sabab barcha huquqlar muallifda qoladi.
@@ -797,6 +801,10 @@ Unless automatic deployment is configured, nothing deploys automatically. Primar
 | Hydration warning (server/client mismatch) | Dark/light theme is handled by `next-themes` with `suppressHydrationWarning` already in place — if it appears elsewhere, make sure date/time formatting is identical on server and client |
 | `pnpm install` complains about the lockfile | The project is **pnpm-only** — never run `npm install`/`yarn install`, it corrupts `pnpm-lock.yaml` |
 | Comments go through without Turnstile in production | Default behavior is fail-open (an empty secret skips the check); set `REQUIRE_TURNSTILE=true` for strict enforcement |
+
+#### Adding an admin capability means adding its assistant tool
+
+The blog must be fully manageable through the Claude connector. A pull request that adds an `/admin/*` route must **either** add the matching MCP tool (`apps/api/src/lib/mcp/tools`, built on the same service functions as the route) and list it in `ADMIN_ROUTE_TOOLS` in `apps/api/src/lib/mcp/admin-coverage.ts`, **or** add a justified entry to `ADMIN_ROUTE_EXCLUSIONS` (secrets, password links and the connector's own management are exclusions). `admin-coverage.test.ts` fails CI otherwise. Details: `docs/claude-connector.md`.
 
 ### 10. License and Author
 

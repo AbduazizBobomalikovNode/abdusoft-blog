@@ -41,6 +41,118 @@ const originGuard: MiddlewareHandler = async (c, next) => {
   return next();
 };
 
+/**
+ * `/mcp`dagi HAR BIR 2xx bo'lmagan javob uchun bitta tuzilmaviy log qatori: HTTP holat, JSON-RPC metod va id turi (tahlil qilinsa),
+ * `MCP-Protocol-Version` va `Accept` sarlavhalari, yuborilgan xato kodi/xabari. Tana, token va argumentlar HECH QACHON yozilmaydi.
+ */
+const SAFE_METHOD = /^[A-Za-z0-9_./-]{1,80}$/;
+/** Log uchun tanadan o'qiladigan eng ko'p bayt (metod/id turini olish uchun yetarli; undan kattasi o'qilmaydi). */
+export const MCP_LOG_PEEK_BYTES = 16 * 1024;
+const PEEK_KEY = "mcpLogPeek";
+
+/** Peek uchun eng ko'p kutish (ms): sekin/to'xtab qolgan tana autentifikatsiyani va javobni kechiktirmasin. */
+export const MCP_LOG_PEEK_DEADLINE_MS = 1000;
+
+/**
+ * Klon (tee) oqimidan EN KO'PI bilan `MCP_LOG_PEEK_BYTES` bayt o'qiydi. MUHIM: tee shoxini `cancel()` qilish va KUTISH mumkin emas —
+ * Streams spetsifikatsiyasiga ko'ra bitta shoxni bekor qilish va'dasi IKKALA shox bekor qilingandagina hal bo'ladi, shuning uchun
+ * to'liq o'qilmagan tana (16 KB dan katta) so'rovni abadiy muzlatib qo'yardi. Shu sabab `cancel()` kutilmaydi (fire-and-forget),
+ * o'qish esa qisqa muddat (`deadlineMs`) bilan chegaralanadi; muddat o'tsa — `undefined` ("metod noma'lum"), asl tana esa butun qoladi.
+ */
+async function peekBody(raw: Request, deadlineMs: number): Promise<string | undefined> {
+  const reader = raw.clone().body?.getReader();
+  if (!reader) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = (async () => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total <= MCP_LOG_PEEK_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    return total <= MCP_LOG_PEEK_BYTES ? new TextDecoder().decode(Buffer.concat(chunks)) : undefined;
+  })();
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), deadlineMs);
+  });
+  try {
+    return await Promise.race([read, deadline]);
+  } finally {
+    clearTimeout(timer);
+    // KUTILMAYDI: tee shoxining cancel() va'dasi ikkinchi shox bekor qilinmaguncha hal bo'lmaydi.
+    reader.cancel().catch(() => undefined);
+    read.catch(() => undefined);
+  }
+}
+
+/**
+ * Faqat `Authorization` sarlavhali POST uchun (autentifikatsiyasiz so'rov tanasi umuman o'qilmaydi — `main` bilan bir xil xatti-harakat:
+ * tana kelmay qolgan mijoz ham darhol 401 oladi). Faqat `bodyLimit`dan KEYIN ulanadi: tana hech qachon cheksiz klonlanmaydi/buferlanmaydi.
+ * Natija `mcpRejectLogger`ga uzatiladi.
+ */
+export const mcpLogPeek: MiddlewareHandler = async (c, next) => {
+  try {
+    if (c.req.method === "POST" && c.req.raw.body && c.req.header("authorization")) {
+      const text = await peekBody(c.req.raw, MCP_LOG_PEEK_DEADLINE_MS);
+      if (text !== undefined) c.set(PEEK_KEY, text);
+    }
+  } catch {
+    // log uchun — hech qachon so'rovni buzmasin
+  }
+  return next();
+};
+
+export function mcpRejectLogger(): MiddlewareHandler {
+  return async (c, next) => {
+    await next();
+    const status = c.res.status;
+    if (status >= 200 && status < 300) return;
+    let rpcMethod: string | undefined;
+    let idType: string | undefined;
+    const bodyText = (c.get(PEEK_KEY as never) as string | undefined) ?? null;
+    if (bodyText) {
+      try {
+        const parsed = JSON.parse(bodyText) as unknown;
+        const first = Array.isArray(parsed) ? parsed[0] : parsed;
+        if (first && typeof first === "object") {
+          const m = first as { method?: unknown; id?: unknown };
+          if (typeof m.method === "string" && SAFE_METHOD.test(m.method)) rpcMethod = m.method;
+          idType = m.id === undefined ? "none" : m.id === null ? "null" : typeof m.id;
+        }
+        if (Array.isArray(parsed)) idType = `batch(${parsed.length})`;
+      } catch {
+        rpcMethod = "(unparseable)";
+      }
+    }
+    let errorCode: unknown;
+    let errorMessage: string | undefined;
+    try {
+      const body = (await c.res.clone().json()) as { error?: { code?: unknown; message?: unknown } };
+      errorCode = body.error?.code;
+      // -32700 (Parse error): SDK xabari tananing bo'lagini o'z ichiga olishi mumkin — yozilmaydi.
+      if (typeof body.error?.message === "string") errorMessage = body.error.code === -32700 ? "Parse error" : body.error.message.slice(0, 160);
+    } catch {
+      // javob JSON emas (masalan bo'sh tana)
+    }
+    if (config.NODE_ENV === "test" && !process.env.MCP_LOG_REJECTS_IN_TEST) return;
+    console.warn(
+      JSON.stringify({
+        event: "mcp.rejected",
+        status,
+        httpMethod: c.req.method,
+        rpcMethod,
+        idType,
+        protocolVersion: (c.req.header("mcp-protocol-version") ?? "").slice(0, 40) || null,
+        accept: (c.req.header("accept") ?? "").slice(0, 120) || null,
+        errorCode,
+        errorMessage,
+      }),
+    );
+  };
+}
+
 function jsonRpcError(status: number, code: number, message: string, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }), {
     status,
@@ -105,6 +217,7 @@ export function mountMcp(app: Hono): void {
     return handleAuthRequest(c, new Request(url, c.req.raw));
   });
 
+  app.use(MCP_PATH, mcpRejectLogger());
   app.post(
     MCP_PATH,
     originGuard,
@@ -114,6 +227,7 @@ export function mountMcp(app: Hono): void {
         maxSize: maxBodyBytes(),
         onError: (ctx) => ctx.json({ jsonrpc: "2.0", error: { code: -32600, message: "Request too large" }, id: null }, 413),
       })(c, next),
+    mcpLogPeek,
     (c) => guarded(c.req.raw),
   );
   // Stateless server: GET (SSE oqimi) va DELETE (sessiya tugatish) yo'q.

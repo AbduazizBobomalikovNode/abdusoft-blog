@@ -14,6 +14,8 @@ import { SafeFetchError, safeFetchBytes } from "../lib/net/safe-fetch.js";
  */
 
 const DOWNLOAD_TIMEOUT_MS = 10_000;
+/** Tashqaridan yuklangan rasm uchun piksel chegarasi (dekodlashdan OLDIN tekshiriladi; `upload_image` bilan bir xil). */
+export const EXTERNAL_MAX_PIXELS = 40_000_000;
 const JPEG_QUALITY = 88;
 const CACHE_TTL_MS = 5 * 60_000;
 const CACHE_MAX_ENTRIES = 40;
@@ -142,8 +144,8 @@ async function fetchBytes(url: string, allowRedirect?: (url: URL) => boolean): P
   }
 }
 
-async function convertToJpeg(buffer: Buffer): Promise<{ data: Buffer; width: number; height: number }> {
-  const { data, info } = await sharp(buffer)
+async function convertToJpeg(buffer: Buffer, pixelLimit: number | false): Promise<{ data: Buffer; width: number; height: number }> {
+  const { data, info } = await sharp(buffer, { limitInputPixels: pixelLimit })
     .rotate()
     .resize({
       width: CHANNEL_MEDIA_POLICY.maxSidePx,
@@ -157,13 +159,19 @@ async function convertToJpeg(buffer: Buffer): Promise<{ data: Buffer; width: num
 }
 
 async function prepareUncached(url: string, fetched: { buffer: Buffer }): Promise<PreparedImage> {
+  // Faqat TASHQARIDAN yuklangan rasmga: blogning o'z yuklamalari (allaqachon qayta ishlangan) avvalgidek cheklanmaydi.
+  const pixelLimit: number | false = localKeyFor(url) === null ? EXTERNAL_MAX_PIXELS : false;
   try {
     // EXIF aylantirishi hisobga olinadi: `rotate()` dan keyingi o'lcham "asl" kenglik/balandlik sifatida ko'rsatiladi.
-    const meta = await sharp(fetched.buffer).metadata();
+    // `limitInputPixels` sarlavhadagi o'lchamni dekodlashdan OLDIN tekshiradi (dekompressiya bombasidan himoya).
+    const meta = await sharp(fetched.buffer, { limitInputPixels: pixelLimit }).metadata();
+    if (pixelLimit !== false && (meta.width ?? 0) * (meta.height ?? 0) > pixelLimit) {
+      return { ok: false, url, error: `Rasm juda katta (${Math.round(pixelLimit / 1_000_000)} megapikseldan oshadi)`, kind: "too_large" };
+    }
     const swap = (meta.orientation ?? 1) >= 5;
     const rawW = meta.width ?? 0;
     const rawH = meta.height ?? 0;
-    const converted = await convertToJpeg(fetched.buffer);
+    const converted = await convertToJpeg(fetched.buffer, pixelLimit);
     return {
       ok: true,
       url,
@@ -177,7 +185,10 @@ async function prepareUncached(url: string, fetched: { buffer: Buffer }): Promis
       },
       sent: { bytes: converted.data.byteLength, width: converted.width, height: converted.height, format: "jpeg" },
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && /pixel limit/i.test(error.message)) {
+      return { ok: false, url, error: `Rasm juda katta (${Math.round(EXTERNAL_MAX_PIXELS / 1_000_000)} megapikseldan oshadi)`, kind: "too_large" };
+    }
     return { ok: false, url, error: "Rasmni o'qib bo'lmadi (fayl buzilgan yoki rasm emas)", kind: "decode" };
   }
 }

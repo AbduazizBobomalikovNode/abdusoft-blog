@@ -10,7 +10,7 @@ import {
 } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { postRevisions, postTags, posts, tags } from "../../db/schema.js";
-import { renderPost } from "../content/render.js";
+import { excerptFromText, renderPost } from "../content/render.js";
 import { validatePanelDocument } from "../content/validate.js";
 import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { actorMayTouchChannel } from "./channel-guard.js";
@@ -315,9 +315,15 @@ export async function updatePost(
     if (data.excerpt !== undefined) {
       if (data.excerpt === null) {
         if (renderedExcerpt === null) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const rendered = await renderPost((update.contentJson ?? locked.contentJson) as any);
-          renderedExcerpt = rendered.excerpt;
+          const source = update.contentJson ?? locked.contentJson;
+          // Saqlangan hujjat (kontent o'zgarmagan, masalan faqat sarlavha) HAMMA vaqt ham hozirgi chegaralarga to'g'ri kelmaydi:
+          // himoyasiz qayta render qilinmaydi — oldin tekshiriladi, mos kelmasa avval render qilingan matndan olinadi.
+          if (validatePanelDocument(source).ok) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            renderedExcerpt = (await renderPost(source as any)).excerpt;
+          } else {
+            renderedExcerpt = excerptFromText(locked.contentText ?? "");
+          }
         }
         update.excerpt = renderedExcerpt;
       } else {
