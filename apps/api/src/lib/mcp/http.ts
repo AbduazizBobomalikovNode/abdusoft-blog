@@ -46,18 +46,49 @@ const originGuard: MiddlewareHandler = async (c, next) => {
  * `MCP-Protocol-Version` va `Accept` sarlavhalari, yuborilgan xato kodi/xabari. Tana, token va argumentlar HECH QACHON yozilmaydi.
  */
 const SAFE_METHOD = /^[A-Za-z0-9_./-]{1,80}$/;
+/** Log uchun tanadan o'qiladigan eng ko'p bayt (metod/id turini olish uchun yetarli; undan kattasi o'qilmaydi). */
+export const MCP_LOG_PEEK_BYTES = 16 * 1024;
+const PEEK_KEY = "mcpLogPeek";
+
+/**
+ * Tananing boshidan EN KO'PI bilan `MCP_LOG_PEEK_BYTES` bayt o'qiydi (klon oqimidan, so'ng klon bekor qilinadi — asl oqim
+ * to'liq saqlanadi va uni baribir `bodyLimit` cheklaydi). Faqat `bodyLimit`dan KEYIN ulanadi: shuning uchun autentifikatsiyasiz
+ * so'rovning tanasi hech qachon cheksiz klonlanmaydi/buferlanmaydi. Natija `mcpRejectLogger`ga uzatiladi.
+ */
+export const mcpLogPeek: MiddlewareHandler = async (c, next) => {
+  try {
+    if (c.req.method === "POST" && c.req.raw.body) {
+      const reader = c.req.raw.clone().body?.getReader();
+      if (reader) {
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          while (total <= MCP_LOG_PEEK_BYTES) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            total += value.byteLength;
+          }
+        } finally {
+          await reader.cancel().catch(() => undefined);
+        }
+        if (total <= MCP_LOG_PEEK_BYTES) c.set(PEEK_KEY, new TextDecoder().decode(Buffer.concat(chunks)));
+      }
+    }
+  } catch {
+    // log uchun — hech qachon so'rovni buzmasin
+  }
+  return next();
+};
+
 export function mcpRejectLogger(): MiddlewareHandler {
   return async (c, next) => {
-    // Tana faqat oddiy (<= 1 MB) so'rovlarda, faqat metod/id turini olish uchun o'qiladi (kattalari — yuklash vositasi — o'qilmaydi).
-    let bodyText: string | null = null;
-    if (c.req.method === "POST" && Number(c.req.header("content-length") ?? "0") <= MAX_MCP_BODY) {
-      bodyText = await c.req.raw.clone().text().catch(() => null);
-    }
     await next();
     const status = c.res.status;
     if (status >= 200 && status < 300) return;
     let rpcMethod: string | undefined;
     let idType: string | undefined;
+    const bodyText = (c.get(PEEK_KEY as never) as string | undefined) ?? null;
     if (bodyText) {
       try {
         const parsed = JSON.parse(bodyText) as unknown;
@@ -77,7 +108,8 @@ export function mcpRejectLogger(): MiddlewareHandler {
     try {
       const body = (await c.res.clone().json()) as { error?: { code?: unknown; message?: unknown } };
       errorCode = body.error?.code;
-      if (typeof body.error?.message === "string") errorMessage = body.error.message.slice(0, 160);
+      // -32700 (Parse error): SDK xabari tananing bo'lagini o'z ichiga olishi mumkin — yozilmaydi.
+      if (typeof body.error?.message === "string") errorMessage = body.error.code === -32700 ? "Parse error" : body.error.message.slice(0, 160);
     } catch {
       // javob JSON emas (masalan bo'sh tana)
     }
@@ -172,6 +204,7 @@ export function mountMcp(app: Hono): void {
         maxSize: maxBodyBytes(),
         onError: (ctx) => ctx.json({ jsonrpc: "2.0", error: { code: -32600, message: "Request too large" }, id: null }, 413),
       })(c, next),
+    mcpLogPeek,
     (c) => guarded(c.req.raw),
   );
   // Stateless server: GET (SSE oqimi) va DELETE (sessiya tugatish) yo'q.
