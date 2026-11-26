@@ -95,7 +95,7 @@ async function resolveCover(args: { cover_media_id?: string | null | undefined; 
 }
 
 /** Markdown -> hujjat (o'lcham, `# ` sarlavha va render tekshiruvi bilan). */
-async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
+export async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
   if (markdown.length > CONTENT_MAX_CHARS) {
     throw new ToolError("invalid_input", `content_markdown is ${markdown.length} characters; the limit is ${CONTENT_MAX_CHARS}.`, "Shorten the text or split it into several posts.");
   }
@@ -150,7 +150,7 @@ async function assertOnlyOwnImages(doc: ContentNode): Promise<void> {
   }
 }
 
-async function validatedDocument(doc: unknown): Promise<ContentNode> {
+export async function validatedDocument(doc: unknown): Promise<ContentNode> {
   const text = JSON.stringify(doc) ?? "";
   if (text.length > CONTENT_MAX_CHARS * 5) {
     throw new ToolError("invalid_input", "The structured document is too large.", `Keep it under ${CONTENT_MAX_CHARS * 5} characters of JSON.`);
