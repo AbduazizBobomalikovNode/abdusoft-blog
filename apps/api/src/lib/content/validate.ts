@@ -34,7 +34,7 @@ function structureProblem(doc: unknown): string | null {
     const content = (node as { content?: unknown }).content;
     if (!Array.isArray(content)) {
       if (content === undefined || content === null) {
-        if (depth === 0 && (type === "doc")) return null;
+        if (depth === 0 && type === "doc") return null;
         const m = nodes[type]!.contentMatch;
         return m.validEnd ? null : `${path}: a ${type} needs content (the editor's structure)`;
       }

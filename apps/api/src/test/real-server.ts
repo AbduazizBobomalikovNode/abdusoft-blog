@@ -1,4 +1,3 @@
-import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
