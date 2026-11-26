@@ -113,7 +113,7 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
   }
 
   return (
-    <div className="flex flex-col gap-4" data-testid={`dist-panel-${provider}`}>
+    <div className="flex shrink-0 flex-col gap-4" data-testid={`dist-panel-${provider}`}>
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill item={item} />
         {channel.account ? <span className="text-xs text-muted-foreground">{channel.account.displayName} · {tokenLine(channel.account).text}</span> : null}
@@ -173,11 +173,11 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
 
       {/* Rasm va rejim */}
       {caps?.image ? (
-        <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
+        <div className="grid grid-cols-[6rem_1fr] gap-3 sm:grid-cols-[8rem_1fr]">
           <div className="flex aspect-[1.91/1] items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-xs text-muted-foreground">
             {preview?.image.previewUrl && !preview.image.error ? (
               // eslint-disable-next-line @next/next/no-img-element -- tashqi (OG/muqova) rasm: oldindan ko'rish
-              <img src={preview.image.previewUrl} alt="" className="size-full object-cover" />
+              <img src={preview.image.previewUrl} alt="" className="size-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
             ) : (
               <span className="px-2 text-center">{preview?.image.error ? "Rasm yo'q" : "Rasmsiz"}</span>
             )}
@@ -311,10 +311,10 @@ export function DistributionDialog({ postId, open, onOpenChange }: { postId: str
         <DialogHeader>
           <DialogTitle>Tarqatish</DialogTitle>
         </DialogHeader>
-        <p className="rounded-lg bg-sky-500/10 px-3 py-2 text-xs" data-testid="dist-dialog-notice">{NO_AUTO_POST_NOTICE}</p>
+        <p className="shrink-0 rounded-lg bg-sky-500/10 px-3 py-2 text-xs" data-testid="dist-dialog-notice">{NO_AUTO_POST_NOTICE}</p>
         {!data ? <div className="h-40 animate-pulse rounded-md bg-muted" aria-busy /> : (
           <>
-            <div className="flex gap-1 overflow-x-auto rounded-lg bg-muted p-1" role="tablist">
+            <div className="flex shrink-0 gap-1 overflow-x-auto rounded-lg bg-muted p-1" role="tablist">
               {data.channels.map((c) => {
                 const it = itemFor(c.id);
                 return (

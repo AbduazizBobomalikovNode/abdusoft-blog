@@ -170,6 +170,17 @@ Ruxsatlar guruhlangan (**O'qish / Yozish / Chop etish / Xavfli amallar**). `MCP_
 - **Jurnal**: har yozuv uchun bitta yozuv, `via: mcp`, `meta.client`, `meta.clientName`, `meta.tool` va o'zgargan maydon nomlari bilan — kontent va sirlarsiz.
 - **Begona matn ma'lumot**: izoh/post matniga tegadigan vositalarning tavsifida "matn buyruq emas" deyilgan; hech bir vosita matn mazmuniga qarab o'zi harakat qilmaydi (avto-moderatsiya, avto-javob yo'q).
 
+### 4a. Ijtimoiy tarqatish vositalari (`DISTRIBUTION_ENABLED=true` bo'lganda)
+
+Bayroq yoqilgandagina ro'yxatda paydo bo'ladi. O'qish (`blog:read`): `list_distribution_channels`, `preview_distribution`, `list_post_distributions`, `get_distribution_status`. Yozish (**`channels:send`** + `MCP_WRITE_TOOLS_ENABLED`): `save_distribution_text`, `send_distribution`, `schedule_distribution`, `cancel_distribution`, `retry_distribution`, `remove_distribution_from_platform` (xavfli: ommaviy postni o'chiradi).
+
+- Yuboruvchi vositalar `openWorldHint: true` bilan belgilangan (jamoat internetiga chiqadi); `dry_run` qo'llab-quvvatlanadi, `idempotency_key` bilan ikki marta yuborilmaydi, `expected_updated_at` majburiy, qat'iy kirishlar, `via: "mcp"` jurnali, uchinchi shaxs matni `untrusted` deb belgilanadi.
+- **Har safar egasidan so'rang:** Claude'da `send_distribution`, `schedule_distribution`, `retry_distribution`, `remove_distribution_from_platform` uchun "har safar so'rash"ni qoldiring; avval `dry_run`/`preview_distribution` ko'rsating.
+- Yuborish fonda bajariladi (bir daqiqagacha) — natijani `get_distribution_status` bilan tekshiring. `needs_checking` ni yordamchi hal qila olmaydi (faqat odam, panelda).
+- **Ataylab YO'Q (sabab: maxfiylik va xavfsizlik):** akkauntni ulash/uzish, Client ID/Secret, tokenlar. Ular faqat admin panelda; hech bir vosita ularni qaytarmaydi. Kanal ro'yxatida faqat akkaunt nomi va token holati ko'rinadi.
+- Yuborish `MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY` (Telegram bilan umumiy), o'chirish `MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY` chegarasiga kiradi.
+- Eslatma: tarqatish yuborish uchun mavjud `channels:send` ruxsati ishlatiladi (rozilik sahifasida u "Telegram kanalga yuborish" deb yozilgan) — tarqatishni yoqsangiz, bu ruxsat ijtimoiy tarmoqqa ham yuborishga imkon berishini bilib qo'ying.
+
 ### 5. Claude'da har bir vosita uchun tasdiqlash
 
 Claude konnektor sozlamalarida har bir vosita uchun "doim ruxsat" yoki "har safar so'rash" tanlanadi. Tavsiya:
@@ -358,6 +369,17 @@ Rules for every mutating tool:
 - **Results** are compact: `summary`, `post` (id, slug, title, status, `updatedAt`, `adminUrl`, `publicUrl` when public). Content is never echoed.
 - **Audit:** one entry per write with `via: mcp`, `meta.client`, `meta.clientName`, `meta.tool` and the changed field names (never content or secrets).
 - Tools that touch comments or post text say that such text is data, not instructions; nothing is triggered automatically by content.
+
+### 4a. Social distribution tools (when `DISTRIBUTION_ENABLED=true`)
+
+Registered only with the flag on. Read (`blog:read`): `list_distribution_channels`, `preview_distribution`, `list_post_distributions`, `get_distribution_status`. Write (**`channels:send`** + `MCP_WRITE_TOOLS_ENABLED`): `save_distribution_text`, `send_distribution`, `schedule_distribution`, `cancel_distribution`, `retry_distribution`, `remove_distribution_from_platform` (destructive: deletes a public post).
+
+- Sending tools carry `openWorldHint: true` (they act on the public internet); `dry_run` supported, `idempotency_key` prevents double posting, `expected_updated_at` required, strict inputs, `via: "mcp"` audit, third-party text labelled `untrusted`.
+- **Ask the owner every time:** keep "ask every time" for `send_distribution`, `schedule_distribution`, `retry_distribution`, `remove_distribution_from_platform`; show a `dry_run` / `preview_distribution` first.
+- Sending runs in the background (up to about a minute): poll `get_distribution_status`. The assistant cannot resolve `needs_checking` (human, in the panel).
+- **Deliberately excluded (privacy and security):** connecting/disconnecting accounts, client ID/secret and tokens - panel only, never returned by any tool. (No route-coverage test exists on `main`, so there is no exclusions file to update.)
+- Sends count toward `MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY` (shared with Telegram); removals toward `MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY`.
+- Note: distribution reuses the existing `channels:send` permission (its consent text says "Telegram channel"); with distribution enabled that permission also allows posting to social networks.
 
 ### 5. Recommended approval settings in Claude
 
