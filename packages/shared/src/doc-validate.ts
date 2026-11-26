@@ -309,6 +309,19 @@ export function validateDocument(doc: unknown, opts: DocValidationOptions): DocV
       const content = node.content as unknown[];
       if (content.length > DOC_LIMITS.maxChildren) bad(`${here}: too many child nodes`);
       if (type === "table" && content.length > DOC_LIMITS.maxTableRows) bad(`${here}: a table can have at most ${DOC_LIMITS.maxTableRows} rows`);
+      if (type === "table") {
+        // Jadval renderi birinchi qatordagi HAR ustun uchun `<col>` chiqaradi (colspan'lar yig'indisi) — bular ham render elementlari.
+        const first = content[0];
+        let columns = 0;
+        if (isObj(first) && first.type === "tableRow" && Array.isArray(first.content)) {
+          for (const c of first.content as unknown[]) {
+            const span = isObj(c) && isObj(c.attrs) && isInt(c.attrs.colspan, 1, DOC_LIMITS.maxSpan) ? c.attrs.colspan : 1;
+            columns += span; // eng ko'pi bilan maxTableCellsPerRow * maxSpan (= 1024): qatorlar soni keyin tekshiriladi
+          }
+        }
+        elements += columns;
+        if (elements > DOC_LIMITS.maxRenderElements) bad(`the document has more than ${DOC_LIMITS.maxRenderElements} rendered elements (blocks, inline nodes, formatting marks and table columns together)`);
+      }
       if (type === "tableRow") {
         if (content.length > DOC_LIMITS.maxTableCellsPerRow) bad(`${here}: a table row can have at most ${DOC_LIMITS.maxTableCellsPerRow} cells`);
         cells += content.length;

@@ -117,6 +117,11 @@ function collectToc() {
   };
 }
 
+/** Tayyor oddiy matndan (`contentText`) qisqa tavsif — `renderPost` bilan bir xil qoida. */
+export function excerptFromText(plainText: string): string {
+  return plainText.length > EXCERPT_LENGTH ? `${plainText.slice(0, EXCERPT_LENGTH).trimEnd()}…` : plainText;
+}
+
 export async function renderPost(json: JSONContent): Promise<RenderResult> {
   const rawHtml = liftCodeFilenames(generateHTML(json, tiptapExtensions));
 
@@ -142,10 +147,7 @@ export async function renderPost(json: JSONContent): Promise<RenderResult> {
 
   const wordCount = plainText.length === 0 ? 0 : plainText.split(" ").length;
   const readingTime = Math.max(1, Math.ceil(wordCount / WORDS_PER_MINUTE));
-  const excerpt =
-    plainText.length > EXCERPT_LENGTH
-      ? `${plainText.slice(0, EXCERPT_LENGTH).trimEnd()}…`
-      : plainText;
+  const excerpt = excerptFromText(plainText);
 
   return { html, toc, readingTime, excerpt, text: plainText };
 }
