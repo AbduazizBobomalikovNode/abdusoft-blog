@@ -55,8 +55,8 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     id: "channels:prepare",
     group: "write",
     label: "Telegram kanal versiyalarini tayyorlash",
-    description: "Kanal uchun maxsus matn versiyalarini yaratish, tahrirlash va o'chirish hamda postda qaysi versiya yuborilishini belgilash. Hech narsa kanalga yuborilmaydi.",
-    english: "Prepare Telegram channel versions: create, edit and delete custom versions and mark which version a post uses. Nothing is sent to the channel.",
+    description: "Kanal uchun maxsus matn versiyalarini yaratish, tahrirlash va o'chirish hamda postda qaysi versiya yuborilishini belgilash. Hech narsa kanalga hozir yuborilmaydi; lekin rejalashtirilgan kanalga yuborish ishlatadigan versiya yoki belgini o'zgartirish uchun \"Kanalga yuborish\" ruxsati ham kerak.",
+    english: "Prepare Telegram channel versions: create, edit and delete custom versions and mark which version a post uses. Nothing is sent to the channel now; changing a version or mark that a scheduled channel send relies on also needs the channel-sending permission.",
   },
   {
     id: "posts:publish",

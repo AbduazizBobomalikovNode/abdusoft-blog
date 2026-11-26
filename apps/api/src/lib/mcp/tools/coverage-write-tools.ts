@@ -14,7 +14,7 @@ import { previewChannelPost } from "../../../telegram/channel-actions.js";
 import { preparePlan } from "../../posts/plan.js";
 import { loadVersion } from "../../../telegram/channel-versions.js";
 import { telegramHtmlToDoc, validateRestrictedDoc } from "../../../telegram/channel-html.js";
-import { clearChannelChoiceAudited, createChannelVersionAudited, deleteChannelVersionAudited, resyncChannelCaptionAudited, setChannelChoiceAudited, updateChannelVersionAudited } from "../../../telegram/channel-admin.js";
+import { channelSendImpact, clearChannelChoiceAudited, createChannelVersionAudited, deleteChannelVersionAudited, resyncChannelCaptionAudited, setChannelChoiceAudited, updateChannelVersionAudited } from "../../../telegram/channel-admin.js";
 import { getTelegramRefForPost, refreshTelegraphMirror } from "../../../telegram/publish.js";
 import { withIdempotency } from "../idempotency.js";
 import { aboutEtag } from "./coverage-read-tools.js";
@@ -34,6 +34,19 @@ const versionToken = z
   .string()
   .refine((v) => !Number.isNaN(Date.parse(v)), { message: "must be an ISO timestamp exactly as returned in version.updatedAt" })
   .describe("REQUIRED concurrency token: the version's updatedAt from list_channel_versions / get_channel_version, passed back unchanged. If the version changed meanwhile (for example edited in the web panel) nothing is written.");
+
+/** `channels:prepare` hech narsa yubormaydi, lekin kutilayotgan ommaviy yuborish ishlatadigan versiya/belgini o'zgartirish `channels:send` talab qiladi. */
+async function requireSendScopeIfPublic(ctx: { scopes: ReadonlySet<string> }, post: Parameters<typeof channelSendImpact>[0], target: Parameters<typeof channelSendImpact>[1]) {
+  if (ctx.scopes.has("channels:send")) return;
+  const impact = await channelSendImpact(post, target);
+  if (!impact) return;
+  throw new ToolError(
+    "conflict",
+    `Refused: ${impact}. This connection may only prepare channel versions (channels:prepare), and this change would alter a pending public Telegram post.`,
+    "Cancel or change the channel plan first (needs the channels:send permission), or ask the owner to make this change in the web panel or to grant channels:send.",
+    { requiredScope: "channels:send", grantedScopes: [...ctx.scopes].sort() },
+  );
+}
 
 async function livePost(id: string) {
   const post = await loadPostAnyState(id);
@@ -100,7 +113,7 @@ export const updateChannelVersionTool = defineTool({
   name: "update_channel_version",
   title: "Edit a Telegram channel version",
   description:
-    U + "Change a custom channel version: its name, its text (text_html, Telegram HTML: <b> <i> <u> <s> <code> <a href> <blockquote>, blocks separated by a blank line), its images (image_urls: urls offered by list_channel_versions postImages) or its mode. Only the fields you pass change. Nothing is sent. expected_version_updated_at is REQUIRED (conflict if the version changed meanwhile).",
+    U + "Change a custom channel version: its name, its text (text_html, Telegram HTML: <b> <i> <u> <s> <code> <a href> <blockquote>, blocks separated by a blank line), its images (image_urls: urls offered by list_channel_versions postImages) or its mode. Only the fields you pass change. Nothing is sent, but if a scheduled channel plan will send this version (directly, or because it is the marked version and the plan uses the mark) the change is refused unless the connection also has channels:send. expected_version_updated_at is REQUIRED (conflict if the version changed meanwhile).",
   scope: "channels:prepare",
   limit: "edit",
   inputSchema: {
@@ -121,6 +134,7 @@ export const updateChannelVersionTool = defineTool({
     if (existing.updatedAt.getTime() !== Date.parse(args.expected_version_updated_at)) {
       throw new ToolError("conflict", "The channel version was changed after you read it, so nothing was written.", "Re-read it with get_channel_version, merge your intent and retry with its fresh updatedAt.", { currentUpdatedAt: existing.updatedAt.toISOString() });
     }
+    await requireSendScopeIfPublic(ctx, post, { versionId: args.version_id });
     const body: Parameters<typeof updateChannelVersionAudited>[3] = {};
     if (args.name !== undefined) body.name = args.name;
     if (args.mode !== undefined) body.mode = args.mode;
@@ -166,7 +180,7 @@ export const setChannelChoiceTool = defineTool({
   name: "set_channel_choice",
   title: "Mark the version to send to the channel",
   description:
-    "Mark which Telegram version a post uses when it is sent (an automatic mode+variant, or a custom version_id). This only records the choice; nothing is sent. expected_updated_at is REQUIRED.",
+    "Mark which Telegram version a post uses when it is sent (an automatic mode+variant, or a custom version_id). This only records the choice; nothing is sent. If a scheduled channel plan uses the marked version, the change is refused unless the connection also has channels:send. expected_updated_at is REQUIRED.",
   scope: "channels:prepare",
   limit: "edit",
   inputSchema: { id: postId, expected_updated_at: expectedUpdatedAtField, ...selection },
@@ -176,6 +190,7 @@ export const setChannelChoiceTool = defineTool({
     const post = await livePost(args.id);
     await assertFreshToken(post, args.expected_updated_at);
     const choice = choiceFrom(args);
+    await requireSendScopeIfPublic(ctx, post, { choiceChange: true });
     const result = await setChannelChoiceAudited(ctx.actor, post, choice, ctx.user.id);
     if (!result.ok) return channelFailure(result.error, result.status);
     return { data: { ok: true, summary: "The channel version was marked.", marked: result.choice ? { label: result.choice.label, mode: result.choice.mode, visibleLength: result.choice.visibleLength, limit: result.choice.limit, passesChecks: result.choice.passes } : null, post: postBlock((await loadPostAnyState(post.id)) ?? post), ...untrusted(["marked.label", "post.title"]) } };
@@ -185,7 +200,7 @@ export const setChannelChoiceTool = defineTool({
 export const clearChannelChoiceTool = defineTool({
   name: "clear_channel_choice",
   title: "Clear the marked channel version",
-  description: "Remove the mark that says which Telegram version the post uses (sending then falls back to the default). Nothing is sent or deleted. expected_updated_at is REQUIRED.",
+  description: "Remove the mark that says which Telegram version the post uses (sending then falls back to the default). Nothing is sent or deleted (refused without channels:send when a scheduled channel plan uses the mark). expected_updated_at is REQUIRED.",
   scope: "channels:prepare",
   limit: "edit",
   inputSchema: { id: postId, expected_updated_at: expectedUpdatedAtField },
@@ -194,6 +209,7 @@ export const clearChannelChoiceTool = defineTool({
   async handler(args, ctx) {
     const post = await livePost(args.id);
     await assertFreshToken(post, args.expected_updated_at);
+    await requireSendScopeIfPublic(ctx, post, { choiceChange: true });
     await clearChannelChoiceAudited(ctx.actor, post);
     return { data: { ok: true, summary: "The mark was removed.", post: postBlock(post), ...untrusted(["post.title"]) } };
   },
