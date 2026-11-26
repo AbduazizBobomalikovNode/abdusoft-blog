@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { DEFAULT_POST_SETTINGS, DEFAULT_SOCIAL_LINKS, DEFAULT_TELEGRAM_SETTINGS, type AdminField, type SettingsAdmin } from "@blog/shared";
 import { SiteSettingsForm } from "@/components/admin/site-settings-form";
 import { requireAdminPage } from "@/lib/admin-guard";
-import { getAdminSettings, getAdminSiteSettings, getAdminTelegramStatus } from "@/lib/api";
+import { getAdminDistributionSettings, getAdminSettings, getAdminSiteSettings, getAdminTelegramStatus } from "@/lib/api";
 
 export const metadata: Metadata = { title: "Sozlamalar" };
 
@@ -58,10 +58,11 @@ export default async function AdminSettingsPage() {
   const headersList = await headers();
   const cookie = headersList.get("cookie");
   await requireAdminPage(cookie);
-  const [settings, integrations, telegramStatus] = await Promise.all([
+  const [settings, integrations, telegramStatus, distribution] = await Promise.all([
     getAdminSiteSettings(cookie),
     getAdminSettings(cookie),
     getAdminTelegramStatus(cookie),
+    getAdminDistributionSettings(cookie),
   ]);
 
   const initial = settings ?? {
@@ -85,6 +86,7 @@ export default async function AdminSettingsPage() {
         initial={initial}
         initialIntegrations={integrations ?? EMPTY_INTEGRATIONS}
         initialTelegramStatus={telegramStatus ?? { configured: false }}
+        distribution={distribution}
       />
     </div>
   );
