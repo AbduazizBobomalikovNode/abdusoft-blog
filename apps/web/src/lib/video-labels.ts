@@ -28,7 +28,7 @@ export function jobErrorText(job: Pick<MotionJob, "errorCode" | "errorMessage">)
     case "runner_auth":
       return "GitHub tokenni rad etdi (muddati tugagan yoki ruxsati yetarli emas). Yangi token yarating (Actions: Read and write).";
     case "runner_not_found":
-      return "GitHub repozitoriy yoki render-video.yml workflow'ini topa olmadi (workflow main shoxida bo'lishi kerak).";
+      return "GitHub render repozitoriysini yoki workflow faylini topa olmadi (fayl sozlangan shoxda bo'lishi va token shu repozitoriyni ko'rishi kerak).";
     case "runner_rejected":
       return "GitHub workflow'ni ishga tushirishni rad etdi (workflow_dispatch yoki job_id kirishi yo'q).";
     case "runner_unavailable":
