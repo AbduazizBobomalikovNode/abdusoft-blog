@@ -57,6 +57,8 @@ import type {
   UpdateTagBody,
   MotionJobDetail,
   MotionJobList,
+  MotionGithubSettings,
+  MotionGithubSettingsPatch,
   MotionStatus,
 } from "@blog/shared";
 import { site } from "./site";
@@ -497,6 +499,8 @@ export const adminApi = {
 
   /** Video xizmati holati. Bayroq o'chiq bo'lsa 404 (AdminApiError) — UI yashiriladi. */
   getVideoStatus: () => adminJson<MotionStatus>("/admin/video/status"),
+  getVideoSettings: () => adminJson<MotionGithubSettings>("/admin/video/settings"),
+  saveVideoSettings: (patch: MotionGithubSettingsPatch) => adminJson<MotionGithubSettings>("/admin/video/settings", { method: "PUT", ...jsonBody(patch) }),
   listVideoJobs: (postId: string) => adminJson<MotionJobList>(`/admin/video/jobs?postId=${encodeURIComponent(postId)}&limit=30`),
   getVideoJob: (id: string) => adminJson<MotionJobDetail>(`/admin/video/jobs/${encodeURIComponent(id)}`),
   cancelVideoJob: (id: string) => adminJson<MotionJobDetail>(`/admin/video/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),

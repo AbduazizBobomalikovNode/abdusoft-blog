@@ -7,19 +7,10 @@ import type { MotionJob, MotionJobDetail } from "@blog/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
+import { useVideoEnabled } from "@/components/admin/video-context";
 import { formatDateTime } from "@/lib/format";
 import { formatBytes, isActiveJob, JOB_KIND_LABEL, JOB_STATUS_LABEL, jobErrorText } from "@/lib/video-labels";
 import { cn } from "@/lib/utils";
-
-/** Bayroq o'chiq bo'lsa server 404 qaytaradi: shu holda UI umuman ko'rinmaydi (kirish nuqtasi ham yo'q). */
-let enabledProbe: Promise<boolean> | null = null;
-function probeEnabled(): Promise<boolean> {
-  enabledProbe ??= adminApi.getVideoStatus().then(
-    () => true,
-    () => false,
-  );
-  return enabledProbe;
-}
 
 const STATUS_TONE: Record<MotionJob["status"], string> = {
   queued: "bg-muted text-muted-foreground",
@@ -141,18 +132,11 @@ function JobCard({ job, onChanged }: { job: MotionJob; onChanged: () => void }) 
 
 /** Postdagi video ishlari: holat, ko'rik kadrlari, yuklab olish/havola, bekor qilish va o'chirish. Storyboard'ni yordamchi (Claude) yozadi. */
 export function VideoPanel({ postId }: { postId: string }) {
-  const [enabled, setEnabled] = useState(false);
+  // Yoqilganmi: `/admin/me` (`videoEnabled`) bo'yicha — alohida so'rov yo'q.
+  const enabled = useVideoEnabled();
   const [open, setOpen] = useState(false);
   const [jobs, setJobs] = useState<MotionJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    void probeEnabled().then((v) => alive && setEnabled(v));
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const [tick, setTick] = useState(0);
   const reload = useCallback(() => setTick((t) => t + 1), []);

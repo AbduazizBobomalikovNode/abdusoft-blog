@@ -22,7 +22,29 @@ export function jobErrorText(job: Pick<MotionJob, "errorCode" | "errorMessage">)
     case "memory":
       return "Xotira chegarasidan oshdi va ish to'xtatildi.";
     case "browser_missing":
-      return "Serverda brauzer o'rnatilmagan. Egasi scripts/setup-motion-browser.sh ni bir marta ishga tushirishi kerak.";
+      return "Renderda brauzer yo'q. Mahalliy backendda egasi scripts/setup-motion-browser.sh ni ishga tushirishi kerak; GitHub'da workflow o'zi o'rnatadi.";
+    case "runner_not_configured":
+      return "GitHub orqali render hali sozlanmagan (token, repozitoriy yoki runner siri). docs/video.md ga qarang.";
+    case "runner_auth":
+      return "GitHub tokenni rad etdi (muddati tugagan yoki ruxsati yetarli emas). Yangi token yarating (Actions: Read and write).";
+    case "runner_not_found":
+      return "GitHub repozitoriy yoki render-video.yml workflow'ini topa olmadi (workflow main shoxida bo'lishi kerak).";
+    case "runner_rejected":
+      return "GitHub workflow'ni ishga tushirishni rad etdi (workflow_dispatch yoki job_id kirishi yo'q).";
+    case "runner_unavailable":
+      return "GitHub vaqtincha javob bermadi. Birozdan keyin qaytadan urinib ko'ring.";
+    case "runner_not_started":
+      return "GitHub runner o'z vaqtida ishga tushmadi. Actions yoqilganini va 'video-render' environment sozlanganini tekshiring.";
+    case "runner_timeout":
+      return "GitHub runner vaqt chegarasida tugatmadi va run bekor qilindi.";
+    case "runner_cancelled":
+      return "GitHub run tugamasdan bekor qilindi.";
+    case "engine_mismatch":
+      return "Server storyboard'ni qabul qildi, lekin runner'dagi render dvigateli rad etdi (versiyalar farq qiladi).";
+    case "disk_full":
+      return "Serverda disk to'ldi. Egasi joy bo'shatishi kerak.";
+    case "upload_failed":
+      return "Runner natijani serverga yuklay olmadi.";
     case "interrupted":
       return "Server qayta ishga tushdi. Videoni qaytadan boshlang.";
     case "too_large":
