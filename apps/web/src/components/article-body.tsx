@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { wrapTables } from "@/lib/wrap-tables";
 
 interface LightboxState {
   src: string;
@@ -18,6 +19,7 @@ export function ArticleBody({ html }: { html: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [lightbox, setLightbox] = useState<LightboxState | null>(null);
+  const wrappedHtml = useMemo(() => wrapTables(html), [html]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -70,18 +72,6 @@ export function ArticleBody({ html }: { html: string }) {
       cleanups.push(() => header.remove());
     });
 
-    container.querySelectorAll<HTMLTableElement>("table").forEach((table) => {
-      const parent = table.parentElement;
-      if (!parent || parent.classList.contains("table-scroll")) return;
-      const scroller = document.createElement("div");
-      scroller.className = "table-scroll";
-      parent.insertBefore(scroller, table);
-      scroller.appendChild(table);
-      cleanups.push(() => {
-        if (scroller.parentElement) scroller.replaceWith(table);
-      });
-    });
-
     function handleImageClick(event: MouseEvent) {
       const target = event.target;
       if (!(target instanceof HTMLImageElement)) return;
@@ -106,7 +96,7 @@ export function ArticleBody({ html }: { html: string }) {
 
   return (
     <>
-      <div ref={containerRef} className="prose-article" dangerouslySetInnerHTML={{ __html: html }} />
+      <div ref={containerRef} className="prose-article" dangerouslySetInnerHTML={{ __html: wrappedHtml }} />
       <dialog
         ref={dialogRef}
         className="lightbox-dialog"
