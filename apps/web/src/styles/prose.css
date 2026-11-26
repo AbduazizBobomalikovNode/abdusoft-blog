@@ -80,6 +80,18 @@
   text-align: left;
 }
 
+/* Jadval o'z o'ramida gorizontal aylanadi (sahifa emas); katak ichidagi kod so'z o'rtasida sinmaydi. */
+.prose-article .table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.prose-article td code,
+.prose-article th code {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
 .prose-article :not(pre) > code {
   background: var(--muted);
   border-radius: 0.25rem;

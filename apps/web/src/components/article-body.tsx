@@ -70,6 +70,18 @@ export function ArticleBody({ html }: { html: string }) {
       cleanups.push(() => header.remove());
     });
 
+    container.querySelectorAll<HTMLTableElement>("table").forEach((table) => {
+      const parent = table.parentElement;
+      if (!parent || parent.classList.contains("table-scroll")) return;
+      const scroller = document.createElement("div");
+      scroller.className = "table-scroll";
+      parent.insertBefore(scroller, table);
+      scroller.appendChild(table);
+      cleanups.push(() => {
+        if (scroller.parentElement) scroller.replaceWith(table);
+      });
+    });
+
     function handleImageClick(event: MouseEvent) {
       const target = event.target;
       if (!(target instanceof HTMLImageElement)) return;

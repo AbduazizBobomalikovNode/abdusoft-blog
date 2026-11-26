@@ -76,7 +76,7 @@ export default async function PostPage({
       <JsonLd data={buildBlogPostingJsonLd(post, site)} />
       <ReadingProgress />
       <ViewBeacon slug={post.slug} />
-      <article className="flex flex-col gap-6">
+      <article className="relative flex flex-col gap-6">
         <header className="flex flex-col gap-3">
           <h1 id="post-title" className="text-2xl font-semibold tracking-tight text-balance">{post.title}</h1>
           <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-muted-foreground">
@@ -112,7 +112,7 @@ export default async function PostPage({
           </figure>
         ) : null}
 
-        {showToc ? <TableOfContents toc={post.toc} /> : null}
+        {showToc ? <TableOfContents toc={post.toc} rail /> : null}
 
         <ArticleBody html={post.html} />
 

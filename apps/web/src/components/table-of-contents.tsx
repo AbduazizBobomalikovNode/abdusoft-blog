@@ -1,11 +1,13 @@
 import type { TocItem } from "@blog/shared";
 
 /**
- * Mobil: sahifa boshida yopiq <details> ("Mundarija"). Desktop: maqola
- * ustunining o'zi ichida sticky joylashgan holat (bitta markazlashgan
- * ustun dizayn talabini buzmaydi).
+ * Mobil: sahifa boshida yopiq <details> ("Mundarija"). md..xl: oqimdagi oddiy
+ * (sticky emas) blok. xl+ (`rail` yoqilgan bo'lsa): matn ustunidan tashqarida,
+ * o'ng tomondagi rail'da sticky — ustun o'rni/kengligi o'zgarmaydi (rail
+ * absolute, oqimga ta'sir qilmaydi). `rail` ota `relative` konteyner talab
+ * qiladi (post sahifasidagi <article>).
  */
-export function TableOfContents({ toc }: { toc: TocItem[] }) {
+export function TableOfContents({ toc, rail = false }: { toc: TocItem[]; rail?: boolean }) {
   if (toc.length === 0) return null;
 
   const items = (
@@ -20,6 +22,10 @@ export function TableOfContents({ toc }: { toc: TocItem[] }) {
     </ol>
   );
 
+  const heading = (
+    <p className="mb-2 font-medium tracking-wide text-foreground uppercase">Mundarija</p>
+  );
+
   return (
     <>
       <details className="rounded-lg border border-border px-3 py-2 font-mono text-xs md:hidden">
@@ -30,11 +36,22 @@ export function TableOfContents({ toc }: { toc: TocItem[] }) {
       </details>
       <nav
         aria-label="Mundarija"
-        className="sticky top-20 hidden rounded-lg border border-border px-3 py-2.5 font-mono text-xs md:block"
+        className={`hidden rounded-lg border border-border px-3 py-2.5 font-mono text-xs md:block${rail ? " xl:hidden" : ""}`}
       >
-        <p className="mb-2 font-medium tracking-wide text-foreground uppercase">Mundarija</p>
+        {heading}
         {items}
       </nav>
+      {rail ? (
+        <div className="absolute top-0 bottom-0 left-full ml-8 hidden w-56 xl:block">
+          <nav
+            aria-label="Mundarija"
+            className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto overscroll-contain rounded-lg border border-border px-3 py-2.5 font-mono text-xs"
+          >
+            {heading}
+            {items}
+          </nav>
+        </div>
+      ) : null}
     </>
   );
 }
