@@ -50,11 +50,10 @@ function defaults(call: RecordedCall & { path: string; search: URLSearchParams }
     if (path === "/v1.0/TM1" && method === "DELETE") return json({ success: true });
   }
   // --- Instagram ---
-  if (host === "api.instagram.com" && path === "/oauth/access_token") return json({ data: [{ access_token: "IG-SHORT-TOKEN", user_id: 99 }] });
-  if (host === "graph.instagram.com") {
-    if (path === "/access_token") return json({ access_token: TOKENS.ig, expires_in: 5184000 });
-    if (path === "/refresh_access_token") return json({ access_token: "IG-LONG-TOKEN-0002", expires_in: 5184000 });
-    if (path === "/v27.0/me") return json({ user_id: "IG1", username: "owner_ig", name: "Test Owner" });
+  if (host === "graph.facebook.com") {
+    if (path === "/v27.0/oauth/access_token") return json({ access_token: TOKENS.ig, token_type: "bearer" });
+    if (path === "/v27.0/me/assigned_instagram_accounts") return json({ data: [{ id: "IG1", username: "owner_ig" }] });
+    if (path === "/v27.0/me") return json({ id: "SU1", client_business_id: "BIZ1" });
     if (path === "/v27.0/IG1/media") return json({ id: "IC1" });
     if (path === "/v27.0/IC1") return json({ id: "IC1", status_code: "FINISHED" });
     if (path === "/v27.0/IG1/media_publish") return json({ id: "IM1" });

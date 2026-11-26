@@ -18,6 +18,11 @@ export type OAuthProviderId = (typeof OAUTH_PROVIDERS)[number];
 
 const KEY = "settings:distribution";
 
+/** Ixtiyoriy maydon (maxfiy emas): faqat Instagram (Unified Login `config_id`). Boshqa providerlarda YO'Q. */
+const CONFIG_ID_ENV: Partial<Record<OAuthProviderId, { name: string; value: () => string }>> = {
+  instagram: { name: "DISTRIBUTION_INSTAGRAM_CONFIG_ID", value: () => config.DISTRIBUTION_INSTAGRAM_CONFIG_ID },
+};
+
 const ENV: Record<OAuthProviderId, { id: string; secret: string; idValue: () => string; secretValue: () => string }> = {
   linkedin: { id: "DISTRIBUTION_LINKEDIN_CLIENT_ID", secret: "DISTRIBUTION_LINKEDIN_CLIENT_SECRET", idValue: () => config.DISTRIBUTION_LINKEDIN_CLIENT_ID, secretValue: () => config.DISTRIBUTION_LINKEDIN_CLIENT_SECRET },
   x: { id: "DISTRIBUTION_X_CLIENT_ID", secret: "DISTRIBUTION_X_CLIENT_SECRET", idValue: () => config.DISTRIBUTION_X_CLIENT_ID, secretValue: () => config.DISTRIBUTION_X_CLIENT_SECRET },
@@ -25,7 +30,7 @@ const ENV: Record<OAuthProviderId, { id: string; secret: string; idValue: () => 
   instagram: { id: "DISTRIBUTION_INSTAGRAM_CLIENT_ID", secret: "DISTRIBUTION_INSTAGRAM_CLIENT_SECRET", idValue: () => config.DISTRIBUTION_INSTAGRAM_CLIENT_ID, secretValue: () => config.DISTRIBUTION_INSTAGRAM_CLIENT_SECRET },
 };
 
-type Raw = Partial<Record<OAuthProviderId, { clientId?: string; clientSecret?: string }>>;
+type Raw = Partial<Record<OAuthProviderId, { clientId?: string; clientSecret?: string; configId?: string }>>;
 
 export function isOAuthProvider(id: string): id is OAuthProviderId {
   return (OAUTH_PROVIDERS as readonly string[]).includes(id);
@@ -39,6 +44,8 @@ async function loadRaw(): Promise<Raw> {
 export interface ResolvedCredentials {
   clientId: string;
   clientSecret: string;
+  /** Faqat Instagram: Config ID (env > DB). Boshqa providerlarda yo'q. */
+  configId?: string;
   /** DB'da shifrlangan Client Secret bor, lekin deshifrlanmaydi (`BETTER_AUTH_SECRET` almashtirilgan) va env'dan ham berilmagan. */
   secretUnreadable?: boolean;
 }
@@ -46,6 +53,11 @@ export interface ResolvedCredentials {
 /** Saqlangan (shifrlangan) qiymat bor, lekin deshifrlanganda bo'sh — kalit almashtirilgan yoki qiymat buzilgan. */
 export function isUnreadableSecret(stored: string | null | undefined): boolean {
   return Boolean(stored) && decryptSecret(stored) === "";
+}
+
+/** startConnect: provider uchun "tayyor emas" xabari (Instagram — Meta App ID/Secret/Config ID; qolganlari o'zgarmagan). */
+export function credentialsMissingMessage(provider: OAuthProviderId): string {
+  return CONFIG_ID_ENV[provider] ? "Avval Meta App ID, Meta App Secret va Config ID'ni kiriting va saqlang" : "Avval Client ID va Client Secret'ni kiriting va saqlang";
 }
 
 export const UNREADABLE_CREDENTIALS_MESSAGE = "Saqlangan Client Secret o'qib bo'lmadi (maxfiy kalit o'zgargan) — Client Secret'ni qaytadan kiriting";
@@ -58,6 +70,7 @@ export async function getCredentials(provider: OAuthProviderId): Promise<Resolve
   return {
     clientId: env.idValue() || raw.clientId || "",
     clientSecret: secret,
+    ...(CONFIG_ID_ENV[provider] ? { configId: CONFIG_ID_ENV[provider].value() || raw.configId || "" } : {}),
     ...(!env.secretValue() && isUnreadableSecret(raw.clientSecret) ? { secretUnreadable: true } : {}),
   };
 }
@@ -67,16 +80,26 @@ export function credentialsReady(provider: OAuthProviderId, creds: ResolvedCrede
   if (!creds.clientId) return false;
   // X public client bo'lishi mumkin, lekin saqlangan sir BOR-u o'qilmasa — sozlanmagan hisoblanadi (jimgina sirsiz davom etmaydi).
   if (creds.secretUnreadable) return false;
+  if (CONFIG_ID_ENV[provider] && !creds.configId) return false;
   return provider === "x" ? true : Boolean(creds.clientSecret);
 }
 
-export async function getCredentialsAdmin(provider: OAuthProviderId): Promise<{ clientId: DistributionCredentialField; clientSecret: DistributionCredentialField }> {
+export async function getCredentialsAdmin(provider: OAuthProviderId): Promise<{ clientId: DistributionCredentialField; clientSecret: DistributionCredentialField; configId?: DistributionCredentialField }> {
   const raw = (await loadRaw())[provider] ?? {};
   const env = ENV[provider];
   const idEnv = env.idValue();
   const secretEnv = env.secretValue();
   const dbSecret = decryptSecret(raw.clientSecret);
+  const cfg = CONFIG_ID_ENV[provider];
+  const cfgEnv = cfg?.value() ?? "";
   return {
+    ...(cfg
+      ? {
+          configId: cfgEnv
+            ? { value: cfgEnv, source: "env" as const, isSet: true, envVar: cfg.name }
+            : { value: raw.configId ?? "", source: raw.configId ? ("db" as const) : ("none" as const), isSet: Boolean(raw.configId), envVar: cfg.name },
+        }
+      : {}),
     clientId: idEnv
       ? { value: idEnv, source: "env", isSet: true, envVar: env.id }
       : { value: raw.clientId ?? "", source: raw.clientId ? "db" : "none", isSet: Boolean(raw.clientId), envVar: env.id },
@@ -113,6 +136,14 @@ export async function saveCredentials(patch: DistributionCredentialsPatch): Prom
       else if (p.clientSecret === "") next.clientSecret = "";
       else if (/\s/.test(p.clientSecret)) errors[`${provider}.clientSecret`] = "Bo'shliq bo'lmasligi kerak";
       else next.clientSecret = encryptSecret(p.clientSecret);
+    }
+    if (p.configId !== undefined) {
+      const cfg = CONFIG_ID_ENV[provider];
+      if (!cfg) errors[`${provider}.configId`] = "Bu provider Config ID'ni qo'llamaydi";
+      else if (cfg.value()) {
+        if (p.configId.trim() !== cfg.value()) errors[`${provider}.configId`] = `env'dan qulflangan (${cfg.name}) — panelda o'zgartirib bo'lmaydi`;
+      } else if (/\s/.test(p.configId.trim())) errors[`${provider}.configId`] = "Bo'shliq bo'lmasligi kerak";
+      else next.configId = p.configId.trim();
     }
     raw[provider] = next;
   }

@@ -4,7 +4,7 @@ import { formOf, json, makeDeps, mockFetch, POST_FIXTURE, SECRET } from "./test-
 import type { ConnectedAccount } from "./types.js";
 
 const p = createInstagramProvider();
-const creds = { clientId: "igapp", clientSecret: "igsecret", redirectUri: "https://api.example/cb" };
+const creds = { clientId: "metaapp", clientSecret: "metasecret", redirectUri: "https://api.example/cb", configId: "CFG123" };
 const account: ConnectedAccount = {
   provider: "instagram", externalId: "IG1", displayName: "owner", accessToken: SECRET, refreshToken: null,
   accessTokenExpiresAt: new Date("2027-01-01T00:00:00Z"), refreshTokenExpiresAt: null, scopes: [],
@@ -12,32 +12,98 @@ const account: ConnectedAccount = {
 };
 const IMG = "https://cdn.abdusoft.uz/cover.jpg";
 
-describe("Instagram auth", () => {
-  it("authorize URL", () => {
-    const u = new URL(p.auth.buildAuthorizationUrl!({ creds, state: "s" }));
-    expect(u.origin + u.pathname).toBe("https://www.instagram.com/oauth/authorize");
-    expect(u.searchParams.get("scope")).toBe("instagram_business_basic,instagram_business_content_publish");
+const okToken = () => json({ access_token: "SUAT-1234567890", token_type: "bearer" });
+const okAccounts = (data: unknown[] = [{ id: "17841400000000001", username: "owner" }]) => json({ data });
+const okMe = () => json({ id: "SU1", client_business_id: "BIZ777" });
+
+describe("Instagram auth (Unified Login)", () => {
+  it("dialog URL: facebook.com/dialog/oauth with client_id, config_id, redirect_uri, response_type=code, state — and NO scope", () => {
+    const u = new URL(p.auth.buildAuthorizationUrl!({ creds, state: "st-1" }));
+    expect(u.origin + u.pathname).toBe("https://www.facebook.com/dialog/oauth");
+    expect(Object.fromEntries(u.searchParams)).toEqual({ client_id: "metaapp", config_id: "CFG123", redirect_uri: "https://api.example/cb", response_type: "code", state: "st-1" });
+    expect(u.searchParams.has("scope")).toBe(false);
   });
-  it("exchange handles the data[] wrapper, long-lived token and /me", async () => {
-    const m = mockFetch([
-      () => json({ data: [{ access_token: "SHORT-1234567", user_id: "99", permissions: "instagram_business_basic" }] }),
-      () => json({ access_token: "LONG-1234567", token_type: "bearer", expires_in: 5183944 }),
-      () => json({ user_id: "99", username: "owner" }),
-    ]);
-    const acc = await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C" });
-    expect(m.calls[0]).toMatchObject({ method: "POST", url: "https://api.instagram.com/oauth/access_token" });
-    expect(formOf(m.calls[0]!)).toMatchObject({ grant_type: "authorization_code", code: "C", client_secret: "igsecret" });
-    const u = new URL(m.calls[1]!.url);
-    expect(u.origin + u.pathname).toBe("https://graph.instagram.com/access_token");
-    expect(u.searchParams.get("grant_type")).toBe("ig_exchange_token");
-    expect(acc).toMatchObject({ externalId: "99", username: "owner", accessToken: "LONG-1234567" });
+  it("dialog URL without a Config ID is refused with its own reason", () => {
+    const noCfg = { clientId: creds.clientId, clientSecret: creds.clientSecret, redirectUri: creds.redirectUri };
+    expect(() => p.auth.buildAuthorizationUrl!({ creds: noCfg, state: "s" })).toThrowError(expect.objectContaining({ reason: "config_invalid" }));
   });
-  it("refresh uses ig_refresh_token", async () => {
-    const m = mockFetch(() => json({ access_token: "NEW-TOKEN-12345", expires_in: 5184000 }));
-    const { account: next } = await p.auth.refresh!(makeDeps(m.fetch), creds, account);
-    expect(new URL(m.calls[0]!.url).searchParams.get("grant_type")).toBe("ig_refresh_token");
-    expect(next.accessToken).toBe("NEW-TOKEN-12345");
-    expect(next.externalId).toBe("IG1");
+  it("exchange: GET graph.facebook.com/<ver>/oauth/access_token with client_id, client_secret, code and redirect_uri; then accounts and client_business_id", async () => {
+    const m = mockFetch([okToken, () => okAccounts(), okMe]);
+    const acc = await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "CODE-XYZ" });
+    const t = new URL(m.calls[0]!.url);
+    expect(m.calls[0]!.method).toBe("GET");
+    expect(t.origin + t.pathname).toBe("https://graph.facebook.com/v27.0/oauth/access_token");
+    expect(Object.fromEntries(t.searchParams)).toEqual({ client_id: "metaapp", client_secret: "metasecret", code: "CODE-XYZ", redirect_uri: "https://api.example/cb" });
+    const l = new URL(m.calls[1]!.url);
+    expect(l.pathname).toBe("/v27.0/me/assigned_instagram_accounts");
+    expect(l.searchParams.get("fields")).toBe("id,username");
+    expect(l.searchParams.get("access_token")).toBe("SUAT-1234567890");
+    const me = new URL(m.calls[2]!.url);
+    expect(me.pathname).toBe("/v27.0/me");
+    expect(me.searchParams.get("fields")).toBe("client_business_id");
+    expect(acc).toMatchObject({ provider: "instagram", externalId: "17841400000000001", username: "owner", displayName: "owner", accessToken: "SUAT-1234567890", refreshToken: null, accessTokenExpiresAt: null });
+    expect(acc.meta).toEqual({ clientBusinessId: "BIZ777", accountCount: "1" });
+    expect(acc.scopes).toEqual(["instagram_basic", "instagram_manage_messages", "instagram_content_publish"]);
+  });
+  it("exchange without redirect_uri when the option is off", async () => {
+    const m = mockFetch([okToken, () => okAccounts(), okMe]);
+    await createInstagramProvider({ exchangeRedirectUri: false }).auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" });
+    expect(new URL(m.calls[0]!.url).searchParams.has("redirect_uri")).toBe(false);
+  });
+  it("the Graph version is one setting; an invalid value falls back to v27.0", async () => {
+    const m = mockFetch([okToken, () => okAccounts(), okMe]);
+    await createInstagramProvider({ graphVersion: "v28.0" }).auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" });
+    expect(m.calls.map((c) => new URL(c.url).pathname.split("/")[1])).toEqual(["v28.0", "v28.0", "v28.0"]);
+    const m2 = mockFetch([okToken, () => okAccounts(), okMe]);
+    await createInstagramProvider({ graphVersion: "../evil" }).auth.exchangeCode!(makeDeps(m2.fetch), { creds, code: "C1234" });
+    expect(new URL(m2.calls[0]!.url).pathname).toBe("/v27.0/oauth/access_token");
+  });
+  it("token lifetime: expires_in present -> expiry is stored; absent -> never expires (null)", async () => {
+    const now = new Date("2026-11-26T10:00:00Z");
+    const m = mockFetch([() => json({ access_token: "SUAT-1234567890", expires_in: 5184000 }), () => okAccounts(), okMe]);
+    const acc = await p.auth.exchangeCode!(makeDeps(m.fetch, now), { creds, code: "C1234" });
+    expect(acc.accessTokenExpiresAt).toEqual(new Date(now.getTime() + 5184000 * 1000));
+    const st = p.tokenStatus(acc, new Date(now.getTime() + 3 * 86_400_000));
+    expect(st).toMatchObject({ state: "ok", canRefresh: false, refreshDue: false });
+    expect(p.tokenPolicy.refresh).toBe("none");
+    expect(p.auth.refresh).toBeUndefined();
+  });
+  it("a token without expiry is always ok: no expiry, no reminder, no refresh", () => {
+    const never = { ...account, accessTokenExpiresAt: null };
+    expect(p.tokenStatus(never, new Date("2040-01-01T00:00:00Z"))).toEqual({ state: "ok", expiresAt: null, canRefresh: false, refreshDue: false, remindAt: null, daysLeft: null });
+  });
+  it("account discovery: several accounts -> first is used and the count is recorded; empty list -> distinct error", async () => {
+    const m = mockFetch([okToken, () => okAccounts([{ id: "A1", username: "first" }, { id: "A2", username: "second" }]), okMe]);
+    const acc = await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" });
+    expect(acc).toMatchObject({ externalId: "A1", username: "first" });
+    expect(acc.meta?.accountCount).toBe("2");
+    const empty = mockFetch([okToken, () => okAccounts([])]);
+    await expect(p.auth.exchangeCode!(makeDeps(empty.fetch), { creds, code: "C1234" })).rejects.toMatchObject({ kind: "validation_rejected", reason: "no_instagram_account" });
+    expect(empty.calls).toHaveLength(2);
+  });
+  it("client_business_id failure does not stop the connection", async () => {
+    const m = mockFetch([okToken, () => okAccounts(), () => json({ error: { message: "nope", code: 100 } }, { status: 400 })]);
+    const acc = await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" });
+    expect(acc.meta).toEqual({ accountCount: "1" });
+  });
+  it("error classes: token exchange, wrong config_id, account lookup are told apart", async () => {
+    const ex = mockFetch(() => json({ error: { message: "Invalid verification code format.", code: 100, type: "OAuthException" } }, { status: 400 }));
+    const e1 = await p.auth.exchangeCode!(makeDeps(ex.fetch), { creds, code: "C1234" }).then(() => null, (e: unknown) => e as { kind: string; reason?: string });
+    expect(e1).toMatchObject({ kind: "validation_rejected" });
+    expect(e1?.reason).toBeUndefined();
+    const cfg = mockFetch(() => json({ error: { message: "Invalid config_id: 999", code: 100 } }, { status: 400 }));
+    await expect(p.auth.exchangeCode!(makeDeps(cfg.fetch), { creds, code: "C1234" })).rejects.toMatchObject({ reason: "config_invalid" });
+    const look = mockFetch([okToken, () => json({ error: { message: "(#10) permission denied", code: 10 } }, { status: 403 })]);
+    await expect(p.auth.exchangeCode!(makeDeps(look.fetch), { creds, code: "C1234" })).rejects.toMatchObject({ kind: "permission_missing", reason: "account_lookup_failed" });
+  });
+  it("token, secret and code never appear in error messages", async () => {
+    const m = mockFetch(() => json({ error: { message: "bad code CODE-SECRET-777 secret metasecret" } }, { status: 400 }));
+    const e = (await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "CODE-SECRET-777" }).then(() => null, (x: unknown) => x)) as Error & { platformMessage?: string };
+    expect(JSON.stringify([e.message, e.platformMessage])).not.toMatch(/CODE-SECRET-777|metasecret/);
+  });
+  it("only graph.facebook.com is allowed", async () => {
+    const { INSTAGRAM_HOSTS } = await import("./providers/instagram.js");
+    expect([...INSTAGRAM_HOSTS]).toEqual(["graph.facebook.com"]);
   });
 });
 
@@ -53,10 +119,10 @@ describe("Instagram publish", () => {
     const deps = makeDeps(m.fetch);
     const r = await p.publish({ deps, account }, { post: POST_FIXTURE, text: "caption", imageUrl: IMG });
     expect(r).toEqual({ externalId: "MEDIA9", url: "https://www.instagram.com/p/XYZ/" });
-    expect(m.calls[0]).toMatchObject({ method: "POST", url: "https://graph.instagram.com/v27.0/IG1/media" });
+    expect(m.calls[0]).toMatchObject({ method: "POST", url: "https://graph.facebook.com/v27.0/IG1/media" });
     expect(formOf(m.calls[0]!)).toEqual({ image_url: IMG, caption: "caption", access_token: SECRET });
     expect(m.calls[1]?.url).toContain("/v27.0/CT1?fields=status_code");
-    expect(m.calls[3]).toMatchObject({ method: "POST", url: "https://graph.instagram.com/v27.0/IG1/media_publish" });
+    expect(m.calls[3]).toMatchObject({ method: "POST", url: "https://graph.facebook.com/v27.0/IG1/media_publish" });
     expect(formOf(m.calls[3]!)).toEqual({ creation_id: "CT1", access_token: SECRET });
     expect(deps.slept).toEqual([5000]);
   });

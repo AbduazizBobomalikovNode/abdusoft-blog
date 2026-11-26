@@ -50,7 +50,7 @@ const providers = new Map<ProviderId, DistributionProvider>();
 export function getProvider(id: ProviderId): DistributionProvider {
   let p = providers.get(id);
   if (!p) {
-    p = createProvider(id, { github: { limit: config.DISTRIBUTION_GITHUB_README_POSTS } });
+    p = createProvider(id, { github: { limit: config.DISTRIBUTION_GITHUB_README_POSTS }, instagram: { graphVersion: config.DISTRIBUTION_INSTAGRAM_GRAPH_VERSION } });
     providers.set(id, p);
   }
   return p;

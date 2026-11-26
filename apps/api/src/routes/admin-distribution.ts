@@ -33,7 +33,7 @@ const ResolveBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("retry"), confirmDuplicateRisk: z.boolean() }).strict(),
   z.object({ action: z.literal("not_posted") }).strict(),
 ]);
-const CredField = z.object({ clientId: z.string().max(500).optional(), clientSecret: z.string().max(2000).optional() }).strict();
+const CredField = z.object({ clientId: z.string().max(500).optional(), clientSecret: z.string().max(2000).optional(), configId: z.string().max(500).optional() }).strict();
 const CredentialsBody = z.object({ linkedin: CredField.optional(), x: CredField.optional(), threads: CredField.optional(), instagram: CredField.optional() }).strict();
 const TokenBody = z.object({ token: z.string().min(8).max(500) }).strict();
 
@@ -116,7 +116,7 @@ export const adminDistributionRoute = new Hono()
   .get("/callback/:provider", async (c) => {
     const provider = providerParam(c);
     if (!provider) return c.json({ error: "Topilmadi" }, 404);
-    const result = await completeConnect(actorOf(c), provider, { code: c.req.query("code"), state: c.req.query("state"), error: c.req.query("error") });
+    const result = await completeConnect(actorOf(c), provider, { code: c.req.query("code"), state: c.req.query("state"), error: c.req.query("error"), errorReason: c.req.query("error_reason"), errorDescription: c.req.query("error_description") });
     if (result.ok) return c.redirect(webSettingsUrl({ dist: "connected", provider }), 302);
     return c.redirect(webSettingsUrl({ dist: "error", provider, reason: result.reason }), 302);
   })

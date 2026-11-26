@@ -69,6 +69,10 @@ describe("token line", () => {
     expect(tokenLine(account({ status: "reauth_required" }), now).tone).toBe("danger");
     expect(tokenLine(account({ tokenState: "expired", expiresAt: "2026-11-01T10:00:00Z" }), now).text).toContain("qayta ulash");
     expect(tokenLine(account({ canRefresh: true, expiresAt: "2026-11-26T12:00:00Z" }), now).text).toBe("Token o'zi yangilanadi");
+    // Instagram (Unified Login): muddatsiz token "N kun" deb ko'rsatilmaydi.
+    expect(tokenLine(account({ neverExpires: true, expiresAt: null, daysLeft: null }), now)).toEqual({ tone: "success", text: "Token muddatsiz (tugamaydi)" });
+    expect(tokenLine(account({ neverExpires: true, expiresAt: null, status: "reauth_required" }), now).tone).toBe("danger");
+    expect(tokenLine(account({ expiresAt: null }), now).text).toBe("Muddati noma'lum");
   });
 });
 

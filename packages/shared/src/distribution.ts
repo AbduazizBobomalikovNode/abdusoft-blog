@@ -61,6 +61,8 @@ export interface DistributionAccountDto {
   canRefresh: boolean;
   /** Saqlangan token deshifrlanmaydi (masalan `BETTER_AUTH_SECRET` almashtirilgan) — faqat qayta ulash yordam beradi. */
   secretUnreadable?: boolean;
+  /** Platforma muddat bermagan token (Instagram Unified Login) — "N kun qoldi" ko'rsatilmaydi, eslatma ham yo'q. */
+  neverExpires?: boolean;
 }
 
 export interface DistributionCredentialField {
@@ -93,7 +95,9 @@ export interface DistributionProviderSettingsDto {
   restrictions: string[];
   docs: string[];
   /** OAuth provider uchun client id/secret (maxfiy qiymat maskalangan). GitHub (token yopishtiriladi) uchun null. */
-  credentials: { clientId: DistributionCredentialField; clientSecret: DistributionCredentialField } | null;
+  credentials: { clientId: DistributionCredentialField; clientSecret: DistributionCredentialField; /** Faqat Instagram (maxfiy emas). */ configId?: DistributionCredentialField } | null;
+  /** Ixtiyoriy: maydon yorliqlari (Instagram: "Meta App ID" / "Meta App Secret" / "Config ID"). Yo'q bo'lsa UI standart yorliqlarni ishlatadi. */
+  credentialLabels?: { clientId: string; clientSecret: string; configId?: string };
   credentialsReady: boolean;
   /** Saqlangan Client Secret deshifrlanmaydi (maxfiy kalit almashtirilgan) — qaytadan kiriting. */
   credentialsUnreadable?: boolean;
@@ -109,7 +113,7 @@ export interface DistributionSettingsResponse {
   linkedinTermsNote: string;
 }
 
-export type DistributionCredentialsPatch = Partial<Record<Exclude<DistributionProviderId, "github">, { clientId?: string; clientSecret?: string }>>;
+export type DistributionCredentialsPatch = Partial<Record<Exclude<DistributionProviderId, "github">, { clientId?: string; clientSecret?: string; configId?: string }>>;
 
 export interface DistributionChannelDto {
   id: DistributionChannelId;

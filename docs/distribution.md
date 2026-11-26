@@ -52,7 +52,7 @@ Telegram'ni ham shu shartnomada ifodalash mumkin: `preflight` — mavjud `Channe
 | LinkedIn | Article post (sarlavha, tavsif, yuklangan muqova) yoki "matn + havola" | ha | OAuth (kod) | 60 kun, refresh YO'Q |
 | X | Matn + havola, ixtiyoriy 1 rasm | ha | OAuth PKCE | ~2 soat + refresh (rotatsiya) |
 | Threads | Matn + `link_attachment`; ixtiyoriy rasm | ha | OAuth (kod) | 60 kun, 24 soatdan keyin yangilanadi |
-| Instagram | 1 ta rasm + caption (havola bosilmaydi) | yo'q (API qo'llamaydi) | OAuth (kod) | 60 kun, 24 soatdan keyin yangilanadi |
+| Instagram | 1 ta rasm + caption (havola bosilmaydi) | yo'q (API qo'llamaydi) | Facebook Login for Business (Unified Login, `config_id`) | tizim foydalanuvchisi tokeni: standart konfiguratsiyada muddatsiz; yangilanmaydi |
 | GitHub | Profil README'dagi ikki marker orasini yangilaydi | — | yopishtirilgan token | siz tanlagan muddat |
 
 GitHub: faqat `<!-- BLOG-POSTS:START -->` va `<!-- BLOG-POSTS:END -->` orasi almashtiriladi. Ish Buffer darajasida: **markerlardan tashqaridagi baytlar o'zgarmaydi**; markerlar ichidagi blok faylning o'z qator oxiri (LF yoki CRLF) bilan yoziladi; ro'yxat o'zgarmagan bo'lsa PUT yuborilmaydi. Markerlar yo'q bo'lsa, faqat so'ralsa (`createMarkersAt`) yaratiladi — bunda markerli blok qo'shiladi (mavjud baytlar o'zgarmaydi, lekin fayl uzayadi). `latestPosts` majburiy (bo'sh bo'lmagan ro'yxat), havolalar tahlil qilingan `href`dan quriladi. `sha` ziddiyatida (409/422) fayl bir marta qayta o'qiladi.
@@ -81,11 +81,16 @@ Redirect URL uchun **vaqtinchalik yo'l**: `https://<API_ORIGIN>/distribution/cal
 3. O'zingizni Threads tester sifatida qo'shing (Advanced Access'siz faqat tester'lar).
 4. Redirect URL, Threads App ID/Secret.
 
-**Instagram**
-1. Akkaunt **Professional** (Business yoki Creator) bo'lishi shart.
-2. Meta ilovada "Instagram API with Instagram Login"; ruxsatlar `instagram_business_basic`, `instagram_business_content_publish`.
-3. O'zingizni ilova roliga/tester'ga qo'shing (Standard Access o'z akkauntingiz uchun yetarli; Advanced Access — App Review + Business Verification — boshqalar uchun).
-4. Rasm: **ommaviy HTTPS JPEG URL**; nisbat 4:5 – 1.91:1; ≤ 8 MB. Captionda havola bosilmaydi.
+**Instagram** (Instagram API with Unified Login — eski "Instagram Login" oqimi yangi ilovalarga berilmaydi)
+1. Akkaunt **Professional** (Creator yoki Business) bo'lishi shart; test foydalanuvchilar qo'llanmaydi.
+2. developers.facebook.com'da ilova yarating: u **biznes portfeliga (business portfolio)** tegishli bo'lsin; use case: **"Manage messaging & content on Instagram"**.
+3. Use case ichida **"API setup with Unified login"** → **Configure your app** → konfiguratsiya (configuration) yarating. Ruxsatlar: majburiy `instagram_basic` va `instagram_manage_messages`; post yuborish uchun `instagram_content_publish` (standart konfiguratsiyada bor). Konfiguratsiya **Config ID** beradi (maxfiy emas). Konfiguratsiyada "Instagram Login Compatible" yorlig'i bo'lishi kerak.
+4. Konfiguratsiyaga **Redirect URL**'ni kiriting: `https://api.abdusoft.uz/admin/distribution/callback/instagram` (panelda nusxalash tugmasi bor) va saqlang.
+5. **App roles** → akkauntingizni **Instagram Tester** sifatida taklif qiling va taklifni Instagram veb-saytida qabul qiling. Ilova Development rejimida qoladi (Standard Access app roli bor odamlar uchun yetarli; App Review kerak emas).
+6. Settings → Basic'dan **Meta App ID** va **Meta App Secret**'ni oling (Instagram'ga xos id/secret endi YO'Q). Panelda Instagram kartasiga uchalasini kiriting: Meta App ID, Meta App Secret, Config ID → "Kalitlarni saqlash" → "Ulash" (yoki env: `DISTRIBUTION_INSTAGRAM_CLIENT_ID` = App ID, `DISTRIBUTION_INSTAGRAM_CLIENT_SECRET` = App Secret, `DISTRIBUTION_INSTAGRAM_CONFIG_ID`).
+7. Loginda Instagram akkauntni tanlang. Birinchi muvaffaqiyatli ulanishdan keyin kartada akkaunt nomi va "Token muddatsiz" ko'rinadi.
+8. Rasm: **ommaviy HTTPS JPEG URL**; nisbat 4:5 – 1.91:1; ≤ 8 MB. Captionda havola bosilmaydi.
+9. **Webhook**: Meta hujjati webhook endpoint'ni "kerak" deb ro'yxatlaydi, lekin faqat xabar/izoh kabi hodisalarni QABUL QILISH uchun; ulanish va post yuborish uchun hujjatda webhook sharti yo'q. Bu integratsiya webhook qo'shmaydi (xabarlar — ko'lamdan tashqari).
 
 **GitHub**
 1. `github.com/<login>/<login>` (public) repo'sida README.md bo'lsin.
@@ -98,7 +103,8 @@ Redirect URL uchun **vaqtinchalik yo'l**: `https://<API_ORIGIN>/distribution/cal
 |---|---|---|
 | LinkedIn | 60 kun | yo'q — qayta ulash |
 | X | ~2 soat | refresh token bilan; har yangilashda YANGI refresh token saqlanishi shart |
-| Threads / Instagram | 60 kun | 24 soatdan keyin, token amal qilayotgan bo'lsa; muddati o'tgan token qayta ulanadi |
+| Threads | 60 kun | 24 soatdan keyin, token amal qilayotgan bo'lsa; muddati o'tgan token qayta ulanadi |
+| Instagram (Unified Login) | Business Integration System User tokeni. Muddat konfiguratsiyaga bog'liq: standart konfiguratsiyada "Never" (javobda `expires_in` yo'q → saqlanmaydi, kartada "Token muddatsiz", eslatma yo'q); `expires_in` kelsa (masalan 60 kunlik konfiguratsiya) muddat saqlanadi | dasturiy yangilash YO'Q (token boshqaruvi API'si `business_management` + `client_business_id` talab qiladi — qo'llanmaydi): muddatdan 10 kun oldin eslatma, tugagach qayta ulash. Mijoz ilovani portfeldan olib tashlasa yoki akkauntni boshqa portfelga ko'chirsa token ishlamay qoladi → qayta ulang |
 | GitHub | 1–366 kun yoki cheksiz | qo'lda |
 
 ### 6. Narx va limitlar
@@ -114,7 +120,7 @@ LinkedIn API Terms of Use §3.1 (oxirgi tahrir 2022-12-13) taqiqlar ro'yxatida: 
 - LinkedIn: Posts API (ms.date 2026-05-07, updated 2026-05-13, versiya `li-lms-2026-11` → `Linkedin-Version: 202611`); Images API (2026-06-19 / 2026-06-24); Assets API "Upload the Image" (2023-08-01 / 2026-01-28); little text format (2025-02-25 / 2025-10-16); 3-legged OAuth (2025-11-10 / 2026-05-15); OIDC userinfo (2022-12-14 / 2024-08-08); Share on LinkedIn (2021-02-05 / 2023-12-14) — `learn.microsoft.com/en-us/linkedin/...`
 - X: `docs.x.com` — oauth-2-0/user-access-token, posts/creation-of-a-post, posts/delete-post, users/get-my-user, media/upload-media, fundamentals/counting-characters, getting-started/pricing, fundamentals/response-codes-and-errors (sahifalarda sana ko'rsatilmagan).
 - Threads: `developers.facebook.com/docs/threads/*` (posts, get-started/long-lived-tokens, troubleshooting, delete-posts) — sana yo'q; **joriy hostlar `threads.com` / `graph.threads.com`**, API prefiksi `/v1.0/`.
-- Instagram: `developers.facebook.com/docs/instagram-platform/*` (business-login, content-publishing, ig-user/media v27.0, overview) — sana yo'q.
+- Instagram (Unified Login, 2026-11-26 da o'qilgan, sanasiz): `developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/{get-started, authentication, migration, permissions}`, `.../content-publishing`, `.../facebook-login/facebook-login-for-business`, `developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow`. O'qib bo'lmaganlar (skriptli sahifa, bo'sh qaytdi): `ig-user/media`, `ig-user/content_publishing_limit`, `ig-media` reference sahifalari.
 - GitHub: `docs.github.com/en/rest/repos/contents` va boshqalar, REST versiyasi `2026-03-10` (sana yo'q).
 
 ### 9. UNVERIFIED jadvali
@@ -137,9 +143,14 @@ LinkedIn API Terms of Use §3.1 (oxirgi tahrir 2022-12-13) taqiqlar ro'yxatida: 
 | 14 | Threads | Havola belgilari 500 limitga kiradimi | `threadsLength` |
 | 15 | Threads | Xato kodlari 32, 613, 100 (hujjatda yo'q); `reply_control` | `graph.ts` |
 | 16 | Threads | `permalink` maydoni; eski hostlar (`threads.net`) holati | `publish` |
-| 17 | Instagram | `GET /me?fields=user_id,username` maydonlari | `exchangeCode` |
+| 17 | Instagram | `assigned_instagram_accounts` javobining `data[]` shakli (hujjat faqat so'rovni ko'rsatadi); bir nechta akkaunt bo'lsa birinchisi olinadi; `client_business_id` javob maydoni | `exchangeCode` |
 | 18 | Instagram | `permalink` maydoni; havolalar bosilmasligining rasmiy tasdig'i | `publish` |
 | 19 | Instagram | 100 vs 50 post/kun ziddiyati; caption sanash birligi; xato kodlari | `INSTAGRAM_POSTS_PER_DAY` |
+| 22 | Instagram | Dialog `state`'ni `config_id` bilan ham qaytaradimi (umumiy Facebook Login hujjati: ha; Unified Login sahifasi aytmaydi) | `buildAuthorizationUrl` |
+| 23 | Instagram | Kod almashtirishda `redirect_uri`: Unified Login sahifasi ro'yxatda ko'rsatmaydi, qo'lda login hujjati "majburiy" deydi — standart YUBORILADI (`exchangeRedirectUri`) | `exchangeCode` |
+| 24 | Instagram | Bekor qilish: `error=access_denied`, `error_reason=user_denied` (qo'lda login hujjati); noto'g'ri `config_id` da Meta xatosi qanday qaytishi (matnda "config" bo'lsa `config_invalid`) | `completeConnect`, `withConfigReason` |
+| 25 | Instagram | Token boshqaruvi API'si (yangilash/uzaytirish) ishlatilmaydi; 60 kunlik konfiguratsiyada token tugagach qayta ulash | `INSTAGRAM_TOKEN_POLICY` |
+| 26 | Instagram | Caption limiti (2200/30/20), rasm hajmi/nisbati, `permalink`, o'chirishning yo'qligi — yangi hujjatda aytilmagan (eski reference'dan); `content_publishing_limit` endpoint'i mavjud, lekin ishlatilmaydi | `INSTAGRAM_CAPTION_MAX`, `publish` |
 | 20 | GitHub | `github-authentication-token-expiration` sarlavhasi; xato tanasi `{message}` shakli | `parseExpiry` |
 | 21 | GitHub | sha ziddiyatida 409 yoki 422 (ikkalasi ham qayta o'qishni boshlaydi); base64 `\n` | `publish` |
 | 22 | GitHub | `GET /user` fine-grained token uchun; Workflows ruxsati kerak emasligi | `connectWithToken` |
@@ -182,7 +193,7 @@ Aniq URL Sozlamalar → Tarqatish yorlig'ida nusxalash tugmasi bilan ko'rinadi. 
 
 **Rasm:** standart — muqova, bo'lmasa saytning o'zi yaratgan OG rasmi (`<WEB_ORIGIN>/<slug>/opengraph-image-<hash>`, faqat blogning o'z veb-originidan). Mavjud rasm quvuri bilan JPEG, uzun tomon ≤1440 px, nisbat 4:5–1.91:1 (markazdan kesiladi). LinkedIn/X uchun baytlar; Threads/Instagram uchun blogning o'z media saqlashidagi (R2 yoki `API_ORIGIN/uploads`) OMMAVIY HTTPS JPEG URL — post bo'yicha keshlanadi. Rasm tayyorlanmasa tekshiruvda ko'rinadi (Instagram/LinkedIn maqola kartasi uchun xato, qolganlarida ogohlantirish).
 
-**Token xizmati (har daqiqalik tick):** X va Threads/Instagram tokenlari muddatidan oldin yangilanadi (yangi akkaunt yuborishdan OLDIN bazaga yoziladi; `refresh_ambiguous` — eski tokenlar saqlanadi, keyingi urinish ham xato bersa "qayta ulash kerak"). LinkedIn (60 kun) va GitHub tokenlari yangilanmaydi: muddatdan 10 (GitHub 14) kun oldin boshlab admin Telegram chatiga kuniga ko'pi bilan BITTA eslatma, muddat tugaganda bitta "tugadi" xabari va akkaunt "qayta ulash kerak" holatiga o'tadi. Telegram sozlanmagan bo'lsa eslatma yetkazib bo'lmaydi: bu jurnalga yoziladi (`distribution.reminder_undelivered`) va ertasi kuni qayta uriniladi (har daqiqada emas).
+**Token xizmati (har daqiqalik tick):** X va Threads tokenlari muddatidan oldin yangilanadi (yangi akkaunt yuborishdan OLDIN bazaga yoziladi; `refresh_ambiguous` — eski tokenlar saqlanadi, keyingi urinish ham xato bersa "qayta ulash kerak"). LinkedIn (60 kun), Instagram (faqat muddati bor bo'lsa; muddatsiz token eslatma ham, yangilash ham talab qilmaydi) va GitHub tokenlari yangilanmaydi: muddatdan 10 (GitHub 14) kun oldin boshlab admin Telegram chatiga kuniga ko'pi bilan BITTA eslatma, muddat tugaganda bitta "tugadi" xabari va akkaunt "qayta ulash kerak" holatiga o'tadi. Telegram sozlanmagan bo'lsa eslatma yetkazib bo'lmaydi: bu jurnalga yoziladi (`distribution.reminder_undelivered`) va ertasi kuni qayta uriniladi (har daqiqada emas).
 
 **`BETTER_AUTH_SECRET` almashtirilsa:** tokenlar va Client Secret shu kalitdan olingan kalit bilan shifrlangan. Kalit almashgach ular deshifrlanmaydi. Tizim buni **"qayta ulash kerak"** deb ko'rsatadi ("faol" emas): Sozlamalar'da akkaunt "qayta ulash kerak", kanal "tayyor emas" (sabab: "Saqlangan token o'qib bo'lmadi (maxfiy kalit o'zgargan) — qayta ulang"), tekshiruvda xato, yuborish/olib tashlash platformaga **hech qanday so'rovsiz** rad etiladi (bo'sh bearer token hech qachon yuborilmaydi), token xizmati yangilashga urinmaydi va egasiga BITTA Telegram xabari yuboradi. Saqlangan Client Secret o'qilmasa, ilova sozlanmagan hisoblanadi (X, sirsiz ham ishlay oladigan public client bo'lsa-da) va Sozlamalar'da bu ko'rinadi. Tuzatish: Client Secret'ni qaytadan kiriting va akkauntni qayta ulang. (Kalitni almashtirmaslik eng yaxshisi; almashtirsangiz, barcha ulangan akkauntlar qayta ulanadi.)
 
@@ -200,7 +211,7 @@ Aniq URL Sozlamalar → Tarqatish yorlig'ida nusxalash tugmasi bilan ko'rinadi. 
 
 **Marshrutlar (admin, `/admin/distribution/...`):** `GET|PUT /settings`, `POST /accounts/:provider/connect`, `POST /accounts/github/token`, `DELETE /accounts/:provider`, `GET /callback/:provider`, `GET /channels`, `GET /posts/:postId`, `POST /posts/:postId/:provider/preview`, `PUT .../draft`, `POST .../send`, `POST .../schedule`, `GET /items/:id`, `POST /items/:id/{cancel,retry,resolve,remove}`. Hammasi faqat admin (xodim 403). Hech bir javob/jurnal/vositada token yoki client secret yo'q.
 
-**Hali haqiqiy akkaunt bilan TEKSHIRILMAGAN** (birinchi ulanishdan keyin tekshiriladi): 9-bo'limdagi barcha `UNVERIFIED` bandlar; LinkedIn `/rest/posts` limiti va §3.1 talqini; X refresh token rotatsiyasi va `expires_in`; Threads/Instagram `permalink`/`user_id` maydonlari va konteyner holati; GitHub token muddati sarlavhasi; Instagram/Threads Meta ilova tasdig'i (tester roli); OG rasm marshrut hash'i prod'da; Telegram eslatma matnlari.
+**Hali haqiqiy akkaunt bilan TEKSHIRILMAGAN** (birinchi ulanishdan keyin tekshiriladi): 9-bo'limdagi barcha `UNVERIFIED` bandlar; LinkedIn `/rest/posts` limiti va §3.1 talqini; X refresh token rotatsiyasi va `expires_in`; Threads `permalink`/`user_id` va Instagram konteyner holati/`permalink`, Unified Login birinchi ulanishi (22–26-bandlar); GitHub token muddati sarlavhasi; Instagram/Threads Meta ilova tasdig'i (tester roli, Instagram Tester taklifi); OG rasm marshrut hash'i prod'da; Telegram eslatma matnlari.
 
 ### 11. Konnektor (Claude) ruxsati: `social:post`
 
@@ -230,7 +241,7 @@ Errors are a small taxonomy: `auth_expired`, `permission_missing`, `rate_limited
 
 ### 3. Per channel
 
-LinkedIn: article post with an uploaded thumbnail (Images API) or text + link; delete; 60-day token, no programmatic refresh, reconnect every 60 days (reminder 10 days before, `expiring` at 7). X: text + link, optional single image (`POST /2/media/upload`), delete, refresh-token rotation (always store the new refresh token), URL posts cost far more. Threads: container then publish with `link_attachment`, optional image, delete, 60-day token refreshable after 24 h. Instagram: single public HTTPS JPEG plus caption, container status polling with a bounded wait, links are not clickable, no delete via API. GitHub: replace only the block between two HTML-comment markers (byte-exact elsewhere), re-read once on a sha conflict, markers created only when asked.
+LinkedIn: article post with an uploaded thumbnail (Images API) or text + link; delete; 60-day token, no programmatic refresh, reconnect every 60 days (reminder 10 days before, `expiring` at 7). X: text + link, optional single image (`POST /2/media/upload`), delete, refresh-token rotation (always store the new refresh token), URL posts cost far more. Threads: container then publish with `link_attachment`, optional image, delete, 60-day token refreshable after 24 h. Instagram (Unified Login: Facebook Login for Business dialog with `config_id`, `graph.facebook.com`, requests against the Instagram account id, system-user token): single public HTTPS JPEG plus caption, container status polling with a bounded wait, links are not clickable, no delete via API. GitHub: replace only the block between two HTML-comment markers (byte-exact elsewhere), re-read once on a sha conflict, markers created only when asked.
 
 Hardening notes: a 5xx, 408, timeout or body-read timeout on a create call is always `outcome_unknown` and takes precedence over any provider-specific mapping (e.g. a Meta `{error:{code:2}}` returned with HTTP 500). Multi-step failures carry `step` and `partial` (`imageUrn`, `mediaId`, `containerId`) and `PublishInput.resume` lets the caller continue without creating a second image/container. X refresh returns `{account, refreshTokenRotated}`; persist the returned account BEFORE using the new access token; a timeout/5xx during refresh is `refresh_ambiguous` (the token may already have rotated; if the next refresh fails, reconnect). `remove` throws `not_supported` where the platform cannot delete (Instagram, GitHub). All URLs are validated inside `publish` (https, no userinfo/port, no private/loopback/link-local hosts, no whitespace or newlines). LinkedIn hashtags are sent as plain `#Tag`; other reserved characters are escaped (live behaviour UNVERIFIED). GitHub's README block is replaced at the byte level: bytes outside the markers are unchanged, the block uses the file's own line endings, and `latestPosts` is required.
 
@@ -238,15 +249,25 @@ Limits: LinkedIn 150 requests/member/day (UTC; UNVERIFIED for `/rest/posts`); Th
 
 ### 4. Owner checklist
 
-See the Uzbek section 4 for the step-by-step list per platform (developer app, products/permissions, redirect URL placeholder `https://<API_ORIGIN>/distribution/callback/<provider>` to be confirmed by the integration PR, review/payment needs, Instagram professional account, GitHub fine-grained token with Contents: write on the profile repo only).
+See the Uzbek section 4 for the step-by-step list per platform (developer app, products/permissions, redirect URL placeholder `https://<API_ORIGIN>/distribution/callback/<provider>` to be confirmed by the integration PR, review/payment needs, Instagram: Meta app in a business portfolio with the "Manage messaging & content on Instagram" use case, "API setup with Unified login" configuration (gives the Config ID; permissions `instagram_basic`, `instagram_manage_messages`, `instagram_content_publish`), Redirect URL `https://api.abdusoft.uz/admin/distribution/callback/instagram`, Instagram Tester invitation accepted, then enter Meta App ID / Meta App Secret / Config ID in the card (or `DISTRIBUTION_INSTAGRAM_CLIENT_ID` / `_CLIENT_SECRET` / `_CONFIG_ID`); GitHub fine-grained token with Contents: write on the profile repo only).
 
 ### 5. Terms of service
 
 LinkedIn API Terms of Use §3.1 (last revised 2022-12-13) lists: "Use the Content or the APIs to automate posting on the LinkedIn Services." Whether posting to your own profile on your explicit instruction falls under it is not spelled out (UNVERIFIED). The integration will only post when the owner or their assistant explicitly triggers it, never automatically on publish.
 
+### 5b. Token lifetimes
+
+| Channel | Lifetime | Renewal |
+|---|---|---|
+| LinkedIn | 60 days | none — reconnect |
+| X | ~2 hours | rotating refresh token |
+| Threads | 60 days | refresh after 24 h |
+| Instagram (Unified Login) | Business Integration System User token; depends on the configuration — default "Never": no `expires_in` in the response, so nothing is stored, the card says "Token muddatsiz" and no reminder is sent. If `expires_in` is present, the expiry is stored | none (the token management API needs `business_management` and is not used): reminder 10 days before, reconnect after expiry; also reconnect if the client removes the app from the portfolio or moves the account |
+| GitHub | 1-366 days or none | manual |
+
 ### 6. UNVERIFIED items
 
-See the table in the Uzbek section 9; each item is also tagged `UNVERIFIED` next to the relevant constant in code.
+See the table in the Uzbek section 9 (Instagram Unified Login items 17, 22-26: `state` echo with `config_id`, `redirect_uri` at code exchange, cancel/wrong-config error shape, no refresh, publishing limits/permalink not in the new docs); each item is also tagged `UNVERIFIED` next to the relevant constant in code.
 
 ### 7. Integration (admin panel, scheduler, tools) — `DISTRIBUTION_ENABLED`
 
@@ -270,7 +291,7 @@ Everything below is behind `DISTRIBUTION_ENABLED=true` (default off). Off: no ne
 
 **Images:** cover, else the site's generated OG image (own web origin only), converted with the existing pipeline (JPEG, long side ≤1440 px, aspect 4:5-1.91:1). Bytes for LinkedIn/X; a public HTTPS JPEG URL on the blog's own media storage for Threads/Instagram, cached per post.
 
-**Token upkeep:** X/Threads/Instagram tokens are refreshed ahead of expiry (the new account is persisted BEFORE use; `refresh_ambiguous` keeps the old tokens and requires reconnecting if the next attempt also fails). LinkedIn (60 days) and GitHub tokens cannot be refreshed: at most one Telegram reminder per day from 10 (GitHub 14) days before expiry, one message on expiry. When Telegram is not configured the reminder cannot be delivered: that is recorded in the audit log (`distribution.reminder_undelivered`) and retried the next day, not every minute.
+**Token upkeep:** X/Threads tokens are refreshed ahead of expiry (the new account is persisted BEFORE use; `refresh_ambiguous` keeps the old tokens and requires reconnecting if the next attempt also fails). LinkedIn (60 days), Instagram (only when the platform gave an expiry; a token without expiry needs neither refresh nor reminders) and GitHub tokens cannot be refreshed: at most one Telegram reminder per day from 10 (GitHub 14) days before expiry, one message on expiry. When Telegram is not configured the reminder cannot be delivered: that is recorded in the audit log (`distribution.reminder_undelivered`) and retried the next day, not every minute.
 
 **After `BETTER_AUTH_SECRET` changes:** tokens and client secrets are encrypted with a key derived from it and no longer decrypt. They are shown as **reconnect required**, never as active: the account says so in Settings, the channel is not ready (reason "the stored token could not be read (secret key changed) - reconnect"), preflight errors, send/remove are refused with **no outbound request** (an empty bearer token is never sent), token upkeep makes no refresh attempt and sends ONE owner notification. An unreadable stored client secret marks the app as not configured (also for X, which could otherwise run as a public client). Fix: re-enter the client secret and reconnect the account.
 

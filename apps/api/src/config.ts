@@ -234,6 +234,10 @@ const EnvSchema = z.object({
   DISTRIBUTION_THREADS_CLIENT_SECRET: z.string().optional().default(""),
   DISTRIBUTION_INSTAGRAM_CLIENT_ID: z.string().optional().default(""),
   DISTRIBUTION_INSTAGRAM_CLIENT_SECRET: z.string().optional().default(""),
+  // Instagram (Unified Login): Meta ilovasining App ID/Secret'i yuqoridagi CLIENT_ID/CLIENT_SECRET'ga yoziladi; Config ID maxfiy emas.
+  DISTRIBUTION_INSTAGRAM_CONFIG_ID: z.string().optional().default(""),
+  // Noto'g'ri/bo'sh qiymat provider ichida `v27.0` ga qaytadi (yuklashni to'xtatmaydi).
+  DISTRIBUTION_INSTAGRAM_GRAPH_VERSION: z.string().optional().default("v27.0"),
   // GitHub profil README bloki: nechta so'nggi maqola yoziladi.
   DISTRIBUTION_GITHUB_README_POSTS: intEnv(5, 1),
   NODE_ENV: z
