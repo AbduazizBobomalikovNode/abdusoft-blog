@@ -162,8 +162,26 @@ const EnvSchema = z.object({
   MCP_WRITE_LIMIT_UPLOADS_PER_HOUR: intEnv(30, 0),
   MCP_WRITE_LIMIT_PUBLISHES_PER_DAY: intEnv(10, 0),
   MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY: intEnv(10, 0),
+  MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY: intEnv(5, 0),
   MCP_WRITE_LIMIT_MODERATION_PER_HOUR: intEnv(100, 0),
   MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY: intEnv(30, 0),
+  // --- Ijtimoiy tarqatish (LinkedIn, X, Threads, Instagram, GitHub README) — default o'chiq: o'chiq bo'lsa yangi marshrut, scheduler ishi va UI yo'q ---
+  DISTRIBUTION_ENABLED: z
+    .string()
+    .optional()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  // Platforma ilovalari (client id / secret) — env > admin panel (shifrlangan). Bo'sh bo'lsa panelda kiritiladi.
+  DISTRIBUTION_LINKEDIN_CLIENT_ID: z.string().optional().default(""),
+  DISTRIBUTION_LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),
+  DISTRIBUTION_X_CLIENT_ID: z.string().optional().default(""),
+  DISTRIBUTION_X_CLIENT_SECRET: z.string().optional().default(""),
+  DISTRIBUTION_THREADS_CLIENT_ID: z.string().optional().default(""),
+  DISTRIBUTION_THREADS_CLIENT_SECRET: z.string().optional().default(""),
+  DISTRIBUTION_INSTAGRAM_CLIENT_ID: z.string().optional().default(""),
+  DISTRIBUTION_INSTAGRAM_CLIENT_SECRET: z.string().optional().default(""),
+  // GitHub profil README bloki: nechta so'nggi maqola yoziladi.
+  DISTRIBUTION_GITHUB_README_POSTS: intEnv(5, 1),
   NODE_ENV: z
     .union([z.literal("development"), z.literal("production"), z.literal("test")])
     .default("development"),

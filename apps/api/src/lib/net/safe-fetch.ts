@@ -79,6 +79,8 @@ export interface SafeFetchOptions {
   maxRedirects?: number;
   /** `true` (standart) — faqat `image/*` (SVG'dan tashqari) qabul qilinadi. */
   imageOnly?: boolean;
+  /** Ixtiyoriy: har bir yo'naltirishdan keyingi manzil shu qoidadan o'tishi shart (o'tmasa `blocked`). Berilmasa — avvalgidek. */
+  allowRedirect?: (url: URL) => boolean;
 }
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
@@ -107,7 +109,7 @@ export function createSafeFetcher(deps: SafeFetchDeps = {}) {
     );
   };
 
-  async function once(url: URL, opts: Required<SafeFetchOptions>, deadline: number): Promise<{ redirect: string | null; buffer: Buffer | null; headers: http.IncomingHttpHeaders }> {
+  async function once(url: URL, opts: Required<Omit<SafeFetchOptions, "allowRedirect">>, deadline: number): Promise<{ redirect: string | null; buffer: Buffer | null; headers: http.IncomingHttpHeaders }> {
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new SafeFetchError("Rasm manzili faqat http/https bo'lishi mumkin", "blocked");
     if (url.username || url.password) throw new SafeFetchError("Rasm manzilida login/parol bo'lishi mumkin emas", "blocked");
     const host = url.hostname.replace(/^\[|\]$/g, "");
@@ -186,7 +188,8 @@ export function createSafeFetcher(deps: SafeFetchDeps = {}) {
   }
 
   return async function safeFetchBytes(rawUrl: string, options: SafeFetchOptions): Promise<{ buffer: Buffer; validator: string | null }> {
-    const opts: Required<SafeFetchOptions> = { timeoutMs: 10_000, maxRedirects: 3, imageOnly: true, ...options };
+    const { allowRedirect, ...rest } = options;
+    const opts: Required<Omit<SafeFetchOptions, "allowRedirect">> = { timeoutMs: 10_000, maxRedirects: 3, imageOnly: true, ...rest };
     const deadline = Date.now() + opts.timeoutMs;
     let url: URL;
     try {
@@ -205,6 +208,7 @@ export function createSafeFetcher(deps: SafeFetchDeps = {}) {
       } catch {
         throw new SafeFetchError("Yo'naltirish manzili noto'g'ri", "blocked");
       }
+      if (allowRedirect && !allowRedirect(url)) throw new SafeFetchError("Yo'naltirish ruxsat etilmagan manzilga olib boradi", "blocked");
     }
     throw new SafeFetchError("Juda ko'p yo'naltirish", "unreachable");
   };
