@@ -35,23 +35,30 @@ const answer = (c: Context, status: number, code: string) => c.json({ code }, st
  */
 export const runnerVideoRoute = new Hono();
 
-// Flood guard before any work: one IP may not hammer the endpoints (a render makes a few dozen requests).
-runnerVideoRoute.use("*", async (c, next) => {
-  const r = consumeRateLimit(`runner-video-ip:${clientIp(c)}`, 1200, 60_000);
+/** Pre-auth budget: FAILED authentications per address per minute. Valid-token traffic is never counted here, so a flood of bad tokens from
+ * the runner's own address (or from behind a proxy that shares one address) cannot starve the real runner. */
+export const FAILED_AUTH_PER_MINUTE = 60;
+/** Post-auth budget per job id per minute: progress every ~3 s (20) plus the part uploads, with generous headroom. */
+export const AUTHENTICATED_PER_JOB_PER_MINUTE = 600;
+
+/** One failed attempt: 401 within the budget, 429 once the address used it up. Nothing in the request body is read. */
+function rejectUnauthenticated(c: Context, status: 401 | 404, code: string) {
+  const r = consumeRateLimit(`runner-video-authfail:${clientIp(c)}`, FAILED_AUTH_PER_MINUTE, 60_000);
   if (!r.allowed) {
     c.header("Retry-After", String(r.retryAfterSeconds));
     return answer(c, 429, "rate_limited");
   }
-  return next();
-});
+  return answer(c, status, code);
+}
 
 async function authenticate(c: Context, next: Next) {
   const id = c.req.param("id") ?? "";
   const header = c.req.header("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
   // One answer for "bad token", "not configured" and "malformed id": nothing is revealed to an unauthenticated caller.
-  if (!UUID.test(id) || !verifyRunnerToken(id, token)) return answer(c, 401, "unauthorized");
-  const r = consumeRateLimit(`runner-video-job:${id}`, 600, 60_000);
+  if (!UUID.test(id) || !verifyRunnerToken(id, token)) return rejectUnauthenticated(c, 401, "unauthorized");
+  c.set("runnerAuthenticated" as never, true as never);
+  const r = consumeRateLimit(`runner-video-job:${id}`, AUTHENTICATED_PER_JOB_PER_MINUTE, 60_000);
   if (!r.allowed) {
     c.header("Retry-After", String(r.retryAfterSeconds));
     return answer(c, 429, "rate_limited");
@@ -144,6 +151,9 @@ runnerVideoRoute.post("/jobs/:id/files/:name/complete", jsonBody, async (c) => {
 runnerVideoRoute.post("/jobs/:id/complete", jsonBody, async (c) => c.json(await complete(c.req.param("id"), await readJson(c, CompleteBody))));
 
 runnerVideoRoute.post("/jobs/:id/fail", jsonBody, async (c) => c.json(await failFromRunner(c.req.param("id"), await readJson(c, FailBody))));
+
+// Anything else under /runner/video (unknown paths, wrong method before authentication) is an unauthenticated probe: it counts as a failed attempt.
+runnerVideoRoute.all("*", (c) => (c.get("runnerAuthenticated" as never) ? answer(c, 404, "not_found") : rejectUnauthenticated(c, 404, "not_found")));
 
 /** Config sanity at mount time is the caller's job (`app.ts`); this only documents the switch. */
 export const runnerVideoEnabled = (): boolean => config.VIDEO_ENABLED && config.VIDEO_RUNNER === "github";
