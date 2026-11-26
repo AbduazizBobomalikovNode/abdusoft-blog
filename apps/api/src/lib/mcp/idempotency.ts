@@ -29,6 +29,8 @@ export async function withIdempotency(
   key: string | undefined,
   args: Record<string, unknown>,
   run: () => Promise<ToolOutput>,
+  /** Saqlanadigan javobni tozalaydi (masalan maxfiy havola bazaga yozilmasin); takroriy chaqiruv shu tozalangan nusxani qaytaradi. */
+  redactForStorage?: (data: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<ToolOutput> {
   if (!key) return run();
   const { idempotency_key: _ignored, ...rest } = args;
@@ -67,7 +69,7 @@ export async function withIdempotency(
     const output = await run();
     await db
       .update(mcpIdempotency)
-      .set({ response: output.data })
+      .set({ response: redactForStorage ? redactForStorage(output.data) : output.data })
       .where(and(eq(mcpIdempotency.clientId, ctx.client.id), eq(mcpIdempotency.key, key)));
     return output;
   } catch (error) {

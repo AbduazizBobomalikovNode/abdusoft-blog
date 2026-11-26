@@ -25,7 +25,8 @@ beforeAll(async () => {
 
 describe("distribution flag off: the social permission does not exist anywhere", () => {
   it("discovery, scope descriptions and the 401 challenge list exactly the pre-distribution permissions", async () => {
-    const expected = ["blog:read", "posts:write", "media:upload", "posts:publish", "channels:send", "comments:moderate", "posts:delete", "offline_access"];
+    // INTENTIONAL CHANGE (connector coverage PR): the hard-coded write-on list now also holds its three new permissions; social:post is still absent.
+    const expected = ["blog:read", "posts:write", "media:upload", "channels:prepare", "posts:publish", "channels:send", "comments:moderate", "staff:manage", "settings:manage", "posts:delete", "offline_access"];
     const meta = (await (await app.request(`${API}/.well-known/oauth-authorization-server/api/auth`)).json()) as Json;
     expect([...meta.scopes_supported].sort()).toEqual([...expected].sort());
     expect(Object.keys(meta.scope_descriptions).sort()).toEqual([...expected].sort());

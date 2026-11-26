@@ -86,7 +86,7 @@ describe("registry with the write switch on", () => {
   it("lists the read tools plus the write tools; purge only behind its own switch", async () => {
     const tools = (await mcpCall(app, token, "tools/list")).body.result.tools as Json[];
     const names = tools.map((t) => t.name);
-    expect(names.length).toBe(12 + 25);
+    expect(names.length).toBe(12 + 25 + 25); // 25 more: channel versions/plans, bans, staff, settings, stats (full admin coverage)
     expect(names).not.toContain("purge_post");
     expect(names).toEqual(expect.arrayContaining(["create_post_draft", "update_post", "publish_post", "send_to_channel", "upload_image", "ban_comment_author", "delete_tag"]));
     for (const t of tools) {

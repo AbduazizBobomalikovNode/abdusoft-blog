@@ -11,7 +11,8 @@ describe("write scopes are grantable only behind the switch", () => {
   it("switch on grants every pre-distribution scope (identical to before social posting existed), still dropping unknown ones", () => {
     // INTENTIONAL CHANGE of this test: `social:post` is defined but is NOT part of the write-only grant (needs the distribution flag too).
     expect([...grantableScopeIds(true)]).toEqual(MCP_SCOPE_IDS.filter((id) => id !== "social:post"));
-    expect([...grantableScopeIds(true)]).toEqual(["blog:read", "posts:write", "media:upload", "posts:publish", "channels:send", "comments:moderate", "posts:delete"]);
+    expect([...grantableScopeIds(true)]).toEqual(["blog:read", "posts:write", "media:upload", "channels:prepare", "posts:publish", "channels:send", "comments:moderate", "staff:manage", "settings:manage", "posts:delete"]);
+    // INTENTIONAL CHANGE (connector coverage PR): the list now also holds its three new permissions; `social:post` is still excluded.
     expect(clampToGrantable(["posts:write", "weird:scope", "posts:delete", "offline_access"], true)).toEqual(["posts:write", "posts:delete", "offline_access"]);
   });
 });

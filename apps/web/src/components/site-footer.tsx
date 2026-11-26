@@ -1,18 +1,13 @@
 import { LogoGlyph } from "@/components/brand/logo";
 import { getSite } from "@/lib/api";
+import { buildFooterLinks } from "@/lib/footer-links";
 import { site } from "@/lib/site";
 
 export async function SiteFooter() {
   const year = new Date().getFullYear();
   const data = await getSite();
 
-  const telegramUrl = data?.social.telegram || site.telegramUrl;
-  const githubUrl = data?.social.github || site.githubUrl;
-
-  const links = [
-    telegramUrl ? { href: telegramUrl, label: "Telegram" } : null,
-    githubUrl ? { href: githubUrl, label: "GitHub" } : null,
-  ].filter((link) => link !== null);
+  const links = buildFooterLinks(data?.social, site);
 
   return (
     <footer className="border-t border-border">
@@ -23,17 +18,21 @@ export async function SiteFooter() {
         </span>
         {links.length > 0 ? (
           <div className="flex gap-3">
-            {links.map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-foreground"
-              >
-                {link.label}
-              </a>
-            ))}
+            {links.map((link) =>
+              link.href ? (
+                <a
+                  key={link.label}
+                  href={link.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground"
+                >
+                  {link.label}
+                </a>
+              ) : (
+                <span key={link.label}>{link.label}</span>
+              ),
+            )}
           </div>
         ) : null}
       </div>

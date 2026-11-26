@@ -2,6 +2,7 @@ import {
   MCP_OFFLINE_SCOPE,
   MCP_REQUIRED_SCOPE_ID,
   MCP_SCOPES,
+  MCP_SENSITIVE_SCOPE_IDS,
   groupRequestedScopes,
   type McpConsentInfo,
   type McpScopeGroup,
@@ -160,6 +161,18 @@ export function hasDangerSelected(selected: readonly string[]): boolean {
   return selected.some((id) => groupOf(id) === "danger");
 }
 
+/**
+ * Tanlanganlar orasidagi HISOB/SAYT BOSHQARUVI ruxsatlari (xodimlar, sayt sozlamalari) — alohida ogohlantirish uchun.
+ * Bo'sh massiv — yo'q. Tartib `MCP_SCOPES` tartibida.
+ */
+export function sensitiveSelected(selected: readonly string[]): string[] {
+  return MCP_SCOPES.filter((s) => MCP_SENSITIVE_SCOPE_IDS.includes(s.id) && selected.includes(s.id)).map((s) => s.id);
+}
+
+export function hasSensitiveSelected(selected: readonly string[]): boolean {
+  return sensitiveSelected(selected).length > 0;
+}
+
 /** Har bir guruh uchun: so'ralgan va tanlangan ruxsatlar soni. */
 export function selectionSummary(selected: readonly string[], requested: readonly string[]): Record<McpScopeGroup, { selected: number; total: number }> {
   const out: Record<McpScopeGroup, { selected: number; total: number }> = {
@@ -181,10 +194,13 @@ export function describeConnectionPermissions(scopes: readonly string[]): {
   groups: Array<{ group: McpScopeGroup; labels: string[] }>;
   readOnly: boolean;
   hasDanger: boolean;
+  /** Xodimlar/sayt sozlamalarini boshqarish ruxsati berilganmi. */
+  hasSensitive: boolean;
   offline: boolean;
 } {
   const { groups, offline } = groupRequestedScopes(scopes);
   return {
+    hasSensitive: hasSensitiveSelected(scopes),
     groups: groups.map((g) => ({ group: g.group, labels: g.scopes.map((s) => s.label) })),
     readOnly: groups.every((g) => g.group === "read"),
     hasDanger: groups.some((g) => g.group === "danger"),

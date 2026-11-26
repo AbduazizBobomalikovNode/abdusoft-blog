@@ -24,6 +24,8 @@ export interface McpScopeInfo {
   description: string;
   /** Metadata (`scope_descriptions`) va hujjatlar uchun inglizcha tavsif. */
   english: string;
+  /** `true` — hisob/sayt boshqaruvi ruxsati (xodimlar, sozlamalar): rozilik sahifasida alohida ogohlantirish chiqadi. */
+  sensitive?: boolean;
 }
 
 /**
@@ -56,6 +58,13 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     english: "Upload images to the media library and edit their alt text.",
   },
   {
+    id: "channels:prepare",
+    group: "write",
+    label: "Telegram kanal versiyalarini tayyorlash",
+    description: "Kanal uchun maxsus matn versiyalarini yaratish, tahrirlash va o'chirish hamda postda qaysi versiya yuborilishini belgilash. Hech narsa kanalga hozir yuborilmaydi; lekin rejalashtirilgan kanalga yuborish ishlatadigan versiya yoki belgini o'zgartirish uchun \"Kanalga yuborish\" ruxsati ham kerak.",
+    english: "Prepare Telegram channel versions: create, edit and delete custom versions and mark which version a post uses. Nothing is sent to the channel now; changing a version or mark that a scheduled channel send relies on also needs the channel-sending permission.",
+  },
+  {
     id: "posts:publish",
     group: "publish",
     label: "Chop etish va rejalashtirish",
@@ -84,6 +93,22 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     label: "Izohlarni boshqarish",
     description: "Izohlarni tasdiqlash, yashirish, spam deb belgilash, o'chirish, admin sifatida javob yozish va mualliflarni bloklash.",
     english: "Approve, hide, mark as spam, delete and reply to comments (as the admin), and ban commenters.",
+  },
+  {
+    id: "staff:manage",
+    group: "danger",
+    label: "Xodimlarni boshqarish",
+    description: "Xodimlar va takliflar ro'yxatini ko'rish, taklif havolasi yaratish va bekor qilish, xodimni olib tashlash. Taklif havolasi parol kabi maxfiy: kim ochsa, xodim bo'ladi.",
+    english: "List staff members and pending invites, create and revoke staff invites (an invite link is a credential: whoever opens it becomes staff) and remove staff members.",
+    sensitive: true,
+  },
+  {
+    id: "settings:manage",
+    group: "danger",
+    label: "Sayt sozlamalarini boshqarish",
+    description: "Sayt nomi/tavsifi, ijtimoiy havolalar, standart post sozlamalari va \"Haqida\" sahifasini o'zgartirish; integratsiyalar holatini (sozlangan yoki yo'q) ko'rish. Hech qanday kalit yoki parol ko'rinmaydi va o'zgartirilmaydi.",
+    english: "Change the site name and description, social links, default post settings and the About page, and see whether each integration is configured. No key, token or password is ever shown or changed.",
+    sensitive: true,
   },
   {
     id: "posts:delete",
@@ -127,6 +152,9 @@ export function clampToGrantable(scopes: readonly string[], writeEnabled = false
   const allowed = grantableOAuthScopes(writeEnabled, distributionEnabled);
   return [...new Set(scopes.filter((scope) => allowed.includes(scope)))];
 }
+
+/** Hisob/sayt boshqaruvi ruxsatlari (`sensitive`): rozilik sahifasi va "Ulangan ilovalar" ularni alohida ajratadi. */
+export const MCP_SENSITIVE_SCOPE_IDS: readonly string[] = MCP_SCOPES.filter((scope) => scope.sensitive).map((scope) => scope.id);
 
 export function findMcpScope(id: string): McpScopeInfo | undefined {
   return MCP_SCOPES.find((scope) => scope.id === id);
