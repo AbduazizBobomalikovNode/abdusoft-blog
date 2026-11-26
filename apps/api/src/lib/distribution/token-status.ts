@@ -18,6 +18,8 @@ export interface TokenPolicy {
   refreshLeadMs: number;
   /** Token berilgandan keyin kamida shuncha o'tmaguncha yangilab bo'lmaydi (Threads/Instagram: 24 soat). */
   minRefreshAgeMs?: number;
+  /** Ixtiyoriy: platforma muddat bermagan (`accessTokenExpiresAt = null`) token tugamaydi (Instagram Unified Login'dagi tizim foydalanuvchisi tokeni). */
+  nonExpiringWhenNoExpiry?: boolean;
 }
 
 export interface TokenStatus {

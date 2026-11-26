@@ -50,6 +50,8 @@ export interface ClientCredentials {
   /** Konfidensial mijoz uchun (LinkedIn, Threads, Instagram: majburiy; X: ixtiyoriy — public client). */
   clientSecret?: string;
   redirectUri: string;
+  /** Ixtiyoriy, maxfiy EMAS: Instagram (Unified Login) konfiguratsiya id'si (`config_id`). Boshqa providerlar e'tiborsiz qoldiradi. */
+  configId?: string;
 }
 
 /** Normallashtirilgan akkaunt yozuvi. Saqlash — chaqiruvchida (token maydonlari shifrlanishi kerak). */

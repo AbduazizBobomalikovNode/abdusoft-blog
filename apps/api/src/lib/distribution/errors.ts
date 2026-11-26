@@ -57,6 +57,8 @@ export interface DistributionErrorInit {
   retryAt?: Date;
   step?: PublishStep;
   partial?: PartialRefs;
+  /** Ixtiyoriy: ulanish (callback) xatosining aniq sababi kodi — faqat Instagram ishlatadi (qolgan providerlarda yo'q). */
+  reason?: string;
 }
 
 export class DistributionError extends Error {
@@ -68,6 +70,8 @@ export class DistributionError extends Error {
   readonly step?: PublishStep;
   /** Xatogacha yaratilgan, qayta ishlatish mumkin bo'lgan narsalar. */
   readonly partial?: PartialRefs;
+  /** Ulanish xatosi sababi kodi (ixtiyoriy; callback `reason` ga aylanadi). */
+  readonly reason?: string;
 
   constructor(init: DistributionErrorInit) {
     super(init.message);
@@ -78,6 +82,7 @@ export class DistributionError extends Error {
     this.retryAt = init.retryAt;
     this.step = init.step;
     this.partial = init.partial;
+    this.reason = init.reason;
   }
 
   /** Xatoning nusxasi `step`/`partial` bilan (asl xato o'zgarmaydi). */
@@ -90,6 +95,7 @@ export class DistributionError extends Error {
       retryAt: this.retryAt,
       step: extra.step ?? this.step,
       partial: extra.partial ?? this.partial,
+      reason: this.reason,
     });
   }
 

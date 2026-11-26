@@ -3,11 +3,10 @@ import { DistributionError, notSupported } from "../errors.js";
 import { asRecord, HostClient, str, type ProviderDeps } from "../http.js";
 import { assertPublicHttpsUrl, check, fmtBytes, isPublicHttpsUrl, textCheck } from "../checks.js";
 import { codePointLength, findUrls, fitParts, normalizeUzbekApostrophes, toHashtags } from "../text.js";
-import { getTokenStatus } from "../token-status.js";
-import { DEFAULT_POLL_SCHEDULE_MS, GRAPH_TOKEN_POLICY, graphRefine, pollContainer, toGraphForm, type ContainerState } from "./graph.js";
+import { DAY_MS, getTokenStatus, type TokenPolicy } from "../token-status.js";
+import { DEFAULT_POLL_SCHEDULE_MS, graphRefine, pollContainer, toGraphForm, type ContainerState } from "./graph.js";
 import type {
   AuthorizationUrlInput,
-  ClientCredentials,
   ConnectedAccount,
   DistributionPost,
   DistributionProvider,
@@ -16,32 +15,39 @@ import type {
   ProviderContext,
   PublishInput,
   PublishResult,
-  RefreshResult,
   RenderOptions,
 } from "../types.js";
 
 /**
- * Instagram (Instagram API with Instagram Login). Hujjatlar 2026-11-25 da developers.facebook.com dan o'qilgan;
- * sahifalarda sana ko'rsatilmagan. Graph versiyasi: hujjat misollarida `v27.0`.
+ * Instagram (Instagram API with Unified Login — Facebook Login for Business). Hujjatlar 2026-11-26 da developers.facebook.com dan o'qilgan
+ * (sahifalarda sana ko'rsatilmagan). Graph versiyasi: hujjat misollarida `v27.0` — BITTA sozlama (`INSTAGRAM_DEFAULT_GRAPH_VERSION`,
+ * env `DISTRIBUTION_INSTAGRAM_GRAPH_VERSION`).
  *
- *  - Biznes login: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login (sana yo'q)
- *  - Kontent chop etish: https://developers.facebook.com/docs/instagram-platform/content-publishing (sana yo'q)
- *  - /media (rasm talablari, caption): https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media (v27.0, sana yo'q)
- *  - Umumiy ko'rinish (Standard/Advanced Access): https://developers.facebook.com/docs/instagram-platform/overview (sana yo'q)
+ *  - get-started: https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/get-started
+ *    (login URL parametrlari, kod -> token, `assigned_instagram_accounts`, `client_business_id`, ruxsatlar)
+ *  - authentication: .../instagram-api-with-unified-login/authentication (token turi, muddat konfiguratsiyaga bog'liq, qayta ulash qoidasi)
+ *  - migration: .../instagram-api-with-unified-login/migration (host `graph.facebook.com`, Instagram akkaunt id bilan so'rovlar)
+ *  - Kontent chop etish: https://developers.facebook.com/documentation/instagram-platform/content-publishing (konteyner, status_code, media_publish)
+ *  - Facebook Login for Business: .../facebook-login/facebook-login-for-business (BISU token "Defaults to never expire")
+ *  - Qo'lda login oqimi: https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow (`state` qaytadi, bekor qilishda `error=access_denied`)
+ *
+ * Eski "Instagram API with Instagram Login" (`instagram.com/oauth/authorize`, `instagram_business_*`, `graph.instagram.com`) yangi ilovalarga berilmaydi.
  */
 
-export const INSTAGRAM_AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize";
-/** Qisqa muddatli token: POST (client_id, client_secret, grant_type, redirect_uri, code) -> `{data:[{access_token,user_id,permissions}]}`. */
-export const INSTAGRAM_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
-export const INSTAGRAM_GRAPH_BASE = "https://graph.instagram.com";
-export const INSTAGRAM_API_VERSION = "v27.0";
-/** Uzoq muddatli: GET ?grant_type=ig_exchange_token&client_secret&access_token. */
-export const INSTAGRAM_LONG_LIVED_URL = `${INSTAGRAM_GRAPH_BASE}/access_token`;
-/** Yangilash: GET ?grant_type=ig_refresh_token&access_token. */
-export const INSTAGRAM_REFRESH_URL = `${INSTAGRAM_GRAPH_BASE}/refresh_access_token`;
-export const INSTAGRAM_HOSTS = ["graph.instagram.com", "api.instagram.com"] as const;
+export const INSTAGRAM_DIALOG_URL = "https://www.facebook.com/dialog/oauth";
+export const INSTAGRAM_GRAPH_HOST = "graph.facebook.com";
+export const INSTAGRAM_GRAPH_BASE = `https://${INSTAGRAM_GRAPH_HOST}`;
+/** Graph versiyasining yagona standart qiymati (env: `DISTRIBUTION_INSTAGRAM_GRAPH_VERSION`). */
+export const INSTAGRAM_DEFAULT_GRAPH_VERSION = "v27.0";
+export const INSTAGRAM_HOSTS = [INSTAGRAM_GRAPH_HOST] as const;
 
-export const INSTAGRAM_SCOPES = ["instagram_business_basic", "instagram_business_content_publish"] as const;
+/** Ruxsatlar KONFIGURATSIYA ichida (login URL'da `scope` YO'Q). Majburiy: basic + manage_messages; chop etish uchun content_publish. */
+export const INSTAGRAM_SCOPES = ["instagram_basic", "instagram_manage_messages", "instagram_content_publish"] as const;
+export const INSTAGRAM_REASON = {
+  noAccount: "no_instagram_account",
+  configInvalid: "config_invalid",
+  accountLookupFailed: "account_lookup_failed",
+} as const;
 /** Caption <= 2200 belgi, <= 30 hashtag, <= 20 @mention (media reference). Sanash birligi UNVERIFIED -> code point. */
 export const INSTAGRAM_CAPTION_MAX = 2200;
 export const INSTAGRAM_HASHTAG_MAX = 30;
@@ -54,8 +60,8 @@ export const INSTAGRAM_WIDTH_MAX = 1440;
 /** 100 API-post / 24 soat (content-publishing); karusel bo'limida 50 deyiladi — hujjatda ziddiyat (UNVERIFIED). */
 export const INSTAGRAM_POSTS_PER_DAY = 100;
 
-export function instagramUrl(path: string, query?: Record<string, string>): string {
-  const u = new URL(`${INSTAGRAM_GRAPH_BASE}/${INSTAGRAM_API_VERSION}/${path.replace(/^\//, "")}`);
+export function instagramUrl(path: string, query?: Record<string, string>, version: string = INSTAGRAM_DEFAULT_GRAPH_VERSION): string {
+  const u = new URL(`${INSTAGRAM_GRAPH_BASE}/${version}/${path.replace(/^\//, "")}`);
   for (const [k, v] of Object.entries(query ?? {})) u.searchParams.set(k, v);
   return u.toString();
 }
@@ -82,50 +88,57 @@ function renderText(post: DistributionPost, opts: RenderOptions = {}): string {
 
 export interface InstagramOptions {
   pollScheduleMs?: readonly number[];
+  /** Graph versiyasi (standart `v27.0`). Shakli `v<son>.<son>`; noto'g'ri bo'lsa standart ishlatiladi. */
+  graphVersion?: string;
+  /** Kod almashtirishda `redirect_uri` yuboriladimi. Standart true (qo'lda login hujjati: majburiy; Unified Login hujjati: ro'yxatda yo'q). */
+  exchangeRedirectUri?: boolean;
 }
+
+/** Unified Login tizim foydalanuvchisi tokeni: muddat konfiguratsiyaga bog'liq; javobda `expires_in` bo'lmasa — tugamaydi (null). */
+export const INSTAGRAM_TOKEN_POLICY: TokenPolicy = {
+  refresh: "none",
+  warnBeforeMs: 7 * DAY_MS,
+  remindBeforeMs: 10 * DAY_MS,
+  refreshLeadMs: 0,
+  nonExpiringWhenNoExpiry: true,
+};
+
+const GRAPH_VERSION_RE = /^v\d{1,3}\.\d{1,2}$/;
 
 export function createInstagramProvider(options: InstagramOptions = {}): DistributionProvider {
   const schedule = options.pollScheduleMs ?? DEFAULT_POLL_SCHEDULE_MS;
+  const version = options.graphVersion && GRAPH_VERSION_RE.test(options.graphVersion) ? options.graphVersion : INSTAGRAM_DEFAULT_GRAPH_VERSION;
+  const sendRedirectUri = options.exchangeRedirectUri ?? true;
+  const graphUrl = (path: string, query?: Record<string, string>) => instagramUrl(path, query, version);
   const nowOf = (deps: ProviderDeps) => deps.now?.() ?? new Date();
 
-  async function getJson(http: HostClient, deps: ProviderDeps, url: string) {
-    const res = await http.request({ method: "GET", url, mode: "read" });
+  async function getJson(http: HostClient, deps: ProviderDeps, target: string) {
+    const res = await http.request({ method: "GET", url: target, mode: "read" });
     if (res.status < 200 || res.status >= 300) throw http.fail(res, "read", graphRefine(deps, "Instagram"));
     return asRecord(res.json);
   }
 
-  function build(token: string, expiresIn: number | null, me: Record<string, unknown>, now: Date, prev?: ConnectedAccount): ConnectedAccount {
-    const id = str(me.user_id) ?? str(me.id) ?? prev?.externalId;
-    if (!id) throw new DistributionError({ kind: "validation_rejected", message: "Instagram /me javobida user_id yo'q" });
-    return {
-      provider: "instagram",
-      externalId: id,
-      displayName: str(me.username) ?? prev?.displayName ?? id,
-      username: str(me.username) ?? prev?.username,
-      accessToken: token,
-      refreshToken: null,
-      accessTokenExpiresAt: expiresIn === null ? null : new Date(now.getTime() + expiresIn * 1000),
-      refreshTokenExpiresAt: null,
-      scopes: prev?.scopes ?? [...INSTAGRAM_SCOPES],
-      issuedAt: now,
-      connectedAt: prev?.connectedAt ?? now,
-    };
+  /** Meta xabari konfiguratsiyaga ishora qilsa (noto'g'ri/o'chirilgan `config_id`) — alohida sabab kodi. Matn bo'yicha taxmin: UNVERIFIED. */
+  function withConfigReason(e: DistributionError): DistributionError {
+    return /config/i.test(`${e.platformMessage ?? ""}`) ? new DistributionError({ kind: e.kind, message: e.message, status: e.status, platformMessage: e.platformMessage, reason: INSTAGRAM_REASON.configInvalid }) : e;
   }
 
   const provider: DistributionProvider = {
     id: "instagram",
-    capabilities: { text: true, link: false, image: true, edit: false, delete: false, nativeScheduling: false, notes: { delete: "Instagram Graph API postni o'chirishni qo'llamaydi (media reference: not supported)", edit: "Postni tahrirlash API'da yo'q" } },
+    capabilities: { text: true, link: false, image: true, edit: false, delete: false, nativeScheduling: false, notes: { delete: "Instagram Graph API postni o'chirishni qo'llamaydi (hujjatda o'chirish yo'q — UNVERIFIED)", edit: "Postni tahrirlash API'da yo'q" } },
     limits: { textMax: INSTAGRAM_CAPTION_MAX, textUnit: "characters", imageMaxBytes: INSTAGRAM_IMAGE_MAX_BYTES, imageMimes: ["image/jpeg"] },
-    tokenPolicy: GRAPH_TOKEN_POLICY,
+    tokenPolicy: INSTAGRAM_TOKEN_POLICY,
     auth: {
       kind: "oauth_code",
       scopes: INSTAGRAM_SCOPES,
       buildAuthorizationUrl({ creds, state }: AuthorizationUrlInput): string {
-        const u = new URL(INSTAGRAM_AUTHORIZE_URL);
+        if (!creds.configId) throw new DistributionError({ kind: "validation_rejected", message: "Instagram: Config ID kiritilmagan", reason: INSTAGRAM_REASON.configInvalid });
+        const u = new URL(INSTAGRAM_DIALOG_URL);
         u.searchParams.set("client_id", creds.clientId);
+        u.searchParams.set("config_id", creds.configId);
         u.searchParams.set("redirect_uri", creds.redirectUri);
         u.searchParams.set("response_type", "code");
-        u.searchParams.set("scope", INSTAGRAM_SCOPES.join(","));
+        // `scope` YO'Q: ruxsatlar konfiguratsiyada. `state` — o'z CSRF himoyamiz (Facebook uni o'zgarishsiz qaytaradi).
         u.searchParams.set("state", state);
         return u.toString();
       },
@@ -133,39 +146,59 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
         const now = nowOf(deps);
         const secrets = [creds.clientSecret ?? "", code];
         const http = new HostClient(deps, INSTAGRAM_HOSTS, secrets);
-        const short = await http.request({
-          method: "POST",
-          url: INSTAGRAM_TOKEN_URL,
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: toGraphForm({ client_id: creds.clientId, client_secret: creds.clientSecret, grant_type: "authorization_code", redirect_uri: creds.redirectUri, code }),
+        const res = await http.request({
+          method: "GET",
+          url: graphUrl("oauth/access_token", {
+            client_id: creds.clientId,
+            client_secret: creds.clientSecret ?? "",
+            code,
+            ...(sendRedirectUri ? { redirect_uri: creds.redirectUri } : {}),
+          }),
           mode: "safe_write",
         });
-        if (short.status < 200 || short.status >= 300) throw http.fail(short, "safe_write", graphRefine(deps, "Instagram"));
-        const sj = asRecord(short.json);
-        // Javob `data` massivida o'raladi (business-login sahifasi); tekis shaklga ham bardosh beramiz.
-        const first = Array.isArray(sj.data) ? asRecord(sj.data[0]) : sj;
-        const shortToken = str(first.access_token);
-        if (!shortToken) throw new DistributionError({ kind: "validation_rejected", message: "Instagram access_token qaytarmadi" });
-        const http2 = new HostClient(deps, INSTAGRAM_HOSTS, [...secrets, shortToken]);
-        const longRes = await getJson(http2, deps, `${INSTAGRAM_LONG_LIVED_URL}?${toGraphForm({ grant_type: "ig_exchange_token", client_secret: creds.clientSecret, access_token: shortToken })}`);
-        const longToken = str(longRes.access_token);
-        if (!longToken) throw new DistributionError({ kind: "validation_rejected", message: "Instagram uzoq muddatli token qaytarmadi" });
-        const http3 = new HostClient(deps, INSTAGRAM_HOSTS, [...secrets, longToken]);
-        // `fields=user_id,username` — UNVERIFIED (hujjat faqat /me ni eslatadi).
-        const me = await getJson(http3, deps, instagramUrl("me", { fields: "user_id,username", access_token: longToken }));
-        return build(longToken, typeof longRes.expires_in === "number" ? longRes.expires_in : null, me, now);
-      },
-      async refresh(deps: ProviderDeps, _creds: ClientCredentials, account: ConnectedAccount): Promise<RefreshResult> {
-        const now = nowOf(deps);
-        const http = new HostClient(deps, INSTAGRAM_HOSTS, [account.accessToken]);
-        const res = await getJson(http, deps, `${INSTAGRAM_REFRESH_URL}?${toGraphForm({ grant_type: "ig_refresh_token", access_token: account.accessToken })}`);
-        const token = str(res.access_token);
-        if (!token) throw new DistributionError({ kind: "validation_rejected", message: "Instagram yangilangan token qaytarmadi" });
-        return { account: build(token, typeof res.expires_in === "number" ? res.expires_in : null, {}, now, account), refreshTokenRotated: false };
+        if (res.status < 200 || res.status >= 300) throw withConfigReason(http.fail(res, "safe_write", graphRefine(deps, "Instagram")));
+        const tj = asRecord(res.json);
+        const token = str(tj.access_token);
+        if (!token) throw new DistributionError({ kind: "validation_rejected", message: "Instagram access_token qaytarmadi" });
+        // `expires_in` bo'lmasa token tugamaydi (null) — hujjat: "Never" (standart konfiguratsiya); bor bo'lsa muddat saqlanadi.
+        const expiresIn = typeof tj.expires_in === "number" && tj.expires_in > 0 ? tj.expires_in : null;
+        const http2 = new HostClient(deps, INSTAGRAM_HOSTS, [...secrets, token]);
+        let list: Record<string, unknown>;
+        try {
+          list = await getJson(http2, deps, graphUrl("me/assigned_instagram_accounts", { fields: "id,username", access_token: token }));
+        } catch (e) {
+          throw e instanceof DistributionError ? new DistributionError({ kind: e.kind, message: e.message, status: e.status, platformMessage: e.platformMessage, reason: INSTAGRAM_REASON.accountLookupFailed }) : e;
+        }
+        const accounts = (Array.isArray(list.data) ? list.data : []).map(asRecord).filter((a) => str(a.id));
+        const first = accounts[0];
+        if (!first) throw new DistributionError({ kind: "validation_rejected", message: "Instagram: tizim foydalanuvchisiga biriktirilgan Instagram akkaunt topilmadi", reason: INSTAGRAM_REASON.noAccount });
+        const id = str(first.id) as string;
+        // client_business_id: token boshqaruvi API'si uchun kerak; chop etish unga bog'liq emas -> olinmasa ulanish to'xtamaydi.
+        let clientBusinessId: string | undefined;
+        try {
+          clientBusinessId = str((await getJson(http2, deps, graphUrl("me", { fields: "client_business_id", access_token: token }))).client_business_id);
+        } catch {
+          clientBusinessId = undefined;
+        }
+        const username = str(first.username);
+        return {
+          provider: "instagram",
+          externalId: id,
+          displayName: username ?? id,
+          username,
+          accessToken: token,
+          refreshToken: null,
+          accessTokenExpiresAt: expiresIn === null ? null : new Date(now.getTime() + expiresIn * 1000),
+          refreshTokenExpiresAt: null,
+          scopes: [...INSTAGRAM_SCOPES],
+          issuedAt: now,
+          connectedAt: now,
+          meta: { ...(clientBusinessId ? { clientBusinessId } : {}), accountCount: String(accounts.length) },
+        };
       },
     },
 
-    tokenStatus: (account, now) => getTokenStatus(account, GRAPH_TOKEN_POLICY, now),
+    tokenStatus: (account, now) => getTokenStatus(account, INSTAGRAM_TOKEN_POLICY, now),
     renderDefaultText: renderText,
     measureText: codePointLength,
 
@@ -224,7 +257,7 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
       if (!containerId) {
         const created = await http.request({
           method: "POST",
-          url: instagramUrl(`${account.externalId}/media`),
+          url: graphUrl(`${account.externalId}/media`),
           headers: form,
           body: toGraphForm(buildInstagramContainerParams({ imageUrl: imageUrl as string, caption: input.text, alt: input.image?.alt, accessToken: token })),
           mode: "safe_write",
@@ -239,7 +272,7 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
       const state = await pollContainer(
         deps,
         async (): Promise<ContainerState> => {
-          const j = await getJson(http, deps, instagramUrl(cid, { fields: "status_code", access_token: token }));
+          const j = await getJson(http, deps, graphUrl(cid, { fields: "status_code", access_token: token }));
           const code = str(j.status_code);
           if (code === "FINISHED") return "ready";
           if (code === "ERROR" || code === "EXPIRED") throw new DistributionError({ kind: "validation_rejected", message: `Instagram konteyner holati: ${code}` });
@@ -255,7 +288,7 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
       try {
         const pub = await http.request({
           method: "POST",
-          url: instagramUrl(`${account.externalId}/media_publish`),
+          url: graphUrl(`${account.externalId}/media_publish`),
           headers: form,
           body: toGraphForm({ creation_id: containerId, access_token: token }),
           mode: "create",
@@ -266,7 +299,7 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
 
         let url: string | null = null;
         try {
-          const j = await getJson(http, deps, instagramUrl(id, { fields: "permalink", access_token: token }));
+          const j = await getJson(http, deps, graphUrl(id, { fields: "permalink", access_token: token }));
           url = str(j.permalink) ?? null; // UNVERIFIED maydon
         } catch {
           url = null;
