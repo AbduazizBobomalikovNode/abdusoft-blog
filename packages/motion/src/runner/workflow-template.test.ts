@@ -19,7 +19,7 @@ describe("render workflow template (separate render repository)", () => {
   });
 
   it("checks out the blog source explicitly, from a hard-coded repository, without persisting credentials", () => {
-    expect(code).toMatch(/^  SOURCE_REPO: AbduazizBobomalikovNode\/abdusoft-blog$/m);
+    expect(code).toMatch(/^ {2}SOURCE_REPO: AbduazizBobomalikovNode\/abdusoft-blog$/m);
     // Qaysi kod sir bilan ishlashini repozitoriy o'zgaruvchisi hal qilmasligi kerak.
     expect(code).not.toMatch(/vars\.VIDEO_SOURCE_REPO/);
     const checkout = code.slice(code.indexOf("actions/checkout@"));
