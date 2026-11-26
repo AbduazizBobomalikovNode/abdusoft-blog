@@ -102,7 +102,7 @@ describe("preview_storyboard waits a bounded time and hands over to get_video_jo
       const pending = await mcpCall(app, full, "tools/call", { name: "get_video_job", arguments: { job_id: id } });
       expect((pending.body.result.content as Json[]).filter((c) => c.type === "image")).toHaveLength(0);
       // the runner finishes the job through the real endpoints
-      expect((await runner(id, "POST", "/claim", { json: { runId: "55", attempt: 1 } })).status).toBe(200);
+      expect((await runner(id, "POST", "/claim", { json: { runId: "4242", attempt: 1 } })).status).toBe(200);
       const img = await jpeg(480, 270);
       for (const n of [1, 2, 3]) {
         expect((await runner(id, "PUT", `/files/still-${n}.jpg/parts/0`, { body: img })).status).toBe(200);

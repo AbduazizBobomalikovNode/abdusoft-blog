@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { startRealServer } from "../../test/real-server.js";
 import { sbOf, waitFor } from "../../test/video-harness.js";
@@ -100,7 +100,12 @@ function send(opts: { id: string; method: string; path: string; token?: string; 
     if (opts.mode === "none") return void req.end();
     const total = opts.total ?? 0;
     const piece = Buffer.alloc(opts.chunk ?? 256 * 1024, 7);
+    // ftyp (24) + empty moov (8) + an mdat of size 0 (= to the end of the file): a valid structure for any total length.
     piece.write("\0\0\0\u0018ftypisom", 0, "latin1");
+    piece.writeUInt32BE(8, 24);
+    piece.write("moov", 28, "latin1");
+    piece.writeUInt32BE(0, 32);
+    piece.write("mdat", 36, "latin1");
     const pump = () => {
       while (!done && sent < total) {
         const len = Math.min(piece.length, total - sent);
@@ -130,13 +135,18 @@ beforeAll(async () => {
 afterAll(async () => {
   await server?.close();
 });
+// Each test leaves its jobs running: free the (max 4) running slots for the next one.
+afterEach(async () => {
+  const { inArray } = await import("drizzle-orm");
+  await db.update(s.motionJobs).set({ status: "cancelled", finishedAt: new Date() }).where(inArray(s.motionJobs.status, ["queued", "running"]));
+});
 
 const PART = 8 * 1024 * 1024;
 
 describe("part upload through the real Node adapter", () => {
   it("an 8 MB part with Content-Length and one sent chunked both succeed quickly; the parts assemble and complete", async () => {
     const id = await startJob();
-    expect((await send({ id, method: "POST", path: "/claim", mode: "none", json: { runId: "9", attempt: 1 } })).status).toBe(200);
+    expect((await send({ id, method: "POST", path: "/claim", mode: "none", json: { runId: "4242", attempt: 1 } })).status).toBe(200);
     const a = await send({ id, method: "PUT", path: "/files/video.mp4/parts/0", mode: "content-length", total: PART });
     expect(a.status).toBe(200);
     expect(a.ms).toBeLessThan(15_000);
@@ -156,7 +166,7 @@ describe("part upload through the real Node adapter", () => {
 
   it("a part larger than 8 MB is refused with 413 before the body is buffered: declared and chunked, nothing hangs", async () => {
     const id = await startJob();
-    await send({ id, method: "POST", path: "/claim", mode: "none", json: { runId: "9", attempt: 1 } });
+    await send({ id, method: "POST", path: "/claim", mode: "none", json: { runId: "4242", attempt: 1 } });
     // declared length over the cap: refused from the header alone
     const declared = await send({ id, method: "PUT", path: "/files/video.mp4/parts/0", mode: "content-length", total: PART + 1, timeoutMs: 15_000 });
     expect(declared.status).toBe(413);
@@ -180,3 +190,44 @@ describe("part upload through the real Node adapter", () => {
     void sha;
   }, 60_000);
 });
+
+describe("rate limiting on the runner endpoints (M2)", () => {
+  it("a flood of bad-token requests from the runner's own address is cut off, and valid-token requests are never limited by it", async () => {
+    const id = await startJob();
+    const other = await startJob();
+    const bad = "0".repeat(64);
+    const statuses: Array<number | "timeout"> = [];
+    // 150 bad tokens, each offering a large unread body: authentication happens first and nothing reads the body.
+    for (let i = 0; i < 150; i++) {
+      const r = await send({ id: i % 2 ? id : other, method: "PUT", path: "/files/video.mp4/parts/0", token: bad, mode: "chunked", total: 16 * 1024 * 1024, chunk: 64 * 1024, timeoutMs: 10_000 });
+      statuses.push(r.status);
+      expect(r.sent, `request ${i}`).toBeLessThan(16 * 1024 * 1024);
+    }
+    // the first ~60 failed attempts per minute answer 401 (the budget; an earlier test in this file used a few), the rest 429
+    const cut = statuses.indexOf(429);
+    expect(cut).toBeGreaterThanOrEqual(50);
+    expect(cut).toBeLessThanOrEqual(60);
+    expect(statuses.slice(0, cut).every((s) => s === 401)).toBe(true);
+    expect(statuses.slice(cut).every((s) => s === 429)).toBe(true);
+    // unknown paths and malformed ids are unauthenticated probes too, and are cut off as well
+    const probe = await fetch(`${server.url}/runner/video/nope`);
+    expect(probe.status).toBe(429);
+    expect(probe.headers.get("retry-after")).toBeTruthy();
+    // the real runner (same address, valid tokens) is unaffected
+    expect((await send({ id, method: "POST", path: "/claim", mode: "none", json: { runId: "4242", attempt: 1 } })).status).toBe(200);
+    for (let i = 0; i < 20; i++) expect((await send({ id, method: "POST", path: "/progress", mode: "none", json: { phase: "render", fraction: 0.5, message: "x" } })).status).toBe(200);
+    // ...while a wrong token is still answered 429 (no information, no work)
+    expect((await send({ id, method: "POST", path: "/progress", token: bad, mode: "none", json: { phase: "render", fraction: 0.5, message: "x" } })).status).toBe(429);
+  }, 180_000);
+
+  it("authenticated traffic is limited per job id, not per address: one job's burst does not touch another job", async () => {
+    const a = await startJob();
+    const b = await startJob();
+    const call = (id: string) => fetch(`${server.url}/runner/video/jobs/${id}/unknown`, { headers: { authorization: `Bearer ${tokens.runnerTokenFor(SECRET, id)}` } });
+    let limited = 0;
+    for (let i = 0; i < 610; i++) if ((await call(a)).status === 429) limited++;
+    expect(limited).toBeGreaterThanOrEqual(1);
+    expect((await call(b)).status).toBe(404);
+  }, 120_000);
+});
+
