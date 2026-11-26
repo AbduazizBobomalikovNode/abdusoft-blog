@@ -25,6 +25,7 @@ import { TableToolbar } from "@/components/admin/editor/table-toolbar";
 import { useCaretFollow } from "@/components/admin/editor/use-caret-follow";
 import { useFocusMode } from "@/components/admin/editor/use-focus-mode";
 import { ChannelSendDialog } from "./channel-send-dialog";
+import { useDistributionEnabled } from "../distribution-context";
 import { DistributionDialog } from "./distribution-dialog";
 import { ConflictBanner } from "./conflict-banner";
 import { HistoryDialog } from "./history-dialog";
@@ -138,20 +139,9 @@ function PostEditorInner({
   const [telegramChannel, setTelegramChannel] = useState<string | null>(null);
   const [refreshingTelegraph, setRefreshingTelegraph] = useState(false);
   const [channelSendOpen, setChannelSendOpen] = useState(false);
-  // "Tarqatish" kirish nuqtasi: API'da DISTRIBUTION_ENABLED o'chiq bo'lsa marshrut 404 -> hech narsa ko'rsatilmaydi.
-  const [distributionOn, setDistributionOn] = useState(false);
+  // "Tarqatish" kirish nuqtasi: `/admin/me` (`distributionEnabled`) bo'yicha — alohida 404 so'rovi yo'q. Xodimga hech qachon.
+  const distributionOn = useDistributionEnabled() && !isStaff;
   const [distributionOpen, setDistributionOpen] = useState(false);
-  useEffect(() => {
-    if (isStaff) return;
-    let alive = true;
-    adminApi
-      .distributionChannels()
-      .then(() => alive && setDistributionOn(true))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [isStaff]);
   const [channelPlanBlocked, setChannelPlanBlocked] = useState(false);
   const [channelChoice, setChannelChoice] = useState<ResolvedChannelChoice | null>(post.channelChoice);
   const [starterDismissed, setStarterDismissed] = useState(false);

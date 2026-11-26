@@ -57,12 +57,13 @@ const EMPTY_INTEGRATIONS: SettingsAdmin = {
 export default async function AdminSettingsPage() {
   const headersList = await headers();
   const cookie = headersList.get("cookie");
-  await requireAdminPage(cookie);
+  const me = await requireAdminPage(cookie);
   const [settings, integrations, telegramStatus, distribution] = await Promise.all([
     getAdminSiteSettings(cookie),
     getAdminSettings(cookie),
     getAdminTelegramStatus(cookie),
-    getAdminDistributionSettings(cookie),
+    // Bayroq o'chiq bo'lsa 404 so'rovi yuborilmaydi: holat `/admin/me`dan keladi.
+    me.distributionEnabled ? getAdminDistributionSettings(cookie) : Promise.resolve(null),
   ]);
 
   const initial = settings ?? {

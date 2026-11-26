@@ -95,8 +95,27 @@ describe("access control", () => {
   ];
   it.each(routes)("%s %s: anonymous 401, staff 403", async (method, path) => {
     const body = method === "GET" || method === "DELETE" ? undefined : {};
-    expect((await call(path, null, { method, body })).status).toBe(401);
+    const anonymous = await call(path, null, { method, body });
+    if (path.startsWith("/callback/")) {
+      // INTENTIONAL CHANGE: the browser callback sends an expired/missing session to the web login (no raw JSON on the API origin).
+      expect(anonymous.status).toBe(302);
+      expect(anonymous.headers.get("location")).toBe("https://blog.example.test/login?notice=dist_session_expired");
+    } else expect(anonymous.status).toBe(401);
     expect((await call(path, staff.cookie, { method, body })).status).toBe(403);
+  });
+
+  it("the expired-session redirect carries nothing from the callback (no code, no state) and consumes no state", async () => {
+    await saveLinkedInCreds();
+    const start = await call("/accounts/linkedin/connect", admin.cookie, { method: "POST" });
+    const state = stateOf(((await start.json()) as { authorizationUrl: string }).authorizationUrl);
+    const res = await call(`/callback/linkedin?code=SECRETCODE&state=${state}`, null);
+    expect(res.status).toBe(302);
+    const loc = res.headers.get("location")!;
+    expect(loc).not.toContain("SECRETCODE");
+    expect(loc).not.toContain(state);
+    expect([...new URL(loc).searchParams.keys()]).toEqual(["notice"]);
+    expect(await db.select().from(s.distributionOauthStates)).toHaveLength(1);
+    expect(mock.calls.filter((c) => c.host === "www.linkedin.com")).toHaveLength(0);
   });
 });
 
@@ -219,13 +238,14 @@ describe("connect flow (OAuth)", () => {
     const expiredState = await start("linkedin");
     nowMs += 11 * 60_000;
     const expired = await call(`/callback/linkedin?code=C&state=${expiredState}`, admin.cookie);
-    expect(reason(expired).get("reason")).toContain("muddati");
+    // INTENTIONAL CHANGE: the redirect carries a short reason CODE (the web app maps it to a fixed text), not free text.
+    expect(reason(expired).get("reason")).toBe("state_expired");
     nowMs -= 11 * 60_000;
 
     const deniedState = await start("linkedin");
     const denied = await call(`/callback/linkedin?error=access_denied&error_description=secret&state=${deniedState}`, admin.cookie);
     expect(reason(denied).get("dist")).toBe("error");
-    expect(reason(denied).get("reason")).not.toContain("secret");
+    expect(reason(denied).get("reason")).toBe("denied");
     expect(await db.select().from(s.distributionOauthStates)).toHaveLength(0);
 
     const otherState = await start("linkedin");
@@ -351,5 +371,30 @@ describe("post-level routes", () => {
     expect(actions).toEqual(expect.arrayContaining(["distribution.credentials_update", "distribution.account_connect_start", "distribution.account_connect", "distribution.send"]));
     const dump = JSON.stringify(rows);
     for (const secret of [...Object.values(sup.TOKENS), LI_SECRET, "AUTHCODE", stateOf(authorizationUrl)]) expect(dump).not.toContain(secret);
+  });
+});
+
+describe("GET /admin/me exposes the flag (so the web app needs no 404 probes)", () => {
+  it("admin: distributionEnabled true; staff: unchanged (no field)", async () => {
+    const a = (await (await app.request("/admin/me", { headers: { cookie: admin.cookie } })).json()) as Record<string, unknown>;
+    expect(a.distributionEnabled).toBe(true);
+    const st = (await (await app.request("/admin/me", { headers: { cookie: staff.cookie } })).json()) as Record<string, unknown>;
+    expect(Object.keys(st).sort()).toEqual(["email", "id", "name", "role"]);
+  });
+});
+
+describe("GET /posts/:id for a post in the trash", () => {
+  it("lists its distributions read-only (postDeleted) and lets a sent one be removed", async () => {
+    await fx.insertAccount("x", new Date(nowMs));
+    const post = await fx.insertPost();
+    const [d] = await db.insert(s.distributions).values({ postId: post.id, provider: "x", status: "sent", externalId: "tw1", externalUrl: "https://x.com/o/status/tw1", sentAt: new Date(nowMs) }).returning();
+    await db.update(s.posts).set({ deletedAt: new Date(nowMs) }).where(eq(s.posts.id, post.id));
+    const res = await call(`/posts/${post.id}`, admin.cookie);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { postDeleted?: boolean; distributions: Array<{ id: string }> };
+    expect(body.postDeleted).toBe(true);
+    expect(body.distributions.map((x) => x.id)).toEqual([d!.id]);
+    expect((await call(`/posts/${post.id}/x/send`, admin.cookie, { method: "POST", body: {} })).status).toBe(404);
+    expect((await call(`/items/${d!.id}/remove`, admin.cookie, { method: "POST" })).status).toBe(200);
   });
 });

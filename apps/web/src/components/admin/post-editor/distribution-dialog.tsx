@@ -278,6 +278,65 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
   );
 }
 
+/**
+ * Post savatda: faqat O'QISH. Avval yuborilganlar ko'rinadi va (platforma qo'llasa) olib tashlash mumkin; matn tahriri,
+ * yuborish va rejalashtirish yo'q.
+ */
+function TrashedPanel({ data, onChanged }: { data: DistributionPostResponse; onChanged: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const sent = data.distributions.filter((d) => d.status === "sent" || d.removedAt);
+  async function remove(id: string) {
+    setBusy(true);
+    try {
+      await adminApi.distributionRemove(id);
+      toast.success("Olib tashlandi");
+    } catch (e) {
+      toast.error(errMsg(e, "Olib tashlab bo'lmadi"));
+    } finally {
+      setBusy(false);
+      setConfirmId(null);
+      await onChanged().catch(() => undefined);
+    }
+  }
+  return (
+    <div className="flex flex-col gap-3" data-testid="dist-trashed">
+      <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm">Post savatda. Yangi yuborib bo&apos;lmaydi; avval yuborilganlarni platformadan olib tashlash mumkin.</p>
+      {sent.length === 0 ? <p className="text-sm text-muted-foreground">Bu post hech qaysi tarmoqqa yuborilmagan.</p> : null}
+      {sent.map((d) => {
+        const ch = data.channels.find((c) => c.id === d.provider);
+        const can = itemActions(d, false, ch?.capabilities ?? null).remove;
+        return (
+          <div key={d.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm" data-testid={`dist-trashed-${d.provider}`}>
+            <div className="min-w-0">
+              <p className="font-medium">{ch?.name ?? d.provider}</p>
+              <p className="text-xs text-muted-foreground">
+                Yuborilgan: {formatDateTime(d.sentAt)}{" "}
+                {d.externalUrl ? <a href={d.externalUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline">Postni ko&apos;rish <ExternalLink className="size-3" /></a> : null}
+                {d.removedAt ? " · platformadan olib tashlangan" : ""}
+              </p>
+              {!can && !d.removedAt && ch?.capabilities?.deleteNote ? <p className="text-xs text-muted-foreground">{ch.capabilities.deleteNote}</p> : null}
+            </div>
+            {can ? <Button size="sm" variant="ghost" className="text-destructive" disabled={busy} onClick={() => setConfirmId(d.id)}>Platformadan olib tashlash</Button> : null}
+          </div>
+        );
+      })}
+      <AlertDialog open={confirmId !== null} onOpenChange={(o) => !o && setConfirmId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Platformadan olib tashlansinmi?</AlertDialogTitle>
+            <AlertDialogDescription>Ommaviy post o&apos;chiriladi. Bu amalni qaytarib bo&apos;lmaydi.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Bekor qilish</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground" onClick={() => confirmId && void remove(confirmId)}>Olib tashlash</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
 /** Post tahrirlagichidagi "Tarqatish" dialogi (Telegram yuborish dialogi yonida). Faqat bayroq yoqilganda ochiladi. */
 export function DistributionDialog({ postId, open, onOpenChange }: { postId: string; open: boolean; onOpenChange: (o: boolean) => void }) {
   const [data, setData] = useState<DistributionPostResponse | null>(null);
@@ -312,7 +371,9 @@ export function DistributionDialog({ postId, open, onOpenChange }: { postId: str
           <DialogTitle>Tarqatish</DialogTitle>
         </DialogHeader>
         <p className="shrink-0 rounded-lg bg-sky-500/10 px-3 py-2 text-xs" data-testid="dist-dialog-notice">{NO_AUTO_POST_NOTICE}</p>
-        {!data ? <div className="h-40 animate-pulse rounded-md bg-muted" aria-busy /> : (
+        {!data ? <div className="h-40 animate-pulse rounded-md bg-muted" aria-busy /> : data.postDeleted ? (
+          <TrashedPanel data={data} onChanged={load} />
+        ) : (
           <>
             <div className="flex shrink-0 gap-1 overflow-x-auto rounded-lg bg-muted p-1" role="tablist">
               {data.channels.map((c) => {

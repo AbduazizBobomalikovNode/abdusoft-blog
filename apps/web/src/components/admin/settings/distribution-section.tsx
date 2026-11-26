@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
-import { NO_AUTO_POST_NOTICE, TONE_CLASS, tokenLine } from "@/lib/distribution-ui";
+import { NO_AUTO_POST_NOTICE, TONE_CLASS, callbackToast, tokenLine } from "@/lib/distribution-ui";
 import { formatDate } from "@/lib/format";
 import { cn } from "cn";
 import { SecretFieldRow, TextFieldRow } from "./field-row";
@@ -224,11 +224,12 @@ export function DistributionSection({ initial }: { initial: DistributionSettings
 
   useEffect(() => {
     if (handled.current) return;
-    const dist = params.get("dist");
-    if (!dist) return;
+    const message = callbackToast(params);
+    if (!message) return;
     handled.current = true;
-    if (dist === "connected") toast.success(`${params.get("provider") ?? "Akkaunt"} ulandi`);
-    else toast.error(params.get("reason") ?? "Ulanish muvaffaqiyatsiz");
+    // `reason`/`provider` URL'dan faqat KOD sifatida olinadi; matn qat'iy jadvaldan (begona matn ko'rsatilmaydi).
+    if (message.kind === "success") toast.success(message.text);
+    else toast.error(message.text);
     void adminApi.distributionSettings().then(setData).catch(() => undefined);
     router.replace("/admin/sozlamalar?tab=tarqatish");
   }, [params, router]);

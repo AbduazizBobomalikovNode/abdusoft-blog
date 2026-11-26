@@ -2,10 +2,11 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { DISTRIBUTION_IMAGE_CHOICES, DISTRIBUTION_PROVIDERS } from "@blog/shared";
 import { config } from "../config.js";
+import { auth } from "../lib/auth.js";
 import { requireAdmin } from "../lib/require-admin.js";
 import { actorFromAdminUser, type Actor, type ServiceResult } from "../lib/posts/types.js";
 import { recordAuditSafe } from "../lib/audit.js";
-import { CALLBACK_REASON_TEXT, completeConnect, connectWithPastedToken, disconnectAccount, startConnect } from "../lib/distribution/service/accounts.js";
+import { completeConnect, connectWithPastedToken, disconnectAccount, startConnect } from "../lib/distribution/service/accounts.js";
 import { cancel, getDistributionDto, listPostDistributions, removeFromPlatform, resolveNeedsChecking, retry, saveDraft, schedule, sendNow, type DraftInput, type QueueInput } from "../lib/distribution/service/actions.js";
 import { listChannels } from "../lib/distribution/service/channels.js";
 import { CredentialsValidationError, saveCredentials } from "../lib/distribution/service/credentials.js";
@@ -57,13 +58,29 @@ function webSettingsUrl(params: Record<string, string>): string {
   return u.toString();
 }
 
+/** Sessiya tugagan bo'lsa (callback JSON 401 o'rniga): veb kirish sahifasi + qat'iy kod (hech qanday `code`/`state` ko'chirilmaydi). */
+function webLoginUrl(): string {
+  const u = new URL("/login", config.WEB_ORIGIN);
+  u.searchParams.set("notice", "dist_session_expired");
+  return u.toString();
+}
+
+const CALLBACK_PATH_RE = /\/callback\/[^/]+$/;
+
 /**
  * Ijtimoiy tarqatish marshrutlari (`DISTRIBUTION_ENABLED=true` bo'lgandagina ro'yxatga olinadi — `routes/admin.ts`).
  * Hammasi FAQAT admin (xodim 403). Hech narsa chop etilganda avtomatik yuborilmaydi: yuborish faqat shu aniq so'rovlar orqali.
  * Hech bir javobda token yoki client secret yo'q.
  */
 export const adminDistributionRoute = new Hono()
-  .use("*", requireAdmin)
+  .use("*", async (c, next) => {
+    // Platforma callback'i brauzerda ochiladi: sessiya tugagan bo'lsa xom JSON emas, do'stona kirish sahifasiga yo'naltiramiz.
+    if (c.req.method === "GET" && CALLBACK_PATH_RE.test(c.req.path)) {
+      const session = await auth.api.getSession({ headers: c.req.raw.headers });
+      if (!session) return c.redirect(webLoginUrl(), 302);
+    }
+    return requireAdmin(c, next);
+  })
   // --- Sozlamalar / akkauntlar ---
   .get("/settings", async (c) => c.json(await buildSettingsView()))
   .put("/settings", async (c) => {
@@ -101,7 +118,7 @@ export const adminDistributionRoute = new Hono()
     if (!provider) return c.json({ error: "Topilmadi" }, 404);
     const result = await completeConnect(actorOf(c), provider, { code: c.req.query("code"), state: c.req.query("state"), error: c.req.query("error") });
     if (result.ok) return c.redirect(webSettingsUrl({ dist: "connected", provider }), 302);
-    return c.redirect(webSettingsUrl({ dist: "error", provider, reason: CALLBACK_REASON_TEXT[result.reason] }), 302);
+    return c.redirect(webSettingsUrl({ dist: "error", provider, reason: result.reason }), 302);
   })
   // --- Kanallar va post bo'yicha tarqatishlar ---
   .get("/channels", async (c) => c.json({ channels: await listChannels(), autoPost: false }))

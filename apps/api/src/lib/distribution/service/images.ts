@@ -47,7 +47,7 @@ export function isOwnWebOriginUrl(url: string): boolean {
   }
 }
 
-export type SourceLoader = (url: string) => Promise<PreparedImage>;
+export type SourceLoader = (url: string, opts?: { allowRedirect?: (url: URL) => boolean }) => Promise<PreparedImage>;
 let loader: SourceLoader = getPreparedImage;
 /** Faqat testlar uchun. */
 export function setSocialImageLoader(next: SourceLoader | null): void {
@@ -73,7 +73,8 @@ async function toSocialJpeg(input: Buffer): Promise<{ buffer: Buffer; width: num
 
 async function fromSource(kind: "cover" | "og", url: string): Promise<SocialImageResult> {
   if (kind === "og" && !isOwnWebOriginUrl(url)) return { ok: false, error: "OG rasm manzili blogning o'z veb-originida emas" };
-  const prepared = await loader(url);
+  // OG rasm: yo'naltirishdan keyin ham manzil blogning o'z veb-originida qolishi shart (aks holda tashqi manzilga olib ketilmasin).
+  const prepared = kind === "og" ? await loader(url, { allowRedirect: (u) => isOwnWebOriginUrl(u.href) }) : await loader(url);
   if (!prepared.ok) return { ok: false, error: kind === "og" ? `Saytning OG rasmini olib bo'lmadi: ${prepared.error}` : `Muqova rasmini olib bo'lmadi: ${prepared.error}` };
   try {
     const out = await toSocialJpeg(prepared.buffer);

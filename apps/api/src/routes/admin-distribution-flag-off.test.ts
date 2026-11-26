@@ -57,4 +57,11 @@ describe("DISTRIBUTION_ENABLED off — no new surface, Telegram unchanged", () =
     expect(res.status).toBe(200);
     expect((await app.request("/admin/telegram/status")).status).toBe(401);
   });
+
+  it("GET /admin/me is exactly what main returns: no distributionEnabled field", async () => {
+    const res = await app.request("/admin/me", { headers: { cookie: admin.cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["email", "id", "name", "role"]);
+  });
 });

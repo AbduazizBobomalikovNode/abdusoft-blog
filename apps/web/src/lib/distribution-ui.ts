@@ -161,3 +161,45 @@ export type EditorState = { text: string; edited: boolean };
 export function textForSave(text: string, defaultText: string): string | null {
   return text.trim() === "" || text === defaultText ? null : text;
 }
+
+// ---------------------------------------------------------------------------------------------
+// OAuth callback'dan keyingi xabarlar: URL'dagi `reason` faqat QISQA KOD — matn shu yerdagi qat'iy jadvaldan olinadi.
+// Noma'lum qiymat hech qachon ekranga chiqarilmaydi (URL'ga yozilgan matn toast'da ko'rinmasin).
+// ---------------------------------------------------------------------------------------------
+
+export const CALLBACK_REASON_TEXT: Record<string, string> = {
+  state_invalid: "Ulanish so'rovi yaroqsiz yoki allaqachon ishlatilgan — qaytadan boshlang",
+  state_expired: "Ulanish so'rovi muddati tugagan (10 daqiqa) — qaytadan boshlang",
+  denied: "Platformada ruxsat berilmadi yoki bekor qilindi",
+  exchange_failed: "Platforma tokenni bermadi — Client ID/Secret va redirect URL'ni tekshiring",
+  forbidden: "Bu so'rov boshqa foydalanuvchi sessiyasi uchun boshlangan",
+  not_configured: "Platforma ilovasi sozlanmagan",
+};
+
+export const CALLBACK_REASON_FALLBACK = "Ulanish muvaffaqiyatsiz";
+
+const PROVIDER_NAMES: Record<string, string> = { linkedin: "LinkedIn", x: "X", threads: "Threads", instagram: "Instagram", github: "GitHub" };
+
+/** `?dist=...&provider=...&reason=...` (callback yo'naltirishi) dan ko'rsatiladigan xabar; `dist` noma'lum bo'lsa `null`. */
+export function callbackToast(params: { get(name: string): string | null }): { kind: "success" | "error"; text: string } | null {
+  const dist = params.get("dist");
+  if (dist === "connected") {
+    const name = PROVIDER_NAMES[params.get("provider") ?? ""];
+    return { kind: "success", text: name ? `${name} ulandi` : "Akkaunt ulandi" };
+  }
+  if (dist === "error") {
+    const reason = params.get("reason") ?? "";
+    return { kind: "error", text: Object.hasOwn(CALLBACK_REASON_TEXT, reason) ? CALLBACK_REASON_TEXT[reason]! : CALLBACK_REASON_FALLBACK };
+  }
+  return null;
+}
+
+/** Kirish sahifasidagi `?notice=` kodi -> qat'iy matn (noma'lum kod e'tiborga olinmaydi). */
+export const LOGIN_NOTICE_TEXT: Record<string, string> = {
+  dist_session_expired: "Sessiya muddati tugagan. Kiring va tarmoqni ulashni qaytadan boshlang (Sozlamalar → Tarqatish kanallari).",
+};
+
+export function loginNotice(search: string): string | null {
+  const code = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search).get("notice") ?? "";
+  return Object.hasOwn(LOGIN_NOTICE_TEXT, code) ? LOGIN_NOTICE_TEXT[code]! : null;
+}
