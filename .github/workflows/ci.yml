@@ -64,6 +64,10 @@ jobs:
       - name: Shellcheck
         run: shellcheck -s bash scripts/server-deploy.sh scripts/server-deploy-entry.sh scripts/make-deploy-bundle.sh scripts/setup-motion-browser.sh scripts/tests/server-deploy-sim.sh
 
+      # Template of the separate render repository (not a workflow of this repository, so GitHub never lints it itself).
+      - name: Actionlint (render workflow template)
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -color packages/motion/render-workflow/render-video.yml
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
