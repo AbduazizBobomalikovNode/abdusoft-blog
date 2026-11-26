@@ -150,15 +150,15 @@ export async function listJobs(filter: { postId?: string; kind?: MotionJobKind; 
 // --------------------------------------------------------------------------- estimate
 
 /**
- * Taxminiy ishlash vaqti. Boshlang'ich qiymatlar `docs/video.md`dagi o'lchovlardan (4 yadroli, past ustuvorlikdagi, concurrency 1);
+ * Taxminiy ishlash vaqti. Boshlang'ich qiymatlar `docs/video.md`dagi o'lchovlardan (M1 noutbuk ~1.9 s/soniya, kichik server uchun ~2x zaxira bilan; concurrency 1);
  * kamida 3 ta tugagan ish bo'lsa, ularning haqiqiy tezligi (kadr/soniya) ishlatiladi.
  */
 export const ESTIMATE_DEFAULTS = {
-  previewBaseSeconds: 14,
-  previewPerStillSeconds: 1.2,
-  renderBaseSeconds: 14,
-  renderSecondsPerVideoSecond: 6,
-  gifSecondsPerVideoSecond: 4,
+  previewBaseSeconds: 10,
+  previewPerStillSeconds: 0.8,
+  renderBaseSeconds: 12,
+  renderSecondsPerVideoSecond: 4,
+  gifSecondsPerVideoSecond: 3,
 };
 
 export async function estimateSeconds(kind: MotionJobKind, videoSeconds: number, stills = 0): Promise<{ seconds: number; basis: "measured" | "default" }> {

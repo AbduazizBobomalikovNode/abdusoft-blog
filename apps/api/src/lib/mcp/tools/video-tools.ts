@@ -243,7 +243,7 @@ export const previewStoryboardTool = defineTool({
   description:
     "Render a handful of small still frames of a storyboard and get them back as IMAGES (plus a short text summary) so you can look at the result and fix it before a full render. " +
     "Choose `at` (seconds, up to 4) or `scene` (4 frames of one scene: start, early, middle, end); with neither you get one representative frame per scene (the first few are inlined; the rest via get_video_job image_offset). " +
-    `It runs through the render worker and answers synchronously (a cold first run takes ~15-60 s; later ones ~10-20 s; hard limit ${PREVIEW_MAX_SECONDS} s). ` +
+    `It runs through the render worker and answers synchronously (a cold first run takes ~10-60 s; later ones ~5-20 s; hard limit ${PREVIEW_MAX_SECONDS} s). ` +
     "If another render is running or queued it does NOT wait: it answers 'busy' with the queue state - retry in a minute. Needs the storyboard to be valid (validate_storyboard first). Counts toward a daily preview quota. Publishes nothing.",
   scope: VIDEO_SCOPE,
   inputSchema: {
