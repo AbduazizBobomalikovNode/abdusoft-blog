@@ -436,7 +436,7 @@ export const updateSiteSettingsTool = defineTool({
   inputSchema: {
     site_name: z.string().trim().min(1).max(100).optional(),
     site_description: z.string().trim().max(300).optional(),
-    social: StrictSocialLinksSchema.partial().strict().optional().describe("Social links: telegram, github, x, email (null clears). Each must be an https:// URL or a mailto: address (email also accepts a plain address); other schemes are refused."),
+    social: StrictSocialLinksSchema.partial().strict().optional().describe("Social links: telegram, github, x, email (null clears). Each must be an https:// URL or a plain mailto: address without a query or fragment (email also accepts a plain address); other schemes and mailto: values with ?bcc=, ?body= or #... are refused."),
     default_post_settings: PostSettingsSchema.partial().strict().optional().describe("Defaults for NEW posts (existing posts are unchanged)."),
     telegram_display: z.object({ notifyComments: z.boolean().optional(), digestEnabled: z.boolean().optional(), telegramDisplay: TelegramDisplayModeSchema.optional() }).strict().optional().describe("Telegram comment options."),
     dry_run: dryRunField,

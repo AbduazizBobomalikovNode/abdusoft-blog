@@ -172,7 +172,7 @@ describe("delete_channel_version obeys the same public-effect guard", () => {
 
 describe("update_site_settings social links", () => {
   it("refuses javascript:/data:/protocol-relative values, saves nothing, and accepts https, mailto and null", async () => {
-    for (const bad of ["javascript:alert(1)", "data:text/html,x", "//evil.example", "http://plain.example"]) {
+    for (const bad of ["javascript:alert(1)", "data:text/html,x", "//evil.example", "http://plain.example", "mailto:a@b.uz?bcc=x@evil.example", "mailto:a@b.uz?body=hi", "mailto:a@b.uz#x"]) {
       const r = await call(full, "update_site_settings", { social: { github: bad } });
       expect(r.isError, bad).toBe(true);
     }

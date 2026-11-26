@@ -68,11 +68,19 @@ export function validateSocialLink(value: string | null | undefined, key?: strin
   return "must be an https:// URL or a mailto: address";
 }
 
+/** Konnektor: `mailto:` (yoki `email` maydonidagi oddiy manzil) faqat manzilning o'zi — `?bcc=`, `?body=` kabi so'rov yoki `#bo'lak` yo'q. */
+function carriesMailExtras(value: string, key: string): boolean {
+  const isMail = /^mailto:/i.test(value) || (key === "email" && !/^[a-z][a-z0-9+.-]*:/i.test(value));
+  return isMail && (value.includes("?") || value.includes("#"));
+}
+
 const strictLink = (key: string) =>
   z
     .string()
     .nullable()
-    .refine((v) => validateSocialLink(v, key) === null, { message: "must be an https:// URL or a mailto: address (or null to clear)" })
+    .refine((v) => validateSocialLink(v, key) === null && !(v !== null && carriesMailExtras(v, key)), {
+      message: "must be an https:// URL or a plain mailto: address without a query or fragment (or null to clear)",
+    })
     .default(null);
 
 /** MCP vositasi uchun QATTIQ sxema (saqlangan eski qiymatlarni o'qiydigan `SocialLinksSchema` o'zgarmagan). */

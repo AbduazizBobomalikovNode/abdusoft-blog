@@ -38,4 +38,16 @@ describe("social link rules (parsed, not prefix-matched)", () => {
     expect(safeSocialHref("mailto:a@b.uz")).toBe("mailto:a@b.uz");
     for (const bad of ["javascript:alert(1)", "data:text/html,x", "//evil.example", "t.me/abc", "ja\tvascript:1", ""]) expect(safeSocialHref(bad), bad).toBeNull();
   });
+  it("the connector's strict schema accepts only a plain mailto: address (no query or fragment); the panel rule is unchanged", () => {
+    for (const bad of ["mailto:a@b.uz?bcc=x@evil.example", "mailto:a@b.uz?body=hello", "mailto:a@b.uz#frag", "mailto:a@b.uz?", "MAILTO:a@b.uz?subject=x"]) {
+      expect(StrictSocialLinksSchema.partial().safeParse({ email: bad }).success, bad).toBe(false);
+      expect(StrictSocialLinksSchema.partial().safeParse({ github: bad }).success, bad).toBe(false);
+    }
+    expect(StrictSocialLinksSchema.partial().safeParse({ email: "a@b.uz?bcc=x@e.example" }).success).toBe(false);
+    expect(StrictSocialLinksSchema.partial().safeParse({ email: "mailto:a@b.uz" }).success).toBe(true);
+    expect(StrictSocialLinksSchema.partial().safeParse({ email: "a@b.uz" }).success).toBe(true);
+    expect(StrictSocialLinksSchema.partial().safeParse({ github: "https://github.com/a?tab=repos#x" }).success).toBe(true);
+    // the admin form's rule (validateSocialLink) still accepts what it accepted before
+    expect(validateSocialLink("mailto:a@b.uz?subject=Salom", "email")).toBeNull();
+  });
 });
