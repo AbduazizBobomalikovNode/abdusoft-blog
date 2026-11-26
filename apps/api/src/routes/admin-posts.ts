@@ -45,26 +45,20 @@ import {
   type Actor,
   type PostRow,
 } from "../lib/posts/index.js";
-import {
-  editChannelCaptionForPost,
-  type SendChannelPostResult,
-} from "../telegram/channel-send.js";
+import type { SendChannelPostResult } from "../telegram/channel-send.js";
 import { computeChannelPreflight, summarizePreflightErrors } from "../telegram/channel-preflight.js";
+import { parseStoredChoice } from "../telegram/channel-choice.js";
 import {
-  clearChannelChoice,
-  parseStoredChoice,
-  resolveChannelChoice,
-  setChannelChoice,
-} from "../telegram/channel-choice.js";
+  clearChannelChoiceAudited,
+  createChannelVersionAudited,
+  deleteChannelVersionAudited,
+  resyncChannelCaptionAudited,
+  setChannelChoiceAudited,
+  updateChannelVersionAudited,
+} from "../telegram/channel-admin.js";
 import { previewChannelPost, queueChannelSend, sendToChannelAudited } from "../telegram/channel-actions.js";
-import {
-  createChannelVersion,
-  deleteChannelVersion,
-  listChannelVersions,
-  updateChannelVersion,
-} from "../telegram/channel-version-service.js";
+import { listChannelVersions } from "../telegram/channel-version-service.js";
 import { getTelegramRefForPost, refreshTelegraphMirror } from "../telegram/publish.js";
-import { recordAuditSafe } from "../lib/audit.js";
 import { errorResponse } from "./service-response.js";
 
 const DEFAULT_LIMIT = 20;
@@ -374,14 +368,8 @@ export const adminPostsRoute = new Hono()
     const body = await c.req.json().catch(() => null);
     const parsed = CreateChannelVersionBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
-    const result = await createChannelVersion(post, parsed.data, c.get("adminUser").id);
+    const result = await createChannelVersionAudited(actorOf(c), post, parsed.data);
     if (!result.ok) return c.json({ error: result.error }, result.status);
-    await recordAuditSafe(actorOf(c), {
-      action: "post.channel_version_create",
-      entityType: "post",
-      entityId: post.id,
-      summary: "Kanal versiyasi yaratildi",
-    });
     return c.json(result.data, 201);
   })
   .patch("/:id/channel/versions/:vid", async (c) => {
@@ -394,15 +382,8 @@ export const adminPostsRoute = new Hono()
     const body = await c.req.json().catch(() => null);
     const parsed = UpdateChannelVersionBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
-    const result = await updateChannelVersion(post, vid, parsed.data);
+    const result = await updateChannelVersionAudited(actorOf(c), post, vid, parsed.data);
     if (!result.ok) return c.json({ error: result.error }, result.status);
-    await recordAuditSafe(actorOf(c), {
-      action: "post.channel_version_update",
-      entityType: "post",
-      entityId: post.id,
-      summary: "Kanal versiyasi tahrirlandi",
-      meta: { versionId: vid },
-    });
     return c.json(result.data);
   })
   .delete("/:id/channel/versions/:vid", async (c) => {
@@ -412,15 +393,8 @@ export const adminPostsRoute = new Hono()
     if (!post) return c.json({ error: "Topilmadi" }, 404);
     const forbidden = guardChannelPrep(c, post, "write");
     if (forbidden) return forbidden;
-    const result = await deleteChannelVersion(post, vid);
+    const result = await deleteChannelVersionAudited(actorOf(c), post, vid);
     if (!result.ok) return c.json({ error: result.error }, result.status);
-    await recordAuditSafe(actorOf(c), {
-      action: "post.channel_version_delete",
-      entityType: "post",
-      entityId: post.id,
-      summary: "Kanal versiyasi o'chirildi",
-      meta: { versionId: vid, clearedChoice: result.data.clearedChoice },
-    });
     return c.json({ ok: true, clearedChoice: result.data.clearedChoice });
   })
   .put("/:id/channel/choice", async (c) => {
@@ -431,29 +405,16 @@ export const adminPostsRoute = new Hono()
     const body = await c.req.json().catch(() => null);
     const parsed = SetChannelChoiceBodySchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "Noto'g'ri tanlov", issues: parsed.error.issues }, 400);
-    const result = await setChannelChoice(post.id, parsed.data, c.get("adminUser").id);
+    const result = await setChannelChoiceAudited(actorOf(c), post, parsed.data, c.get("adminUser").id);
     if (!result.ok) return c.json({ error: result.error }, result.status);
-    await recordAuditSafe(actorOf(c), {
-      action: "post.channel_choice_set",
-      entityType: "post",
-      entityId: post.id,
-      summary: "Kanal versiyasi belgilandi",
-    });
-    const fresh = await loadPostOr404(post.id);
-    return c.json({ choice: fresh ? await resolveChannelChoice(fresh) : null });
+    return c.json({ choice: result.choice });
   })
   .delete("/:id/channel/choice", async (c) => {
     const post = await loadPostOr404(c.req.param("id"));
     if (!post) return c.json({ error: "Topilmadi" }, 404);
     const forbidden = guardChannelPrep(c, post, "write");
     if (forbidden) return forbidden;
-    await clearChannelChoice(post.id);
-    await recordAuditSafe(actorOf(c), {
-      action: "post.channel_choice_clear",
-      entityType: "post",
-      entityId: post.id,
-      summary: "Kanal versiyasi belgisi olib tashlandi",
-    });
+    await clearChannelChoiceAudited(actorOf(c), post);
     return c.json({ ok: true });
   })
   .post("/:id/channel/send", async (c) => {
@@ -486,13 +447,7 @@ export const adminPostsRoute = new Hono()
     // Post hali kanalga yuborilmagan bo'lsa — jimgina hech narsa qilmaydi
     // (`editChannelCaptionForPost` ichida tekshiriladi), shu sabab bu yerda
     // 409 tashlamaymiz: tugma faqat "allaqachon yuborilgan" holatda ko'rinadi.
-    await editChannelCaptionForPost(id);
-    await recordAuditSafe(actorOf(c), {
-      action: "post.channel_resync",
-      entityType: "post",
-      entityId: id,
-      summary: "Kanal xabari matni yangilandi",
-    });
+    await resyncChannelCaptionAudited(actorOf(c), id);
     return c.json({ ok: true });
   })
   .get("/:id/preview", async (c) => {

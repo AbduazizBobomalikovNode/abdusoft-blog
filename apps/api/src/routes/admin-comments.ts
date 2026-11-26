@@ -1,16 +1,14 @@
 import { Hono } from "hono";
-import { desc, eq } from "drizzle-orm";
 import {
   AdminCommentBanBodySchema,
   AdminCommentBulkBodySchema,
   AdminCommentReplyBodySchema,
   AdminCommentUpdateBodySchema,
 } from "@blog/shared";
-import { db } from "../db/index.js";
-import { bannedDevices } from "../db/schema.js";
 import { AdminCommentListQuerySchema, listAdminComments } from "../lib/admin-reads/comments.js";
-import { sendAdminReplyToTelegram, setCommentStatus, TelegramReplyError } from "../lib/comments-admin.js";
-import { banCommenter, deleteComment, moderateComment, replyToComment } from "../lib/comments-moderation.js";
+import { setCommentStatus, TelegramReplyError } from "../lib/comments-admin.js";
+import { listBans, liftBan } from "../lib/bans-admin.js";
+import { banCommenter, deleteComment, moderateComment, replyToComment, sendReplyToTelegram } from "../lib/comments-moderation.js";
 import { errorResponse } from "./service-response.js";
 import { requireAdmin } from "../lib/require-admin.js";
 import { recordAuditSafe } from "../lib/audit.js";
@@ -94,14 +92,8 @@ export const adminCommentsRoute = new Hono()
   })
   .post("/:id/send-to-telegram", async (c) => {
     try {
-      const sent = await sendAdminReplyToTelegram(c.req.param("id"));
+      const sent = await sendReplyToTelegram(actorFromAdminUser(c.get("adminUser")), c.req.param("id"));
       if (!sent) return c.json({ error: "Topilmadi" }, 404);
-      await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-        action: "comment.send_to_telegram",
-        entityType: "comment",
-        entityId: sent.id,
-        summary: "Admin javobi Telegramga yuborildi",
-      });
       return c.json({ ok: true, id: sent.id });
     } catch (error) {
       if (error instanceof TelegramReplyError) return c.json({ error: error.message }, error.status);
@@ -127,26 +119,8 @@ export const adminCommentsRoute = new Hono()
 
 export const adminBansRoute = new Hono()
   .use("*", requireAdmin)
-  .get("/", async (c) => {
-    const rows = await db.select().from(bannedDevices).orderBy(desc(bannedDevices.createdAt));
-    return c.json({
-      items: rows.map((row) => ({
-        id: row.id,
-        deviceHash: row.deviceHash,
-        ipHash: row.ipHash,
-        reason: row.reason,
-        createdAt: row.createdAt.toISOString(),
-      })),
-    });
-  })
+  .get("/", async (c) => c.json({ items: await listBans() }))
   .delete("/:id", async (c) => {
-    const banId = c.req.param("id");
-    await db.delete(bannedDevices).where(eq(bannedDevices.id, banId));
-    await recordAuditSafe(actorFromAdminUser(c.get("adminUser")), {
-      action: "ban.remove",
-      entityType: "ban",
-      entityId: banId,
-      summary: "Blok olib tashlandi",
-    });
+    await liftBan(actorFromAdminUser(c.get("adminUser")), c.req.param("id"));
     return c.json({ ok: true });
   });
