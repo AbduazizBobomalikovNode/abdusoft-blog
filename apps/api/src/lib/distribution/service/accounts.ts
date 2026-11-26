@@ -9,7 +9,7 @@ import { DistributionError, isDistributionError, sanitizeMessage } from "../erro
 import { createOAuthState, verifyOAuthState } from "../oauth-state.js";
 import { DAY_MS } from "../token-status.js";
 import type { ConnectedAccount, DistributionProvider, ProviderId } from "../types.js";
-import { UNREADABLE_CREDENTIALS_MESSAGE, credentialsReady, getCredentials, isOAuthProvider, type OAuthProviderId } from "./credentials.js";
+import { UNREADABLE_CREDENTIALS_MESSAGE, credentialsMissingMessage, credentialsReady, getCredentials, isOAuthProvider, type OAuthProviderId } from "./credentials.js";
 import { distNow, getProvider, providerDeps, redirectUrlFor } from "./env.js";
 import { escapeHtml, notifyOwner } from "./notify.js";
 
@@ -88,6 +88,8 @@ export function accountView(row: AccountRow, now: Date): DistributionAccountDto 
     expiresAt: st.expiresAt ? st.expiresAt.toISOString() : null,
     daysLeft: st.daysLeft,
     canRefresh: st.canRefresh,
+    // Platforma muddat bermagan token (Instagram Unified Login) tugamaydi: UI "N kun qoldi" o'rniga shuni ko'rsatadi.
+    ...(!reauth && st.expiresAt === null && provider.tokenPolicy.nonExpiringWhenNoExpiry ? { neverExpires: true } : {}),
   };
 }
 
@@ -139,7 +141,7 @@ export async function startConnect(actor: Actor, provider: ProviderId): Promise<
   if (!isOAuthProvider(provider)) return fail("bad_request", "Bu provider OAuth bilan ulanmaydi (token yopishtiriladi)");
   const creds = await getCredentials(provider);
   if (creds.secretUnreadable) return fail("unprocessable", UNREADABLE_CREDENTIALS_MESSAGE);
-  if (!credentialsReady(provider, creds)) return fail("unprocessable", "Avval Client ID va Client Secret'ni kiriting va saqlang");
+  if (!credentialsReady(provider, creds)) return fail("unprocessable", credentialsMissingMessage(provider));
   const p = getProvider(provider);
   const now = distNow();
   // Eskirgan state'lar tozalanadi.
@@ -153,12 +155,23 @@ export async function startConnect(actor: Actor, provider: ProviderId): Promise<
     expiresAt: created.record.expiresAt,
   });
   const redirectUrl = redirectUrlFor(provider);
-  const authorizationUrl = p.auth.buildAuthorizationUrl!({ creds: { clientId: creds.clientId, clientSecret: creds.clientSecret || undefined, redirectUri: redirectUrl }, state: created.state, codeChallenge: created.codeChallenge });
+  const authorizationUrl = p.auth.buildAuthorizationUrl!({ creds: { clientId: creds.clientId, clientSecret: creds.clientSecret || undefined, redirectUri: redirectUrl, ...(creds.configId ? { configId: creds.configId } : {}) }, state: created.state, codeChallenge: created.codeChallenge });
   await recordAuditSafe(actor, { action: "distribution.account_connect_start", entityType: "distribution_account", entityId: provider, summary: `${PROVIDER_LABEL[provider]}: ulash boshlandi`, meta: { provider } });
   return ok({ authorizationUrl, redirectUrl });
 }
 
-export type CallbackReason = "state_invalid" | "state_expired" | "denied" | "exchange_failed" | "forbidden" | "not_configured";
+export type CallbackReason =
+  | "state_invalid"
+  | "state_expired"
+  | "denied"
+  | "exchange_failed"
+  | "forbidden"
+  | "not_configured"
+  // Faqat Instagram (Unified Login):
+  | "no_instagram_account"
+  | "config_invalid"
+  | "login_failed"
+  | "account_lookup_failed";
 
 export const CALLBACK_REASON_TEXT: Record<CallbackReason, string> = {
   state_invalid: "Ulanish so'rovi yaroqsiz yoki allaqachon ishlatilgan — qaytadan boshlang",
@@ -167,14 +180,22 @@ export const CALLBACK_REASON_TEXT: Record<CallbackReason, string> = {
   exchange_failed: "Platforma tokenni bermadi — Client ID/Secret va redirect URL'ni tekshiring",
   forbidden: "Bu so'rov boshqa foydalanuvchi sessiyasi uchun boshlangan",
   not_configured: "Platforma ilovasi sozlanmagan",
+  no_instagram_account: "Meta konfiguratsiyasiga biriktirilgan Instagram akkaunt topilmadi — loginda akkauntni tanlang va uni Instagram Tester qiling",
+  config_invalid: "Config ID noto'g'ri yoki o'chirilgan — Meta ilovasidagi konfiguratsiyani tekshiring",
+  login_failed: "Meta login oynasi xato bilan tugadi — Meta App ID, Config ID va Redirect URL'ni tekshiring",
+  account_lookup_failed: "Token olindi, lekin Instagram akkauntlarini o'qib bo'lmadi — konfiguratsiyada instagram_basic ruxsatini tekshiring",
 };
+
+function asCallbackReason(value: string | undefined): CallbackReason | undefined {
+  return value !== undefined && Object.hasOwn(CALLBACK_REASON_TEXT, value) ? (value as CallbackReason) : undefined;
+}
 
 export const PROVIDER_LABEL: Record<ProviderId, string> = { linkedin: "LinkedIn", x: "X", threads: "Threads", instagram: "Instagram", github: "GitHub" };
 
 export async function completeConnect(
   actor: Actor,
   provider: ProviderId,
-  query: { code?: string | undefined; state?: string | undefined; error?: string | undefined },
+  query: { code?: string | undefined; state?: string | undefined; error?: string | undefined; errorReason?: string | undefined; errorDescription?: string | undefined },
 ): Promise<{ ok: true; account: AccountRow } | { ok: false; reason: CallbackReason; detail?: string }> {
   const now = distNow();
   const received = query.state ?? "";
@@ -185,8 +206,10 @@ export async function completeConnect(
   if (!verified.ok) return { ok: false, reason: verified.reason === "expired" ? "state_expired" : "state_invalid" };
   if (stateRow.createdBy && actor.userId && stateRow.createdBy !== actor.userId) return { ok: false, reason: "forbidden" };
   if (query.error) {
-    await recordAuditSafe(actor, { action: "distribution.account_connect_failed", entityType: "distribution_account", entityId: provider, summary: `${PROVIDER_LABEL[provider]}: ulanish rad etildi`, meta: { provider, reason: "denied" } });
-    return { ok: false, reason: "denied" };
+    // Instagram: bekor qilish (`access_denied`/`user_denied`) bilan boshqa login xatolarini ajratamiz; qolgan providerlar — avvalgidek `denied`.
+    const reason: CallbackReason = provider === "instagram" && query.error !== "access_denied" && query.errorReason !== "user_denied" ? (/config/i.test(query.errorDescription ?? "") ? "config_invalid" : "login_failed") : "denied";
+    await recordAuditSafe(actor, { action: "distribution.account_connect_failed", entityType: "distribution_account", entityId: provider, summary: `${PROVIDER_LABEL[provider]}: ulanish rad etildi`, meta: { provider, reason } });
+    return { ok: false, reason };
   }
   if (!query.code || !isOAuthProvider(provider)) return { ok: false, reason: "state_invalid" };
   const creds = await getCredentials(provider);
@@ -194,7 +217,7 @@ export async function completeConnect(
   const p = getProvider(provider);
   try {
     const connected = await p.auth.exchangeCode!(providerDeps(), {
-      creds: { clientId: creds.clientId, clientSecret: creds.clientSecret || undefined, redirectUri: redirectUrlFor(provider) },
+      creds: { clientId: creds.clientId, clientSecret: creds.clientSecret || undefined, redirectUri: redirectUrlFor(provider), ...(creds.configId ? { configId: creds.configId } : {}) },
       code: query.code,
       codeVerifier: stateRow.codeVerifierEnc ? decryptSecret(stateRow.codeVerifierEnc) : undefined,
     });
@@ -203,8 +226,9 @@ export async function completeConnect(
     return { ok: true, account: row };
   } catch (error: unknown) {
     const safe = safeErrorMessage(error, [creds.clientSecret, query.code]);
-    await recordAuditSafe(actor, { action: "distribution.account_connect_failed", entityType: "distribution_account", entityId: provider, summary: `${PROVIDER_LABEL[provider]}: ulanish muvaffaqiyatsiz`, meta: { provider, kind: safe.kind } });
-    return { ok: false, reason: "exchange_failed", detail: safe.message };
+    const connectReason = isDistributionError(error) ? asCallbackReason(error.reason) : undefined;
+    await recordAuditSafe(actor, { action: "distribution.account_connect_failed", entityType: "distribution_account", entityId: provider, summary: `${PROVIDER_LABEL[provider]}: ulanish muvaffaqiyatsiz`, meta: { provider, kind: safe.kind, ...(connectReason ? { reason: connectReason } : {}) } });
+    return { ok: false, reason: connectReason ?? "exchange_failed", detail: safe.message };
   }
 }
 
@@ -277,7 +301,7 @@ async function doRefresh(row: AccountRow): Promise<RefreshOutcome> {
     return { ok: false, row: saved ?? row, error: new DistributionError({ kind: "auth_expired", message: UNREADABLE_CREDENTIALS_MESSAGE }) };
   }
   try {
-    const result = await provider.auth.refresh(providerDeps(), { clientId: creds.clientId, clientSecret: creds.clientSecret || undefined, redirectUri: redirectUrlFor(row.provider as ProviderId) }, toConnected(row));
+    const result = await provider.auth.refresh(providerDeps(), { clientId: creds.clientId, clientSecret: creds.clientSecret || undefined, redirectUri: redirectUrlFor(row.provider as ProviderId), ...("configId" in creds && creds.configId ? { configId: creds.configId } : {}) }, toConnected(row));
     const [saved] = await db
       .update(distributionAccounts)
       .set({ ...tokenColumns(result.account), displayName: result.account.displayName, username: result.account.username ?? row.username, refreshAmbiguousAt: null, lastRefreshAt: now, status: "active", updatedAt: now })

@@ -26,6 +26,8 @@ export interface ProviderMetadata {
   restrictions: readonly string[];
   /** Hujjat sahifalari (asosiy). */
   docs: readonly string[];
+  /** Ixtiyoriy: kalit maydonlari yorliqlari (faqat Instagram). */
+  credentialLabels?: { clientId: string; clientSecret: string; configId?: string };
 }
 
 /**
@@ -109,21 +111,25 @@ export const PROVIDER_METADATA: Readonly<Record<ProviderId, ProviderMetadata>> =
     id: "instagram",
     name: "Instagram",
     ownerSetup: [
-      "Instagram akkauntni Professional (Business yoki Creator) qiling",
-      "developers.facebook.com'da Meta ilova yarating, 'Instagram API with Instagram Login' ni qo'shing",
-      "instagram_business_basic va instagram_business_content_publish ruxsatlarini yoqing; akkauntingizni ilova roliga/tester'ga qo'shing",
-      "Redirect URL'ni ro'yxatdan o'tkazing (API manzili ostida; aniq yo'l keyingi PR'da tasdiqlanadi)",
-      "Instagram App ID va App Secret'ni saqlang; rasm OMMAVIY https JPEG URL'da bo'lishi kerak",
+      "Instagram akkauntni Professional (Creator yoki Business) qiling; Meta ilovasi biznes portfeliga (business portfolio) tegishli bo'lishi kerak",
+      "developers.facebook.com'da ilova oching va 'Manage messaging & content on Instagram' use case'ini qo'shing",
+      "Use case ichida 'API setup with Unified login' bo'limini oching va konfiguratsiya (configuration) yarating: majburiy instagram_basic va instagram_manage_messages, post yuborish uchun instagram_content_publish. Konfiguratsiya Config ID beradi",
+      "Konfiguratsiyaga Redirect URL'ni kiriting (pastdagi manzil AYNAN shunday) va saqlang",
+      "Akkauntingizni 'Instagram Tester' qiling (App roles) va taklifni Instagram veb-saytida (Settings → Apps and websites → Tester invites) qabul qiling",
+      "Ilovaning Meta App ID, Meta App Secret (Settings → Basic) va Config ID'ni pastdagi maydonlarga kiriting; ilova Development rejimida qoladi (App Review kerak emas)",
+      "Rasm OMMAVIY https JPEG URL'da bo'lishi kerak",
     ],
-    scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+    scopes: ["instagram_basic", "instagram_manage_messages", "instagram_content_publish"],
     costsMoney: "no",
     costNote: "To'lov hujjatda ko'rsatilmagan",
-    tokenLifetime: "60 kun; 24 soatdan keyin yangilash mumkin",
-    restrictions: ["Faqat JPEG, ommaviy URL; nisbat 4:5 – 1.91:1", "Captionda havola bosilmaydi", "100 post / 24 soat (hujjatda ziddiyat: 50)", "API orqali o'chirib bo'lmaydi"],
+    tokenLifetime: "Tizim foydalanuvchisi tokeni: standart konfiguratsiyada muddatsiz (Meta panelida 'Expiration: Never'); muddat konfiguratsiyaga bog'liq. Yangilanmaydi — token ishlamay qolsa qayta ulang",
+    restrictions: ["Faqat JPEG, ommaviy URL; nisbat 4:5 – 1.91:1", "Captionda havola bosilmaydi", "100 post / 24 soat (hujjatda ziddiyat: 50)", "API orqali o'chirib bo'lmaydi", "Development rejimida faqat app roli bor akkauntlar"],
     docs: [
-      "https://developers.facebook.com/docs/instagram-platform/content-publishing",
-      "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login",
+      "https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/get-started",
+      "https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/authentication",
+      "https://developers.facebook.com/documentation/instagram-platform/content-publishing",
     ],
+    credentialLabels: { clientId: "Meta App ID", clientSecret: "Meta App Secret", configId: "Config ID" },
   },
   github: {
     id: "github",

@@ -25,6 +25,7 @@ export async function buildSettingsView(): Promise<DistributionSettingsResponse>
       tokenLifetime: meta.tokenLifetime,
       restrictions: [...meta.restrictions],
       docs: [...meta.docs],
+      ...(meta.credentialLabels ? { credentialLabels: meta.credentialLabels } : {}),
       credentials: oauth ? await getCredentialsAdmin(id) : null,
       credentialsReady: oauth && creds ? credentialsReady(id, creds) : true,
       ...(creds?.secretUnreadable ? { credentialsUnreadable: true } : {}),
