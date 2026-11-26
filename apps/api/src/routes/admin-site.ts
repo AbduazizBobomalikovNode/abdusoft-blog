@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { SocialLinksSchema, PostSettingsSchema, TelegramSettingsSchema, UpdateSiteSettingsBodySchema } from "@blog/shared";
 import { requireAdmin } from "../lib/require-admin.js";
+import { adminDocBodyLimit } from "../lib/body-limit.js";
 import { recordAuditSafe } from "../lib/audit.js";
 import { actorFromAdminUser } from "../lib/posts/types.js";
 import { validatePanelDocument } from "../lib/content/validate.js";
@@ -17,6 +18,7 @@ import { revalidateWeb } from "../lib/revalidate.js";
 
 export const adminSiteRoute = new Hono()
   .use("*", requireAdmin)
+  .use("*", adminDocBodyLimit((c) => c.req.method === "PUT"))
   .get("/", async (c) => {
     const settings = await loadSiteSettings();
     return c.json(settings);

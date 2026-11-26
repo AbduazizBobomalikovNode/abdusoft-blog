@@ -16,6 +16,7 @@ import {
   UpdatePostBodySchema,
 } from "@blog/shared";
 import { requireRole } from "../lib/require-admin.js";
+import { adminDocBodyLimit } from "../lib/body-limit.js";
 import {
   actorFromAdminUser,
   approvePost,
@@ -207,8 +208,16 @@ async function parsePublishBody(
   return { sendToChannel: true, expectedUpdatedAt };
 }
 
+/** Hujjat tashiydigan so'rovlar: `PATCH /:id` (post tahriri) va kanal versiyasini yaratish/tahrirlash. Qolganlariga chegara qo'llanmaydi. */
+const CARRIES_DOCUMENT = (c: Context): boolean => {
+  const path = new URL(c.req.url).pathname.replace(/\/+$/, "");
+  if (c.req.method === "PATCH") return /^\/admin\/posts\/[^/]+$/.test(path) || /^\/admin\/posts\/[^/]+\/channel\/versions\/[^/]+$/.test(path);
+  return c.req.method === "POST" && /^\/admin\/posts\/[^/]+\/channel\/versions$/.test(path);
+};
+
 export const adminPostsRoute = new Hono()
   .use("*", requireRole("admin", "staff"))
+  .use("*", adminDocBodyLimit(CARRIES_DOCUMENT))
   .get("/mine/summary", async (c) => c.json(await mineSummary(actorOf(c))))
   // Chiqindi qutisi (faqat admin): `/trash` marshrutlari `/:id`dan OLDIN ro'yxatga olinadi.
   .get("/trash", async (c) => {
