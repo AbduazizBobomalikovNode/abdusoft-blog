@@ -6,6 +6,7 @@ import { ExternalLink, Menu, MoreHorizontal, UserRound } from "lucide-react";
 import { useState } from "react";
 import type { Me } from "@blog/shared";
 import { LogoutButton } from "@/app/admin/logout-button";
+import { LogoMark } from "@/components/brand/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -106,8 +107,9 @@ export function AdminShell({
     <div className="flex min-h-svh w-full">
       {/* Desktop sidebar */}
       <aside data-admin-chrome className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col border-r border-border p-3 md:flex">
-        <Link href="/admin" className="px-2 py-2 text-sm font-semibold tracking-tight">
-          {site.name} <span className="text-muted-foreground">/ admin</span>
+        <Link href="/admin" className="brand-link flex items-center gap-2 px-2 py-2 text-sm font-semibold tracking-tight">
+          <LogoMark className="size-6 rounded-[22%]" />
+          <span>{site.name} <span className="text-muted-foreground">/ admin</span></span>
         </Link>
 
         <div className="mt-4 flex-1">
@@ -144,7 +146,10 @@ export function AdminShell({
         <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
           <SheetContent side="left" className="flex flex-col p-3">
             <SheetHeader className="p-1">
-              <SheetTitle>{site.name} / admin</SheetTitle>
+              <SheetTitle className="flex items-center gap-2">
+                <LogoMark className="size-6 rounded-[22%]" />
+                {site.name} / admin
+              </SheetTitle>
             </SheetHeader>
             <NavLinks
               pathname={pathname}

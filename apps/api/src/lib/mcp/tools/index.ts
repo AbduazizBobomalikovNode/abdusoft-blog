@@ -1,4 +1,5 @@
 import { config } from "../../../config.js";
+import { loadDistributionModule } from "../../distribution/load-guard.js";
 import { READ_TOOLS } from "./read-tools.js";
 import type { McpToolDef } from "./types.js";
 import { WRITE_TOOLS, UPLOAD_TOOL_NAME as UPLOAD_NAME } from "./write-tools.js";
@@ -7,7 +8,7 @@ import { WRITE_TOOLS, UPLOAD_TOOL_NAME as UPLOAD_NAME } from "./write-tools.js";
  * Ijtimoiy tarqatish vositalari FAQAT `DISTRIBUTION_ENABLED=true` bo'lganda yuklanadi (modul, servis va rasm kodi bilan birga):
  * o'chiq bo'lsa ular umuman import qilinmaydi (`routes/admin.ts`dagi kabi).
  */
-const distributionTools = config.DISTRIBUTION_ENABLED ? await import("./distribution-tools.js") : null;
+const distributionTools = config.DISTRIBUTION_ENABLED ? await loadDistributionModule("mcp/tools/distribution-tools", () => import("./distribution-tools.js")) : null;
 
 /** O'qish vositalari (PR #11): `MCP_WRITE_TOOLS_ENABLED` o'chiq bo'lganda ro'yxatga olinadigan YAGONA to'plam. */
 export const TOOLS: McpToolDef[] = [...READ_TOOLS];

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Share2, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useDistributionEnabled } from "@/components/admin/distribution-context";
 import { DistributionDialog } from "@/components/admin/post-editor/distribution-dialog";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
+import { PURGE_CHECK_FAILED_WARNING, purgeDistributionWarning } from "@/lib/distribution-ui";
 import { formatDateTime } from "@/lib/format";
 
 /** O'chirgan kim: ism, hisob o'chirilgan/noma'lum bo'lsa neytral matn (`null` hech qachon sahifani buzmaydi). */
@@ -94,6 +95,21 @@ export function TrashList({ items, isAdmin = true }: { items: TrashPostListItem[
   const [purgeTarget, setPurgeTarget] = useState<TrashPostListItem | null>(null);
   const distributionOn = useDistributionEnabled() && isAdmin;
   const [distributionPostId, setDistributionPostId] = useState<string | null>(null);
+  // Butunlay o'chirishdan oldin: platformaga yuborilgan postlar bo'lsa, tasdiq oynasida ogohlantiriladi (o'chirish baribir mumkin).
+  const [purgeCheck, setPurgeCheck] = useState<{ id: string; warning: string | null } | null>(null);
+  const purgeTargetId = purgeTarget?.id ?? null;
+  const purgeWarning = distributionOn && purgeCheck && purgeCheck.id === purgeTargetId ? purgeCheck.warning : null;
+  useEffect(() => {
+    if (!distributionOn || !purgeTargetId) return;
+    let live = true;
+    adminApi
+      .distributionForPost(purgeTargetId)
+      .then((d) => live && setPurgeCheck({ id: purgeTargetId, warning: purgeDistributionWarning(d.distributions, d.channels) }))
+      .catch(() => live && setPurgeCheck({ id: purgeTargetId, warning: PURGE_CHECK_FAILED_WARNING }));
+    return () => {
+      live = false;
+    };
+  }, [distributionOn, purgeTargetId]);
 
   function restore(item: TrashPostListItem) {
     setBusyId(item.id);
@@ -209,6 +225,11 @@ export function TrashList({ items, isAdmin = true }: { items: TrashPostListItem[
               &quot;{purgeTarget?.title}&quot; butunlay o&apos;chiriladi. Bu amalni ortga qaytarib bo&apos;lmaydi: postning fikrlari,
               kanal versiyalari va Tarixi ham o&apos;chadi.
             </AlertDialogDescription>
+            {purgeWarning ? (
+              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-foreground" role="alert" data-testid="purge-distribution-warning">
+                {purgeWarning}
+              </p>
+            ) : null}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Bekor qilish</AlertDialogCancel>

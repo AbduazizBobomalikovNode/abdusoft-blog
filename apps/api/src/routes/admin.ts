@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { config } from "../config.js";
+import { loadDistributionModule } from "../lib/distribution/load-guard.js";
 import { rateLimitWrites } from "../lib/rate-limit-middleware.js";
 import { requireRole } from "../lib/require-admin.js";
 import { adminAuditRoute } from "./admin-audit.js";
@@ -59,6 +60,6 @@ if (config.VIDEO_ENABLED) {
 }
 // Ijtimoiy tarqatish — faqat DISTRIBUTION_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut ham, modul ham yuklanmaydi.
 if (config.DISTRIBUTION_ENABLED) {
-  const { adminDistributionRoute } = await import("./admin-distribution.js");
+  const { adminDistributionRoute } = await loadDistributionModule("routes/admin-distribution", () => import("./admin-distribution.js"));
   adminRoute.route("/distribution", adminDistributionRoute);
 }

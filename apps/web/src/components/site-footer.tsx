@@ -1,3 +1,4 @@
+import { LogoGlyph } from "@/components/brand/logo";
 import { getSite } from "@/lib/api";
 import { site } from "@/lib/site";
 
@@ -16,7 +17,8 @@ export async function SiteFooter() {
   return (
     <footer className="border-t border-border">
       <div className="mx-auto flex w-full max-w-[680px] flex-wrap items-center justify-between gap-2 px-4 py-6 text-sm text-muted-foreground">
-        <span>
+        <span className="flex items-center gap-2">
+          <LogoGlyph className="h-3.5 w-auto text-foreground/80" />
           &copy; {year} {site.name}. Barcha huquqlar himoyalangan.
         </span>
         {links.length > 0 ? (

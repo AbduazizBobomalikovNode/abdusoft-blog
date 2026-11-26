@@ -16,6 +16,20 @@ export interface JsonLdSite {
 
 export type JsonLdPost = Pick<PostDetail, "slug" | "title" | "excerpt" | "publishedAt" | "tags">;
 
+/** Brend belgisi (`public/brand/`) — publisher `logo` uchun, absolyut manzil. */
+export function logoUrl(site: JsonLdSite): string {
+  return `${site.url}/brand/abdusoft-mark-512.png`;
+}
+
+function organizationJsonLd(site: JsonLdSite): Record<string, unknown> {
+  return {
+    "@type": "Organization",
+    name: site.name,
+    url: site.url,
+    logo: { "@type": "ImageObject", url: logoUrl(site), width: 512, height: 512 },
+  };
+}
+
 /** Post uchun OG rasm marshrutining absolyut manzili. */
 export function ogImageUrl(site: JsonLdSite, slug: string): string {
   return `${site.url}/${encodeURIComponent(slug)}/opengraph-image-${OG_IMAGE_ROUTE_SUFFIX}`;
@@ -50,7 +64,7 @@ export function buildBlogPostingJsonLd(post: JsonLdPost, site: JsonLdSite): Reco
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
     inLanguage: "uz",
     author: { "@type": "Person", name: site.name, url: site.url },
-    publisher: { "@type": "Organization", name: site.name, url: site.url },
+    publisher: organizationJsonLd(site),
     image: [ogImageUrl(site, post.slug)],
   };
 
