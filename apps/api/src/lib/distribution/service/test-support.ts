@@ -52,12 +52,12 @@ function defaults(call: RecordedCall & { path: string; search: URLSearchParams }
   // --- Instagram ---
   if (host === "graph.facebook.com") {
     if (path === "/v27.0/oauth/access_token") return json({ access_token: TOKENS.ig, token_type: "bearer" });
-    if (path === "/v27.0/me/assigned_instagram_accounts") return json({ data: [{ id: "IG1", username: "owner_ig" }] });
+    if (path === "/v27.0/me/assigned_instagram_accounts") return json({ data: [{ id: "17841400000001", username: "owner_ig" }] });
     if (path === "/v27.0/me") return json({ id: "SU1", client_business_id: "BIZ1" });
-    if (path === "/v27.0/IG1/media") return json({ id: "IC1" });
-    if (path === "/v27.0/IC1") return json({ id: "IC1", status_code: "FINISHED" });
-    if (path === "/v27.0/IG1/media_publish") return json({ id: "IM1" });
-    if (path === "/v27.0/IM1") return json({ id: "IM1", permalink: "https://www.instagram.com/p/IM1/" });
+    if (path === "/v27.0/IG1/media") return json({ id: "5001" });
+    if (path === "/v27.0/5001") return json({ id: "5001", status_code: "FINISHED" });
+    if (path === "/v27.0/IG1/media_publish") return json({ id: "6001" });
+    if (path === "/v27.0/6001") return json({ id: "6001", permalink: "https://www.instagram.com/p/6001/" });
   }
   // --- GitHub ---
   if (host === "api.github.com" && path === "/user") return json({ login: "owner", name: "Test Owner" }, { headers: { "github-authentication-token-expiration": "2027-03-01 10:00:00 UTC" } });

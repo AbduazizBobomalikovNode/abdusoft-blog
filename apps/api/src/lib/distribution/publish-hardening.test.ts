@@ -136,18 +136,18 @@ describe("step and partial on multi-step failures, and resume (item 5)", () => {
   });
   it("Instagram: container created, publish failed => step publish + partial; resume works without an image URL", async () => {
     const p = createInstagramProvider();
-    const m = mockFetch([() => json({ id: "CT2" }), () => json({ status_code: "FINISHED" }), () => json({ error: { code: 2 } }, { status: 500 })]);
+    const m = mockFetch([() => json({ id: "1002" }), () => json({ status_code: "FINISHED" }), () => json({ error: { code: 2 } }, { status: 500 })]);
     const e = await p.publish({ deps: makeDeps(m.fetch), account: acct("instagram") }, { post: POST_FIXTURE, text: "c", imageUrl: IMG }).then(() => null, (x: unknown) => x as { step: string; partial: { containerId: string } });
-    expect(e).toMatchObject({ step: "publish", partial: { containerId: "CT2" } });
-    const r = mockFetch([() => json({ status_code: "FINISHED" }), () => json({ id: "MEDIA1" }), () => json({})]);
-    const out = await p.publish({ deps: makeDeps(r.fetch), account: acct("instagram") }, { post: POST_FIXTURE, text: "c", resume: { containerId: "CT2" } });
-    expect(out.externalId).toBe("MEDIA1");
+    expect(e).toMatchObject({ step: "publish", partial: { containerId: "1002" } });
+    const r = mockFetch([() => json({ status_code: "FINISHED" }), () => json({ id: "9001" }), () => json({})]);
+    const out = await p.publish({ deps: makeDeps(r.fetch), account: acct("instagram") }, { post: POST_FIXTURE, text: "c", resume: { containerId: "1002" } });
+    expect(out.externalId).toBe("9001");
     expect(r.calls.some((c) => c.url.endsWith("/media"))).toBe(false);
-    expect(formOf(r.calls[1]!)).toMatchObject({ creation_id: "CT2" });
+    expect(formOf(r.calls[1]!)).toMatchObject({ creation_id: "1002" });
   });
   it("a container reported PUBLISHED on resume is outcome_unknown, never re-published", async () => {
     const r = mockFetch([() => json({ status_code: "PUBLISHED" })]);
-    await expect(createInstagramProvider().publish({ deps: makeDeps(r.fetch), account: acct("instagram") }, { post: POST_FIXTURE, text: "c", resume: { containerId: "CT2" } })).rejects.toMatchObject({ kind: "outcome_unknown", step: "poll" });
+    await expect(createInstagramProvider().publish({ deps: makeDeps(r.fetch), account: acct("instagram") }, { post: POST_FIXTURE, text: "c", resume: { containerId: "1002" } })).rejects.toMatchObject({ kind: "outcome_unknown", step: "poll" });
     expect(r.calls).toHaveLength(1);
   });
 });

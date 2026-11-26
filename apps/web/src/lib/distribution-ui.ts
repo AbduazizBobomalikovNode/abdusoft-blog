@@ -193,6 +193,7 @@ export const CALLBACK_REASON_TEXT: Record<string, string> = {
   config_invalid: "Config ID noto'g'ri yoki o'chirilgan — Meta ilovasidagi konfiguratsiyani tekshiring",
   login_failed: "Meta login oynasi xato bilan tugadi — Meta App ID, Config ID va Redirect URL'ni tekshiring",
   account_lookup_failed: "Token olindi, lekin Instagram akkauntlarini o'qib bo'lmadi — konfiguratsiyada instagram_basic ruxsatini tekshiring",
+  multiple_instagram_accounts: "Meta konfiguratsiyasi bir nechta Instagram akkauntga ruxsat beryapti — login oynasida (yoki konfiguratsiyada) aynan bittasini tanlang va qaytadan ulang",
 };
 
 export const CALLBACK_REASON_FALLBACK = "Ulanish muvaffaqiyatsiz";

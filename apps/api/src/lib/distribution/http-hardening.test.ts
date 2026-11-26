@@ -26,7 +26,7 @@ describe("create-mode server errors always win over provider refinement (item 1)
   });
   it("Graph 500 {code:1} on media_publish is outcome_unknown; a 500 on the container step stays transient", async () => {
     const IMG = "https://cdn.abdusoft.uz/a.jpg";
-    const m = mockFetch([() => json({ id: "C1" }), () => json({ status_code: "FINISHED" }), () => json({ error: { code: 1, message: "unknown" } }, { status: 500 })]);
+    const m = mockFetch([() => json({ id: "1001" }), () => json({ status_code: "FINISHED" }), () => json({ error: { code: 1, message: "unknown" } }, { status: 500 })]);
     await expect(createInstagramProvider().publish({ deps: makeDeps(m.fetch), account: acct("instagram") }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "outcome_unknown", retryable: false });
     const c = mockFetch(() => json({ error: { code: 2, message: "x" } }, { status: 500 }));
     await expect(createInstagramProvider().publish({ deps: makeDeps(c.fetch), account: acct("instagram") }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "transient", step: "container" });

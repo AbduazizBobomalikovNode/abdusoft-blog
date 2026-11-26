@@ -42,7 +42,7 @@ describe("Instagram auth (Unified Login)", () => {
     expect(me.pathname).toBe("/v27.0/me");
     expect(me.searchParams.get("fields")).toBe("client_business_id");
     expect(acc).toMatchObject({ provider: "instagram", externalId: "17841400000000001", username: "owner", displayName: "owner", accessToken: "SUAT-1234567890", refreshToken: null, accessTokenExpiresAt: null });
-    expect(acc.meta).toEqual({ clientBusinessId: "BIZ777", accountCount: "1" });
+    expect(acc.meta).toEqual({ clientBusinessId: "BIZ777" });
     expect(acc.scopes).toEqual(["instagram_basic", "instagram_manage_messages", "instagram_content_publish"]);
   });
   it("exchange without redirect_uri when the option is off", async () => {
@@ -72,11 +72,12 @@ describe("Instagram auth (Unified Login)", () => {
     const never = { ...account, accessTokenExpiresAt: null };
     expect(p.tokenStatus(never, new Date("2040-01-01T00:00:00Z"))).toEqual({ state: "ok", expiresAt: null, canRefresh: false, refreshDue: false, remindAt: null, daysLeft: null });
   });
-  it("account discovery: several accounts -> first is used and the count is recorded; empty list -> distinct error", async () => {
-    const m = mockFetch([okToken, () => okAccounts([{ id: "A1", username: "first" }, { id: "A2", username: "second" }]), okMe]);
-    const acc = await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" });
-    expect(acc).toMatchObject({ externalId: "A1", username: "first" });
-    expect(acc.meta?.accountCount).toBe("2");
+  it("account discovery: several accounts -> refused (nothing stored, no further request); empty list -> distinct error", async () => {
+    const m = mockFetch([okToken, () => okAccounts([{ id: "111", username: "first" }, { id: "222", username: "second" }]), okMe]);
+    const err = await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" }).then(() => null, (e: unknown) => e as { kind: string; reason?: string; message: string });
+    expect(err).toMatchObject({ kind: "validation_rejected", reason: "multiple_instagram_accounts" });
+    expect(err!.message).toContain("@first");
+    expect(m.calls).toHaveLength(2);
     const empty = mockFetch([okToken, () => okAccounts([])]);
     await expect(p.auth.exchangeCode!(makeDeps(empty.fetch), { creds, code: "C1234" })).rejects.toMatchObject({ kind: "validation_rejected", reason: "no_instagram_account" });
     expect(empty.calls).toHaveLength(2);
@@ -84,7 +85,7 @@ describe("Instagram auth (Unified Login)", () => {
   it("client_business_id failure does not stop the connection", async () => {
     const m = mockFetch([okToken, () => okAccounts(), () => json({ error: { message: "nope", code: 100 } }, { status: 400 })]);
     const acc = await p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" });
-    expect(acc.meta).toEqual({ accountCount: "1" });
+    expect(acc.meta).toEqual({});
   });
   it("error classes: token exchange, wrong config_id, account lookup are told apart", async () => {
     const ex = mockFetch(() => json({ error: { message: "Invalid verification code format.", code: 100, type: "OAuthException" } }, { status: 400 }));
@@ -107,27 +108,54 @@ describe("Instagram auth (Unified Login)", () => {
   });
 });
 
+describe("Instagram id validation (ids go into URL paths)", () => {
+  it("a non-digit account id from discovery is refused before anything is stored or requested", async () => {
+    for (const id of ["../me", "12/34", "abc", "1".repeat(40), "12 3"]) {
+      const m = mockFetch([okToken, () => okAccounts([{ id, username: "x" }]), okMe]);
+      await expect(p.auth.exchangeCode!(makeDeps(m.fetch), { creds, code: "C1234" })).rejects.toMatchObject({ kind: "validation_rejected", reason: "account_lookup_failed" });
+      expect(m.calls).toHaveLength(2);
+    }
+  });
+  it("a malformed container id is validation_rejected and no further request is made", async () => {
+    for (const id of ["../x", "12/3", "a1", "9".repeat(40)]) {
+      const m = mockFetch([() => json({ id })]);
+      await expect(p.publish({ deps: makeDeps(m.fetch), account }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "validation_rejected", step: "container" });
+      expect(m.calls).toHaveLength(1);
+    }
+  });
+  it("a malformed resume container id is refused without any request", async () => {
+    const m = mockFetch(() => json({}));
+    await expect(p.publish({ deps: makeDeps(m.fetch), account }, { post: POST_FIXTURE, text: "c", resume: { containerId: "../evil" } })).rejects.toMatchObject({ kind: "validation_rejected" });
+    expect(m.calls).toHaveLength(0);
+  });
+  it("a malformed post id after media_publish is outcome_unknown (the post may exist): never retried, never used in a path", async () => {
+    const m = mockFetch([() => json({ id: "123" }), () => json({ status_code: "FINISHED" }), () => json({ id: "../x" })]);
+    await expect(p.publish({ deps: makeDeps(m.fetch), account }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "outcome_unknown", step: "publish" });
+    expect(m.calls).toHaveLength(3);
+  });
+});
+
 describe("Instagram publish", () => {
   it("container -> poll status_code -> media_publish", async () => {
     const m = mockFetch([
-      () => json({ id: "CT1" }),
+      () => json({ id: "1001" }),
       () => json({ status_code: "IN_PROGRESS" }),
       () => json({ status_code: "FINISHED" }),
-      () => json({ id: "MEDIA9" }),
+      () => json({ id: "9009" }),
       () => json({ permalink: "https://www.instagram.com/p/XYZ/" }),
     ]);
     const deps = makeDeps(m.fetch);
     const r = await p.publish({ deps, account }, { post: POST_FIXTURE, text: "caption", imageUrl: IMG });
-    expect(r).toEqual({ externalId: "MEDIA9", url: "https://www.instagram.com/p/XYZ/" });
+    expect(r).toEqual({ externalId: "9009", url: "https://www.instagram.com/p/XYZ/" });
     expect(m.calls[0]).toMatchObject({ method: "POST", url: "https://graph.facebook.com/v27.0/IG1/media" });
     expect(formOf(m.calls[0]!)).toEqual({ image_url: IMG, caption: "caption", access_token: SECRET });
-    expect(m.calls[1]?.url).toContain("/v27.0/CT1?fields=status_code");
+    expect(m.calls[1]?.url).toContain("/v27.0/1001?fields=status_code");
     expect(m.calls[3]).toMatchObject({ method: "POST", url: "https://graph.facebook.com/v27.0/IG1/media_publish" });
-    expect(formOf(m.calls[3]!)).toEqual({ creation_id: "CT1", access_token: SECRET });
+    expect(formOf(m.calls[3]!)).toEqual({ creation_id: "1001", access_token: SECRET });
     expect(deps.slept).toEqual([5000]);
   });
   it("bounded wait: gives up after the schedule without publishing", async () => {
-    const m = mockFetch([() => json({ id: "CT1" }), () => json({ status_code: "IN_PROGRESS" })]);
+    const m = mockFetch([() => json({ id: "1001" }), () => json({ status_code: "IN_PROGRESS" })]);
     const deps = makeDeps(m.fetch);
     await expect(p.publish({ deps, account }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "transient" });
     expect(deps.slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(5 * 60_000);
@@ -135,13 +163,13 @@ describe("Instagram publish", () => {
   });
   it("ERROR / EXPIRED -> validation_rejected", async () => {
     for (const code of ["ERROR", "EXPIRED"]) {
-      const m = mockFetch([() => json({ id: "CT1" }), () => json({ status_code: code })]);
+      const m = mockFetch([() => json({ id: "1001" }), () => json({ status_code: code })]);
       await expect(p.publish({ deps: makeDeps(m.fetch), account }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "validation_rejected" });
     }
   });
   it("requires a public image URL and times out safely on media_publish", async () => {
     await expect(p.publish({ deps: makeDeps(mockFetch(() => json({})).fetch), account }, { post: POST_FIXTURE, text: "c" })).rejects.toMatchObject({ kind: "validation_rejected" });
-    const m = mockFetch([() => json({ id: "CT1" }), () => json({ status_code: "FINISHED" }), () => new Error("reset")]);
+    const m = mockFetch([() => json({ id: "1001" }), () => json({ status_code: "FINISHED" }), () => new Error("reset")]);
     await expect(p.publish({ deps: makeDeps(m.fetch), account }, { post: POST_FIXTURE, text: "c", imageUrl: IMG })).rejects.toMatchObject({ kind: "outcome_unknown" });
   });
   it("remove throws a typed not_supported error (API cannot delete) and says why", async () => {

@@ -34,7 +34,7 @@ describe("callbackToast: only fixed texts, never URL text", () => {
 
 describe("Instagram callback reasons have their own fixed texts", () => {
   it("each new code maps to a distinct Uzbek text", () => {
-    const codes = ["no_instagram_account", "config_invalid", "login_failed", "account_lookup_failed"];
+    const codes = ["no_instagram_account", "config_invalid", "login_failed", "account_lookup_failed", "multiple_instagram_accounts"];
     const texts = codes.map((c) => callbackToast(q(`dist=error&provider=instagram&reason=${c}`))?.text);
     expect(new Set(texts).size).toBe(codes.length);
     for (const t of texts) expect(t).not.toBe(CALLBACK_REASON_FALLBACK);
