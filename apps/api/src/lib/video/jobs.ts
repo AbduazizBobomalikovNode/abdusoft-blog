@@ -524,13 +524,33 @@ const MESSAGES: Record<string, string> = {
   runner_not_started: "No GitHub runner picked the job up in time.",
 };
 
-/** Ishni `failed` qiladi (faqat hali `running` bo'lsa). `true` — shu chaqiruv o'zgartirdi. Natija jurnalga yoziladi. */
+/** Infratuzilma xatolari: foydalanuvchi aybi emas, render bajarilmagan — kunlik kvota birligi qaytariladi (L3). */
+export const REFUNDED_ERROR_CODES: ReadonlySet<string> = new Set(["runner_not_configured", "runner_auth", "runner_not_found", "runner_rejected", "runner_unavailable", "runner_not_started"]);
+
+/**
+ * Hisob jadvalidagi ENG YANGI shu paket qatorini o'chiradi (qator ishga bog'lanmagan). Faqat ish `running`/`queued` -> `failed` o'tishini
+ * yutgan chaqiruv (aynan bitta) shuni chaqiradi, shuning uchun bir ish uchun ko'pi bilan bir marta; ISHNI o'chirish hisobni tiklamaydi.
+ */
+export async function refundUsage(ex: Executor, kind: MotionJobKind): Promise<void> {
+  await ex.delete(motionUsage).where(
+    inArray(
+      motionUsage.id,
+      sql`(select id from motion_usage where bucket = ${bucketOf(kind)} order by created_at desc limit 1)`,
+    ),
+  );
+}
+
+/** Ishni `failed` qiladi (faqat hali `running` bo'lsa). `true` — shu chaqiruv o'zgartirdi. Natija jurnalga yoziladi. Infratuzilma kodlarida kvota qaytariladi. */
 export async function failJob(id: string, code: string, message: string | undefined, timings: Record<string, number>): Promise<boolean> {
-  const [row] = await db
-    .update(motionJobs)
-    .set({ status: "failed", errorCode: code, errorMessage: message ? safeMessage(message) : (MESSAGES[code] ?? "The render failed."), finishedAt: new Date(), timings, workerPid: null, phase: null })
-    .where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running")))
-    .returning();
+  const row = await db.transaction(async (tx) => {
+    const [r] = await tx
+      .update(motionJobs)
+      .set({ status: "failed", errorCode: code, errorMessage: message ? safeMessage(message) : (MESSAGES[code] ?? "The render failed."), finishedAt: new Date(), timings, workerPid: null, phase: null })
+      .where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running")))
+      .returning();
+    if (r && REFUNDED_ERROR_CODES.has(code)) await refundUsage(tx, r.kind);
+    return r;
+  });
   if (!row) return false;
   removeUploads(id);
   await auditOutcome(row);
