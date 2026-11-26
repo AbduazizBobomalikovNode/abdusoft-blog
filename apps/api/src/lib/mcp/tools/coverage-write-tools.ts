@@ -157,7 +157,7 @@ export const deleteChannelVersionTool = defineTool({
   name: "delete_channel_version",
   title: "Delete a Telegram channel version",
   description:
-    "Delete a custom channel version. Refused while a scheduled channel plan uses it. If it was the version marked on the post, the mark is cleared (the result says so). Messages already in the channel are not touched. The version cannot be restored. expected_version_updated_at is REQUIRED.",
+    "Delete a custom channel version. Refused while a scheduled channel plan uses it. If it was the version marked on the post, the mark is cleared (the result says so), and when a scheduled plan uses the marked version that needs the channels:send permission as well. Messages already in the channel are not touched. The version cannot be restored. expected_version_updated_at is REQUIRED.",
   scope: "channels:prepare",
   limit: "destructive",
   inputSchema: { id: postId, version_id: versionId, expected_version_updated_at: versionToken },
@@ -170,6 +170,8 @@ export const deleteChannelVersionTool = defineTool({
     if (existing.updatedAt.getTime() !== Date.parse(args.expected_version_updated_at)) {
       throw new ToolError("conflict", "The channel version was changed after you read it, so nothing was deleted.", "Re-read it with get_channel_version first.", { currentUpdatedAt: existing.updatedAt.toISOString() });
     }
+    // Belgilangan versiyani o'chirish belgini bo'shatadi — kutilayotgan reja belgidan foydalansa, ommaviy matn jimgina standartga qaytadi.
+    await requireSendScopeIfPublic(ctx, post, { versionId: args.version_id });
     const result = await deleteChannelVersionAudited(ctx.actor, post, args.version_id);
     if (!result.ok) return channelFailure(result.error, result.status);
     return { data: { ok: true, summary: "The channel version was deleted.", clearedChoice: result.data.clearedChoice } };

@@ -115,6 +115,61 @@ describe("channels:prepare cannot change what a pending public channel post will
   });
 });
 
+describe("delete_channel_version obeys the same public-effect guard", () => {
+  it("deleting the MARKED version while a scheduled plan uses the mark needs channels:send; the mark and the version survive the refusal", async () => {
+    const p = await scheduledPostWithVersion("Reja o'chirish belgi");
+    const fresh = (await ok("get_post", { id: p.id })).post;
+    const marked = await ok("set_channel_choice", { id: p.id, expected_updated_at: fresh.updatedAt, version_id: p.versionId });
+    await ok("set_channel_plan", { id: p.id, expected_updated_at: marked.post.updatedAt, delay_minutes: 5, use_marked: true });
+    const vtoken = await versionToken(p.id, p.versionId);
+
+    const refused = await call(prepareOnly, "delete_channel_version", { id: p.id, version_id: p.versionId, expected_version_updated_at: vtoken });
+    expect(refused.isError).toBe(true);
+    expect(refused.json.error.code).toBe("conflict");
+    expect(refused.json.error.requiredScope).toBe("channels:send");
+    expect(await versionToken(p.id, p.versionId)).toBe(vtoken);
+    expect((await row(p.id)).channelChoice).toMatchObject({ kind: "version", versionId: p.versionId });
+
+    // with channels:send the owner may delete it; the mark is cleared and the result says so
+    const allowed = await call(full, "delete_channel_version", { id: p.id, version_id: p.versionId, expected_version_updated_at: vtoken });
+    expect(allowed.isError, allowed.text).toBe(false);
+    expect(allowed.json.clearedChoice).toBe(true);
+  });
+
+  it("a version a plan references directly stays refused even with channels:send, and an unrelated version is deletable with prepare only; the panel is unchanged", async () => {
+    const p = await scheduledPostWithVersion("Reja o'chirish aniq");
+    await ok("set_channel_plan", { id: p.id, expected_updated_at: p.token, delay_minutes: 5, version_id: p.versionId });
+    const vtoken = await versionToken(p.id, p.versionId);
+    const noScope = await call(prepareOnly, "delete_channel_version", { id: p.id, version_id: p.versionId, expected_version_updated_at: vtoken });
+    expect(noScope.isError).toBe(true);
+    const withScope = await call(full, "delete_channel_version", { id: p.id, version_id: p.versionId, expected_version_updated_at: vtoken });
+    expect(withScope.isError).toBe(true);
+    expect(await versionToken(p.id, p.versionId)).toBe(vtoken);
+
+    const other = (await ok("create_channel_version", { id: p.id, mode: "text", name: "Ortiqcha" })).version;
+    const free = await call(prepareOnly, "delete_channel_version", { id: p.id, version_id: other.id, expected_version_updated_at: other.updatedAt });
+    expect(free.isError, free.text).toBe(false);
+
+    // the web panel is unchanged: it deletes a marked version regardless of the scopes
+    const q = await scheduledPostWithVersion("Reja panel o'chirish");
+    const f = (await ok("get_post", { id: q.id })).post;
+    const m = await ok("set_channel_choice", { id: q.id, expected_updated_at: f.updatedAt, version_id: q.versionId });
+    await ok("set_channel_plan", { id: q.id, expected_updated_at: m.post.updatedAt, delay_minutes: 5, use_marked: true });
+    expect((await panel(`/admin/posts/${q.id}/channel/versions/${q.versionId}`, "DELETE")).status).toBe(200);
+  });
+
+  it("every tool that has the channels:prepare scope and can change an existing public channel post is guarded (omission audit)", async () => {
+    const { getTools } = await import("./tools/index.js");
+    const prepareTools = getTools().filter((t) => t.scope === "channels:prepare").map((t) => t.name).sort();
+    // A new channels:prepare tool must be reviewed for public effect (and added to this list) before it ships.
+    expect(prepareTools).toEqual(["clear_channel_choice", "create_channel_version", "delete_channel_version", "set_channel_choice", "update_channel_version"]);
+    // create_channel_version never touches an existing version, the mark or a plan; update/delete/set/clear are covered above and in the first describe.
+    const p = await scheduledPostWithVersion("Reja audit");
+    const copy = await call(prepareOnly, "create_channel_version", { id: p.id, mode: "text", from_version_id: p.versionId });
+    expect(copy.isError, copy.text).toBe(false);
+  });
+});
+
 describe("update_site_settings social links", () => {
   it("refuses javascript:/data:/protocol-relative values, saves nothing, and accepts https, mailto and null", async () => {
     for (const bad of ["javascript:alert(1)", "data:text/html,x", "//evil.example", "http://plain.example"]) {
