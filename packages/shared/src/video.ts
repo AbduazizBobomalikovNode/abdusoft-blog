@@ -58,9 +58,27 @@ export const MotionJobDetailSchema = MotionJobSchema.extend({
 });
 export type MotionJobDetail = z.infer<typeof MotionJobDetailSchema>;
 
+export const MotionRunnerKindSchema = z.enum(["github", "local"]);
+export type MotionRunnerKind = z.infer<typeof MotionRunnerKindSchema>;
+
 export const MotionStatusSchema = z.object({
   enabled: z.literal(true),
-  browser: z.object({ installed: z.boolean(), hint: z.string().nullable() }),
+  /** Render qayerda bajariladi (`VIDEO_RUNNER`). */
+  runner: MotionRunnerKindSchema,
+  /** `github` backend: nima sozlangan (qiymatlar HECH QACHON qaytmaydi) va oxirgi muvaffaqiyatli run vaqti. */
+  github: z
+    .object({
+      tokenConfigured: z.boolean(),
+      secretConfigured: z.boolean(),
+      repoConfigured: z.boolean(),
+      repo: z.string().nullable(),
+      lastSuccessAt: z.string().nullable(),
+    })
+    .nullable(),
+  /** `local` backend: `scripts/setup-motion-browser.sh` preflight'i o'tganmi. */
+  local: z.object({ preflightOk: z.boolean(), hint: z.string().nullable() }).nullable(),
+  /** Faqat `local` backendda: server brauzeri. `github` backendda serverda brauzer tekshirilmaydi (`null`). */
+  browser: z.object({ installed: z.boolean(), hint: z.string().nullable() }).nullable(),
   queue: z.object({ queued: z.number(), running: z.number(), maxQueue: z.number(), maxRunning: z.number() }),
   quotas: z.object({
     rendersToday: z.number(),
@@ -71,3 +89,16 @@ export const MotionStatusSchema = z.object({
   resources: z.object({ freeDiskMb: z.number().nullable(), freeMemoryMb: z.number().nullable(), minFreeDiskMb: z.number(), minFreeMemoryMb: z.number() }),
 });
 export type MotionStatus = z.infer<typeof MotionStatusSchema>;
+
+/** Admin panel: GitHub sozlamalari (token faqat maska bilan). */
+export const MotionGithubSettingsSchema = z.object({
+  token: z.object({ isSet: z.boolean(), masked: z.string(), source: z.enum(["env", "db", "none"]), envVar: z.string(), unreadable: z.boolean() }),
+  repo: z.object({ value: z.string(), source: z.enum(["env", "db", "none"]), envVar: z.string() }),
+});
+export type MotionGithubSettings = z.infer<typeof MotionGithubSettingsSchema>;
+
+export const MotionGithubSettingsPatchSchema = z.strictObject({
+  githubToken: z.string().max(300).optional(),
+  githubRepo: z.string().max(210).optional(),
+});
+export type MotionGithubSettingsPatch = z.infer<typeof MotionGithubSettingsPatchSchema>;

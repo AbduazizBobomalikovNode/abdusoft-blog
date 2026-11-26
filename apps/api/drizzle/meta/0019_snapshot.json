@@ -1,5 +1,5 @@
 {
-  "id": "7afae16d-ba72-4056-a727-8c312ab1ec78",
+  "id": "55f2be33-f47c-406a-922b-6a7f169b7648",
   "prevId": "b292ad42-b50f-4533-a573-2f52ac1542ba",
   "version": "7",
   "dialect": "postgresql",
@@ -1654,6 +1654,49 @@
           "primaryKey": false,
           "notNull": false
         },
+        "runner": {
+          "name": "runner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_run_id": {
+          "name": "runner_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_attempt": {
+          "name": "runner_attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_dispatched_at": {
+          "name": "runner_dispatched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_claimed_at": {
+          "name": "runner_claimed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dispatch_attempts": {
+          "name": "dispatch_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "dispatch_after": {
+          "name": "dispatch_after",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "requested_by": {
           "name": "requested_by",
           "type": "text",
@@ -1747,6 +1790,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "motion_jobs_one_active_per_post_idx": {
+          "name": "motion_jobs_one_active_per_post_idx",
+          "columns": [
+            {
+              "expression": "post_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"motion_jobs\".\"post_id\" is not null and \"motion_jobs\".\"kind\" in ('render', 'gif') and \"motion_jobs\".\"status\" in ('queued', 'running')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -1777,6 +1836,61 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.motion_usage": {
+      "name": "motion_usage",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "bucket": {
+          "name": "bucket",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "motion_usage_bucket_created_idx": {
+          "name": "motion_usage_bucket_created_idx",
+          "columns": [
+            {
+              "expression": "bucket",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

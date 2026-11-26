@@ -31,6 +31,13 @@ CREATE TABLE "motion_jobs" (
 	"error_message" text,
 	"cancel_requested" boolean DEFAULT false NOT NULL,
 	"worker_pid" integer,
+	"runner" text,
+	"runner_run_id" text,
+	"runner_attempt" integer,
+	"runner_dispatched_at" timestamp with time zone,
+	"runner_claimed_at" timestamp with time zone,
+	"dispatch_attempts" integer DEFAULT 0 NOT NULL,
+	"dispatch_after" timestamp with time zone,
 	"requested_by" text,
 	"via" text NOT NULL,
 	"client_name" text,
@@ -41,9 +48,17 @@ CREATE TABLE "motion_jobs" (
 	"finished_at" timestamp with time zone
 );
 --> statement-breakpoint
+CREATE TABLE "motion_usage" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"bucket" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 ALTER TABLE "motion_assets" ADD CONSTRAINT "motion_assets_job_id_motion_jobs_id_fk" FOREIGN KEY ("job_id") REFERENCES "public"."motion_jobs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "motion_jobs" ADD CONSTRAINT "motion_jobs_post_id_posts_id_fk" FOREIGN KEY ("post_id") REFERENCES "public"."posts"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "motion_jobs" ADD CONSTRAINT "motion_jobs_requested_by_user_id_fk" FOREIGN KEY ("requested_by") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "motion_assets_job_idx" ON "motion_assets" USING btree ("job_id");--> statement-breakpoint
 CREATE INDEX "motion_jobs_status_created_idx" ON "motion_jobs" USING btree ("status","created_at");--> statement-breakpoint
-CREATE INDEX "motion_jobs_post_created_idx" ON "motion_jobs" USING btree ("post_id","created_at");
+CREATE INDEX "motion_jobs_post_created_idx" ON "motion_jobs" USING btree ("post_id","created_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "motion_jobs_one_active_per_post_idx" ON "motion_jobs" USING btree ("post_id") WHERE "motion_jobs"."post_id" is not null and "motion_jobs"."kind" in ('render', 'gif') and "motion_jobs"."status" in ('queued', 'running');--> statement-breakpoint
+CREATE INDEX "motion_usage_bucket_created_idx" ON "motion_usage" USING btree ("bucket","created_at");

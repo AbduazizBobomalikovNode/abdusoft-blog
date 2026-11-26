@@ -184,8 +184,8 @@ const EnvSchema = z.object({
   VIDEO_MOTION_DIR: z.string().optional().default(""),
   // Bo'sh — Remotion o'rnatgan Chrome Headless Shell (`scripts/setup-motion-browser.sh`); aks holda brauzer fayliga to'liq yo'l.
   VIDEO_BROWSER_PATH: z.string().optional().default(""),
-  // Mashinada bir vaqtda ishlaydigan render ishchilari soni (1..2). Kichik umumiy serverda 1.
-  VIDEO_MAX_RUNNING: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).max(2).default(1)),
+  // Bir vaqtda bajarilayotgan ishlar soni (1..4). `github` backendda har biri alohida GitHub runner; `local`da ko'pi bilan 2 (kichik serverda 1).
+  VIDEO_MAX_RUNNING: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).max(4).default(1)),
   // Bitta ishchida parallel kadrlar (Remotion concurrency). Har biri taxminan 0.4-0.6 GB xotira qo'shadi.
   VIDEO_CONCURRENCY: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).max(8).default(1)),
   // Ishchi jarayon daraxti (Node + Chrome) uchun xotira shifti, MB (RSS yig'indisi). Oshsa butun guruh o'ldiriladi.
@@ -212,6 +212,19 @@ const EnvSchema = z.object({
   VIDEO_PREVIEW_TTL_HOURS: intEnv(6, 1),
   // Muvaffaqiyatsiz/bekor qilingan ishlar yozuvi shuncha kundan keyin o'chiriladi.
   VIDEO_FAILED_TTL_DAYS: intEnv(7, 1),
+  // Render qayerda bajariladi: `github` (tavsiya etiladi: GitHub Actions runner) yoki `local` (server ichida alohida jarayon; glibc >= 2.35 va >= 2 GB bo'sh xotira kerak).
+  VIDEO_RUNNER: z.enum(["github", "local"]).optional().default("github"),
+  // GitHub backend: ishchi (runner) va API o'rtasidagi umumiy sir (>= 32 belgi). Har bir ish uchun HMAC bilan alohida token chiqariladi. Faqat env.
+  VIDEO_RUNNER_SECRET: z.string().optional().default(""),
+  // GitHub backend: workflow'ni ishga tushiruvchi fine-grained token ("Actions: Read and write") va repozitoriy `egasi/nomi`. Env > admin panel (shifrlangan).
+  VIDEO_GITHUB_TOKEN: z.string().optional().default(""),
+  VIDEO_GITHUB_REPO: z.string().optional().default(""),
+  // GitHub runner'da parallel kadrlar (hosted runner: 4 yadro). Runner o'z yadrolari soni bilan yana cheklaydi.
+  VIDEO_RUNNER_CONCURRENCY: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.coerce.number().int().min(1).max(8).default(4)),
+  // Dispatch'dan keyin ishchi shuncha soniyada `claim` qilmasa ish `runner_not_started` bilan to'xtaydi.
+  VIDEO_RUNNER_START_TIMEOUT_SECONDS: intEnv(300, 30),
+  // `preview_storyboard` ko'rik tayyor bo'lishini ko'pi bilan shuncha soniya kutadi (proksi 60 soniyada uzadi; 5..50).
+  VIDEO_PREVIEW_WAIT_SECONDS: intEnv(40, 5),
   // Platforma ilovalari (client id / secret) — env > admin panel (shifrlangan). Bo'sh bo'lsa panelda kiritiladi.
   DISTRIBUTION_LINKEDIN_CLIENT_ID: z.string().optional().default(""),
   DISTRIBUTION_LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),

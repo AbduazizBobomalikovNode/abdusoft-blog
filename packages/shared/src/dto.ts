@@ -111,6 +111,8 @@ export const MeSchema = z.object({
   role: RoleSchema,
   /** Faqat admin uchun va faqat `DISTRIBUTION_ENABLED=true` bo'lganda `true` (o'chiq bo'lsa maydon umuman yo'q). */
   distributionEnabled: z.boolean().optional(),
+  /** Admin va `VIDEO_ENABLED` yoqilgandagina `true`; aks holda maydon umuman yo'q (web alohida so'rov yubormaydi). */
+  videoEnabled: z.boolean().optional(),
 });
 export type Me = z.infer<typeof MeSchema>;
 

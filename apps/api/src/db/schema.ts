@@ -440,8 +440,20 @@ export const motionJobs = pgTable(
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
     cancelRequested: boolean("cancel_requested").notNull().default(false),
-    /** Ishchi jarayon guruhining pid'i (API qulab tushsa, qolib ketganini topib o'ldirish uchun). */
+    /** Ishchi jarayon guruhining pid'i (API qulab tushsa, qolib ketganini topib o'ldirish uchun). Faqat `local` backend. */
     workerPid: integer("worker_pid"),
+    /** Kim render qiladi: `github` (GitHub Actions) yoki `local` (server ichidagi ishchi). `queued` paytida bo'sh. */
+    runner: text("runner"),
+    /** GitHub Actions run id (dispatch javobidan, keyin ishchining `claim`idan). Bekor qilish uchun. */
+    runnerRunId: text("runner_run_id"),
+    runnerAttempt: integer("runner_attempt"),
+    /** Dispatch muvaffaqiyatli yuborilgan payt; bo'sh bo'lsa (API qulagan/vaqtinchalik xato) navbat kuzatuvchisi qayta yuboradi. */
+    runnerDispatchedAt: timestamp("runner_dispatched_at", { withTimezone: true }),
+    /** Ishchi `claim` qilgan payt (bir martalik): shundan keyin render muddati hisoblanadi. */
+    runnerClaimedAt: timestamp("runner_claimed_at", { withTimezone: true }),
+    dispatchAttempts: integer("dispatch_attempts").notNull().default(0),
+    /** Vaqtinchalik dispatch xatosidan keyin eng erta qayta urinish. */
+    dispatchAfter: timestamp("dispatch_after", { withTimezone: true }),
     /** Kim va qaysi yo'l bilan so'ragan. */
     requestedBy: text("requested_by").references(() => user.id, { onDelete: "set null" }),
     via: text("via").notNull(),
@@ -454,7 +466,29 @@ export const motionJobs = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
-  (table) => [index("motion_jobs_status_created_idx").on(table.status, table.createdAt), index("motion_jobs_post_created_idx").on(table.postId, table.createdAt)],
+  (table) => [
+    index("motion_jobs_status_created_idx").on(table.status, table.createdAt),
+    index("motion_jobs_post_created_idx").on(table.postId, table.createdAt),
+    // Bir postga bitta faol render/GIF: tekshiruvdagi poyga bo'lsa ham bazaning o'zi ikkinchisini rad etadi.
+    uniqueIndex("motion_jobs_one_active_per_post_idx")
+      .on(table.postId)
+      .where(sql`${table.postId} is not null and ${table.kind} in ('render', 'gif') and ${table.status} in ('queued', 'running')`),
+  ],
+);
+
+/**
+ * Kunlik kvota hisobi: har bir yaratilgan ish uchun BITTA qator, ish bilan bir tranzaksiyada yoziladi va ish o'chirilganda
+ * o'chmaydi (jobs jadvaliga bog'lanmagan). Eski qatorlar (2 kundan eski) tozalash vaqtida olib tashlanadi.
+ */
+export const motionUsage = pgTable(
+  "motion_usage",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    /** `render` (MP4 + GIF) yoki `preview`. */
+    bucket: text("bucket").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("motion_usage_bucket_created_idx").on(table.bucket, table.createdAt)],
 );
 
 /** Ish natijasi fayllari (media jadvalidan alohida: rasm kutubxonasiga aralashmasin). Fayl saqlash qatlami (R2 yoki mahalliy) orqali. */
