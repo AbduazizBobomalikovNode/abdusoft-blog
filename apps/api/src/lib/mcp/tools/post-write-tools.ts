@@ -502,7 +502,7 @@ export const publishPostTool = defineTool({
   description:
     U + "Publish a post on the public site NOW (status becomes published; it appears on the home page and in feeds immediately). " +
     "It refuses when the pre-publish checks BLOCK (default title or empty body) and returns the warnings (missing cover, tags, alt text, slug) with the result. " +
-    "Optional send_to_channel=true also sends the post's marked Telegram version to the channel after publishing; this needs the channels:send permission and a version marked in the web panel. " +
+    "The Telegraph mirror page (if enabled for the post) is created or refreshed on publishing with or without the channels:send permission. Optional send_to_channel=true also sends the post's marked Telegram version to the channel after publishing; this needs the channels:send permission and a version marked in the web panel. " +
     "dry_run=true reports exactly what would happen (checks, channel preflight) and changes nothing. Posts in review must be approved with approve_post instead. " +
     "expected_updated_at is REQUIRED. Already published is reported as such, nothing is repeated. Reversible with unpublish_post.",
   scope: "posts:publish",

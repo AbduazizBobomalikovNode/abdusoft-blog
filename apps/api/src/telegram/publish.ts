@@ -56,6 +56,7 @@ async function syncPostToTelegram(postId: string, opts: { skipChannel?: boolean 
   // Post allaqachon kanalga (qo'lda) yuborilgan bo'lsa — caption'ni yangi
   // kontent bilan qayta quramiz. Hali yuborilmagan bo'lsa — HECH NARSA
   // qilinmaydi (avtomatik yuborish YO'Q).
+  // Telegraph ko'zgusi saytga ergashadi (yuqorida, har doim); kanal xabari esa FAQAT kanalga tegish huquqi bo'lganda yangilanadi.
   if (opts.skipChannel) return;
   try {
     await editChannelCaptionForPost(post.id);
@@ -99,8 +100,9 @@ export function registerTelegramPublishing(): void {
 }
 
 /** Admin HTTP endpoint'lari (`/admin/posts/:id/telegram/telegraph`) uchun to'g'ridan-to'g'ri chaqiriladigan versiya. */
-export async function refreshTelegraphMirror(postId: string): Promise<void> {
-  await syncPostToTelegram(postId);
+export async function refreshTelegraphMirror(postId: string, opts: { skipChannel?: boolean } = {}): Promise<void> {
+  // `skipChannel: true` — faqat Telegraph ko'zgusi yangilanadi, kanal xabariga tegilmaydi (ulangan yordamchi uchun).
+  await syncPostToTelegram(postId, opts);
 }
 
 export async function getTelegramRefForPost(postId: string) {
