@@ -32,7 +32,7 @@ export interface ToolOutput {
 }
 
 /** Yozuv chegarasi toifasi (har bir ulanish uchun, `MCP_WRITE_LIMIT_*`). */
-export type WriteLimitCategory = "create" | "edit" | "upload" | "publish" | "channel" | "moderate" | "destructive";
+export type WriteLimitCategory = "create" | "edit" | "upload" | "publish" | "channel" | "social" | "moderate" | "destructive";
 
 export interface McpToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   name: string;

@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { migrateTestDb } from "../../test/migrate-test-db.js";
 import { createTestUser, TEST_USER_PASSWORD, type TestUser } from "../../test/auth-test-helpers.js";
-import { ALL_BLOG_SCOPES, callTool, connect, mcpCall, type Json } from "../../test/mcp-harness.js";
+import { ALL_BLOG_SCOPES, API, authorize, callTool, connect, exchangeCode, mcpCall, type Json } from "../../test/mcp-harness.js";
 
 vi.hoisted(() => {
   process.env.MCP_ENABLED = "true";
@@ -17,6 +17,8 @@ let app: Hono;
 let admin: TestUser;
 let full: string;
 let readOnly: string;
+let telegramOnly: string;
+let socialOnly: string;
 let db: typeof import("../../db/index.js").db;
 let s: typeof import("../../db/schema.js");
 let fx: typeof import("../distribution/service/fixtures.js");
@@ -63,7 +65,11 @@ beforeAll(async () => {
   env.setDistributionClock(() => NOW);
   images.setSocialImageLoader((url) => sup.fakePreparedImage(url));
   admin = await createTestUser({ role: "admin" });
-  full = (await connect(app, { email: admin.email, password: TEST_USER_PASSWORD }, { scope: ALL_BLOG_SCOPES })).tokens.access_token;
+  const creds = { email: admin.email, password: TEST_USER_PASSWORD };
+  // `social:post` — ijtimoiy tarmoqqa post chiqarishning ALOHIDA ruxsati (Telegram `channels:send`dan mustaqil).
+  full = (await connect(app, creds, { scope: `${ALL_BLOG_SCOPES} social:post` })).tokens.access_token;
+  telegramOnly = (await connect(app, creds, { scope: ALL_BLOG_SCOPES })).tokens.access_token; // channels:send BOR, social:post YO'Q
+  socialOnly = (await connect(app, creds, { scope: "blog:read posts:publish social:post offline_access" })).tokens.access_token; // channels:send YO'Q
   readOnly = (await connect(app, { email: admin.email, password: TEST_USER_PASSWORD }, { scope: "blog:read offline_access" })).tokens.access_token;
   // Provayderlar maqola havolasi https bo'lishini talab qiladi; ulanish oqimi (localhost) tugagach veb-origin almashtiriladi.
   const { config } = await import("../../config.js");
@@ -162,7 +168,7 @@ describe("read tools", () => {
 });
 
 describe("permissions", () => {
-  it("write tools need channels:send; read tools only blog:read", async () => {
+  it("write tools need social:post (not the Telegram channels:send); read tools only blog:read", async () => {
     const post = await fx.insertPost();
     await ok("list_distribution_channels");
     expect((await call("list_distribution_channels", {}, readOnly)).isError).toBe(false);
@@ -283,19 +289,20 @@ describe("write tools", () => {
     expect(mock.calls.map((c) => c.method)).toEqual(["DELETE"]);
   });
 
-  it("write limits: the channel-send limit counts distribution sends (dry runs excluded)", async () => {
+  it("write limits: the social-send limit counts distribution sends (dry runs excluded)", async () => {
     const { config } = await import("../../config.js");
-    const before = config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY;
-    config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY = 1;
+    const before = config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY;
+    config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY = 1;
     try {
       const p1 = await ready();
       const p2 = await fx.insertPost();
       await ok("send_distribution", { post_id: p1.id, channel: "x", expected_updated_at: p1.updatedAt.toISOString(), dry_run: true });
       await ok("send_distribution", { post_id: p1.id, channel: "x", expected_updated_at: p1.updatedAt.toISOString() });
       const e = await fails("send_distribution", { post_id: p2.id, channel: "x", expected_updated_at: p2.updatedAt.toISOString() }, "rate_limited");
-      expect(e.limit.category).toBe("channel");
+      expect(e.limit.category).toBe("social");
+      expect(e.hint).toContain("MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY");
     } finally {
-      config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY = before;
+      config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY = before;
     }
   });
 
@@ -305,5 +312,125 @@ describe("write tools", () => {
     await runner.runDistribution((q.json as Json).distribution.id);
     const outputs = [q.text, (await call("list_distribution_channels")).text, (await call("list_post_distributions", { post_id: post.id })).text];
     for (const o of outputs) for (const t of Object.values(sup.TOKENS)) expect(o).not.toContain(t);
+  });
+});
+
+describe("separate social-posting permission (social:post)", () => {
+  async function ready(provider: "x" | "linkedin" = "x") {
+    const post = await fx.insertPost();
+    await fx.insertAccount(provider, NOW);
+    return post;
+  }
+  const writeArgs = (postId: string, distId: string): Record<string, Record<string, unknown>> => ({
+    save_distribution_text: { post_id: postId, channel: "x", text: "Salom" },
+    send_distribution: { post_id: postId, channel: "x", expected_updated_at: new Date().toISOString() },
+    schedule_distribution: { post_id: postId, channel: "x", expected_updated_at: new Date().toISOString(), scheduled_at: "2027-01-01T09:00:00+05:00" },
+    cancel_distribution: { distribution_id: distId },
+    retry_distribution: { distribution_id: distId },
+    remove_distribution_from_platform: { distribution_id: distId },
+  });
+
+  it("a connection approved only for the Telegram channel (channels:send) cannot use ANY social write tool; nothing is created or contacted", async () => {
+    const post = await ready();
+    const [d] = await db.insert(s.distributions).values({ postId: post.id, provider: "x", status: "sent", externalId: "123", externalUrl: "https://x.com/a/status/123" }).returning();
+    const before = await db.select().from(s.distributions);
+    for (const name of WRITE_NAMES) {
+      const e = await fails(name, writeArgs(post.id, d!.id)[name]!, "insufficient_scope", telegramOnly);
+      expect(e.requiredScope, name).toBe("social:post");
+      expect(e.grantedScopes, name).toContain("channels:send");
+      expect(e.grantedScopes, name).not.toContain("social:post");
+    }
+    expect(await db.select().from(s.distributions)).toEqual(before);
+    expect(mock.calls).toHaveLength(0);
+  });
+
+  it("the same Telegram-only connection still uses the read tools (blog:read) and Telegram's own tool keeps its permission", async () => {
+    await ready();
+    for (const n of READ_NAMES) {
+      const r = await call(n, n === "list_distribution_channels" ? {} : n === "get_distribution_status" ? { distribution_id: "00000000-0000-4000-8000-000000000000" } : { post_id: "00000000-0000-4000-8000-000000000000", channel: "x" }, telegramOnly);
+      expect(r.json?.error?.code, n).not.toBe("insufficient_scope");
+      expect(r.text, n).not.toMatch(/requires the 'social:post'/);
+    }
+    // Telegram tomoni o'zgarmagan: send_to_channel hamon `channels:send`ni talab qiladi, social:post unga yetmaydi.
+    const post = await fx.insertPost();
+    const r = await call("send_to_channel", { id: post.id, expected_updated_at: post.updatedAt.toISOString() }, socialOnly);
+    expect(r.json.error).toMatchObject({ code: "insufficient_scope", requiredScope: "channels:send" });
+  });
+
+  it("a connection with social:post but WITHOUT channels:send can post socially", async () => {
+    const post = await ready();
+    const j = (await call("send_distribution", { post_id: post.id, channel: "x", expected_updated_at: post.updatedAt.toISOString(), text: "Faqat ijtimoiy" }, socialOnly)).json as Json;
+    expect(j.ok).toBe(true);
+    expect(j.distribution).toMatchObject({ status: "scheduled", text: "Faqat ijtimoiy" });
+    const who = (await call("whoami", {}, socialOnly)).json as Json;
+    expect(who.grantedScopes.map((g: Json) => g.id)).toEqual(expect.arrayContaining(["social:post"]));
+    expect(who.grantedScopes.map((g: Json) => g.id)).not.toContain("channels:send");
+  });
+
+  it("whoami: the permission has its own description; the social limit is reported (flag on)", async () => {
+    const who = (await call("whoami")).json as Json;
+    const social = who.grantedScopes.find((g: Json) => g.id === "social:post");
+    expect(social.description).toMatch(/LinkedIn.*X.*Threads.*Instagram/s);
+    expect(who.server.writeLimits).toMatchObject({ channelSendsPerDay: 10, socialPostsPerDay: 5 });
+  });
+
+  it("limits are separate: exhausting the Telegram channel limit does not block social sends, and social sends do not use up Telegram's", async () => {
+    const { config } = await import("../../config.js");
+    const { WRITE_LIMITS } = await import("./write-limits.js");
+    expect(config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY).toBe(10);
+    expect(config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY).toBe(5);
+    expect(WRITE_LIMITS.social.envName).toBe("MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY");
+    expect(WRITE_LIMITS.channel.actions).toEqual(["post.channel_send", "post.channel_replace"]);
+    expect(WRITE_LIMITS.social.actions).toEqual(["distribution.send", "distribution.schedule", "distribution.retry"]);
+    const beforeCh = config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY;
+    const beforeSo = config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY;
+    config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY = 1;
+    config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY = 2;
+    try {
+      const posts = [await ready(), await fx.insertPost(), await fx.insertPost()];
+      // Telegram limiti 1 bo'lsa ham, ikkita ijtimoiy yuborish o'tadi (hisoblar alohida); uchinchisi ijtimoiy limitga uradi.
+      await ok("send_distribution", { post_id: posts[0]!.id, channel: "x", expected_updated_at: posts[0]!.updatedAt.toISOString() });
+      await ok("send_distribution", { post_id: posts[1]!.id, channel: "x", expected_updated_at: posts[1]!.updatedAt.toISOString() });
+      const e = await fails("send_distribution", { post_id: posts[2]!.id, channel: "x", expected_updated_at: posts[2]!.updatedAt.toISOString() }, "rate_limited");
+      expect(e.limit).toMatchObject({ category: "social", max: 2, used: 2 });
+    } finally {
+      config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY = beforeCh;
+      config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY = beforeSo;
+    }
+  });
+
+  it("asking for social:post later forces a fresh consent (a Telegram-only approval does not cover it) and it is not pre-ticked-by-default server side", async () => {
+    const creds = { email: admin.email, password: TEST_USER_PASSWORD };
+    const first = await connect(app, creds, { scope: ALL_BLOG_SCOPES });
+    expect(first.tokens.scope.split(" ")).not.toContain("social:post");
+    const again = await authorize(app, { clientId: first.clientId, ...creds, scope: `${ALL_BLOG_SCOPES} social:post`, browser: first.authorize.browser, stopAtConsent: true });
+    expect(again.steps).toContain("consent-page");
+    expect(again.consentUrl).toContain("social%3Apost");
+    // Ruxsat berilganda ham faqat tanlangani beriladi:
+    const picked = await authorize(app, { clientId: first.clientId, ...creds, scope: `${ALL_BLOG_SCOPES} social:post`, browser: first.authorize.browser, consentScope: "blog:read channels:send offline_access" });
+    const tok = await exchangeCode(app, picked);
+    expect(tok.body.scope.split(" ")).not.toContain("social:post");
+    expect(tok.body.scope.split(" ")).toContain("channels:send");
+  });
+
+  it("is advertised in discovery and in the 401 challenge when both switches are on", async () => {
+    const meta = (await (await app.request(`${API}/.well-known/oauth-authorization-server/api/auth`)).json()) as Json;
+    expect(meta.scopes_supported).toContain("social:post");
+    expect(Object.keys(meta.scope_descriptions)).toContain("social:post");
+    const ch = await mcpCall(app, undefined, "initialize");
+    expect(ch.www).toContain("social:post");
+  });
+});
+
+describe("untrusted-field labelling covers every platform-/third-party-originated string", () => {
+  it("preview_distribution labels previouslySent.url and checks[].value (and the old fields)", async () => {
+    const post = await fx.insertPost();
+    await fx.insertAccount("x", NOW);
+    await db.insert(s.distributions).values({ postId: post.id, provider: "x", status: "sent", externalId: "t9", externalUrl: "https://x.com/o/status/t9", sentAt: NOW });
+    const j = await ok("preview_distribution", { post_id: post.id, channel: "x" });
+    expect(j.previouslySent.url).toBe("https://x.com/o/status/t9");
+    expect(j.checks.some((c: Json) => c.value === "https://x.com/o/status/t9")).toBe(true); // "Avval yuborilgan" tekshiruvi qiymati
+    expect(j.untrusted).toBe(true);
+    expect(j.untrustedFields).toEqual(expect.arrayContaining(["post.title", "text", "defaultText", "checks[].value", "previouslySent.url", "distribution.text", "distribution.lastErrorMessage"]));
   });
 });

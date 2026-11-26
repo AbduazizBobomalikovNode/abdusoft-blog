@@ -32,7 +32,9 @@ export const WRITE_LIMITS: Record<WriteLimitCategory, LimitSpec> = {
   },
   upload: { actions: ["media.upload"], max: () => config.MCP_WRITE_LIMIT_UPLOADS_PER_HOUR, windowSeconds: HOUR, label: "image uploads per hour", envName: "MCP_WRITE_LIMIT_UPLOADS_PER_HOUR" },
   publish: { actions: ["post.publish", "post.approve", "post.schedule"], max: () => config.MCP_WRITE_LIMIT_PUBLISHES_PER_DAY, windowSeconds: DAY, label: "publish/schedule actions per day", envName: "MCP_WRITE_LIMIT_PUBLISHES_PER_DAY" },
-  channel: { actions: ["post.channel_send", "post.channel_replace", "distribution.send", "distribution.schedule", "distribution.retry"], max: () => config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY, windowSeconds: DAY, label: "Telegram channel sends per day", envName: "MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY" },
+  channel: { actions: ["post.channel_send", "post.channel_replace"], max: () => config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY, windowSeconds: DAY, label: "Telegram channel sends per day", envName: "MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY" },
+  // Ijtimoiy tarmoqqa chiqarish: Telegram kanalidan ALOHIDA hisob (ommaviy akkauntlar, shu sabab konservativ standart).
+  social: { actions: ["distribution.send", "distribution.schedule", "distribution.retry"], max: () => config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY, windowSeconds: DAY, label: "social network posts (send, schedule, retry) per day", envName: "MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY" },
   moderate: { actions: ["comment.status"], max: () => config.MCP_WRITE_LIMIT_MODERATION_PER_HOUR, windowSeconds: HOUR, label: "comment moderation actions per hour", envName: "MCP_WRITE_LIMIT_MODERATION_PER_HOUR" },
   destructive: {
     actions: ["post.trash", "post.purge", "tag.delete", "media.delete", "comment.delete", "comment.ban", "distribution.remove"],
