@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { DistributionAccountDto, DistributionItemDto } from "@blog/shared";
-import { counterView, groupChecks, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, textForSave, tokenLine } from "./distribution-ui";
+import { DISTRIBUTION_STATUS_LABELS, type DistributionAccountDto, type DistributionItemDto } from "@blog/shared";
+import { counterView, groupChecks, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, purgeDistributionWarning, statusPill, textForSave, tokenLine, trashedItemActions, trashedVisibleItems } from "./distribution-ui";
 
 const item = (over: Partial<DistributionItemDto> = {}): DistributionItemDto => ({
   id: "i", postId: "p", provider: "x", status: "draft", text: null, sentText: null, imageChoice: "auto", linkMode: null, scheduledAt: null, nextAttemptAt: null,
@@ -99,5 +99,44 @@ describe("schedule input and misc helpers", () => {
     const mk = (id: string, status: "ok" | "warn" | "error") => ({ id, group: "text" as const, status, title: id, message: id, value: null, limit: null, imageUrl: null });
     const g = groupChecks([mk("a", "ok"), mk("b", "warn"), mk("c", "error"), mk("d", "error")]);
     expect([g.ok.length, g.warnings.length, g.errors.length]).toEqual([1, 1, 2]);
+  });
+});
+
+describe("own(): table lookups never reach the prototype", () => {
+  it("returns the fallback for prototype keys and unknown keys, the value for own keys", () => {
+    const map = { a: "A" } as Record<string, string>;
+    expect(own(map, "a", "-")).toBe("A");
+    for (const k of ["constructor", "__proto__", "toString", "hasOwnProperty", "missing", "", null, undefined]) expect(own(map, k, "-")).toBe("-");
+    expect(statusPill("sent").label).toBe(DISTRIBUTION_STATUS_LABELS.sent);
+    expect(statusPill("constructor" as never).label).toBe("constructor");
+  });
+});
+
+describe("trashed post: what is shown and what is allowed", () => {
+  const mk = (status: DistributionItemDto["status"], over: Partial<DistributionItemDto> = {}): DistributionItemDto => item({ status, ...over });
+  it("shows draft, scheduled, failed, needs_checking, sent and removed rows; plain cancelled ones are hidden", () => {
+    const rows = [mk("draft"), mk("scheduled"), mk("failed"), mk("needs_checking"), mk("sent"), mk("cancelled"), mk("cancelled", { removedAt: "2026-11-01T00:00:00Z" })];
+    expect(trashedVisibleItems(rows)).toHaveLength(6);
+  });
+  it("cancel only for scheduled, resolve only for needs_checking, remove only for sent rows the provider can delete; never send/retry", () => {
+    const caps = { delete: true };
+    expect(trashedItemActions(mk("scheduled"), caps)).toEqual({ cancel: true, resolve: false, remove: false });
+    expect(trashedItemActions(mk("needs_checking"), caps)).toEqual({ cancel: false, resolve: true, remove: false });
+    expect(trashedItemActions(mk("sent", { externalId: "1" }), caps)).toEqual({ cancel: false, resolve: false, remove: true });
+    expect(trashedItemActions(mk("sent", { externalId: "1" }), { delete: false }).remove).toBe(false);
+    for (const s of ["draft", "failed", "sending", "cancelled"] as const) expect(trashedItemActions(mk(s), caps)).toEqual({ cancel: false, resolve: false, remove: false });
+  });
+});
+
+describe("warning before permanently deleting a post that was sent to networks", () => {
+  const channels = [{ id: "linkedin", name: "LinkedIn (shaxsiy)" }, { id: "x", name: "X" }, { id: "github", name: "GitHub README" }];
+  const mk = (provider: DistributionItemDto["provider"], status: DistributionItemDto["status"], over: Partial<DistributionItemDto> = {}): DistributionItemDto => item({ provider, status, ...over });
+  it("lists the networks that still hold a sent post (each once); none -> no warning", () => {
+    const w = purgeDistributionWarning([mk("linkedin", "sent"), mk("x", "sent"), mk("x", "sent"), mk("github", "scheduled")], channels)!;
+    expect(w).toContain("LinkedIn, X.");
+    expect(w).not.toContain("GitHub");
+    expect(w).toMatch(/olib tashlab bo'lmaydi/);
+    expect(purgeDistributionWarning([mk("linkedin", "scheduled"), mk("x", "cancelled", { removedAt: "2026-11-01T00:00:00Z" }), mk("x", "failed")], channels)).toBeNull();
+    expect(purgeDistributionWarning([], channels)).toBeNull();
   });
 });

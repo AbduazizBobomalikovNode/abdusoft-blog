@@ -21,6 +21,9 @@ describe("callbackToast: only fixed texts, never URL text", () => {
     expect(callbackToast(q("dist=connected&provider=linkedin"))).toEqual({ kind: "success", text: "LinkedIn ulandi" });
     expect(callbackToast(q("dist=connected&provider=<b>x</b>"))).toEqual({ kind: "success", text: "Akkaunt ulandi" });
     expect(callbackToast(q("dist=connected"))).toEqual({ kind: "success", text: "Akkaunt ulandi" });
+    for (const provider of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      expect(callbackToast(q(`dist=connected&provider=${provider}`))).toEqual({ kind: "success", text: "Akkaunt ulandi" });
+    }
   });
 
   it("shows nothing for an unknown dist value", () => {
