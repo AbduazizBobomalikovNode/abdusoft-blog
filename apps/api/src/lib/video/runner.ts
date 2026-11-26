@@ -72,7 +72,11 @@ export interface RunOptions {
   onSpawn?: (pid: number) => void;
 }
 
-const KILL_GRACE_MS = 4000;
+let killGraceMs = 4000;
+/** Faqat testlar uchun. */
+export const setKillGraceForTests = (ms: number): void => {
+  killGraceMs = ms;
+};
 const MEM_POLL_MS = 1000;
 const MAX_LINE = 2 * 1024 * 1024;
 
@@ -196,7 +200,7 @@ export async function runWorker(opts: RunOptions): Promise<RunReport> {
     if (reason || exited) return;
     reason = why;
     killGroup(pid, "SIGTERM");
-    setTimeout(() => killGroup(pid, "SIGKILL"), KILL_GRACE_MS).unref();
+    setTimeout(() => killGroup(pid, "SIGKILL"), killGraceMs).unref();
   };
 
   const timer = setTimeout(() => stop("timeout"), opts.timeoutMs);

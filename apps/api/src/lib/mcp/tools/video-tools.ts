@@ -15,6 +15,7 @@ import {
   gifWindowSeconds,
   listJobs,
   previewQueueState,
+  previewWaitMs,
   toJobDetail,
   toJobDto,
   validateInput,
@@ -256,8 +257,7 @@ export const previewStoryboardTool = defineTool({
     }
     const options: JobOptions = { ...(args.at ? { at: args.at } : {}), ...(args.scene !== undefined ? { scene: args.scene } : {}), ...(args.width !== undefined ? { width: args.width } : {}) };
     const created = unwrap(await createJob(ctx.actor, { kind: "preview", storyboard: args.storyboard, postId: args.post_id ?? null, options }), { notFound: "Check the post id with list_posts." });
-    const budgetMs = Math.min(PREVIEW_MAX_SECONDS, config.VIDEO_PREVIEW_TIMEOUT_SECONDS) * 1000 + 30_000;
-    const done = await awaitJob(created.id, budgetMs);
+    const done = await awaitJob(created.id, previewWaitMs());
     if (!done) throw new ToolError("not_found", "The preview job disappeared.");
     const { row, assets } = done;
     if (row.status === "failed" || row.status === "cancelled") {

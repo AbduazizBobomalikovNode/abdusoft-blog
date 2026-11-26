@@ -36,6 +36,20 @@ export const previewWidthOf = (options: JobOptions): number => Math.min(640, Mat
 /** Vosita chaqiruvi 240 soniyadan oldin javob berishi uchun ko'rik ishlari shundan uzoq ishlamaydi. */
 export const PREVIEW_MAX_SECONDS = 180;
 const STALE_QUEUE_MINUTES = 60;
+/** Ishchi o'z taymeridan keyin ham tugamasa, ota jarayon shuncha vaqtdan keyin butun guruhni o'ldiradi. */
+let killMarginMs = 20_000;
+/** Faqat testlar uchun. */
+export const setKillMarginForTests = (ms: number): void => {
+  killMarginMs = ms;
+};
+
+/** Ko'rik vositasi ishni kutadigan eng uzun vaqt (240 soniyalik vosita chegarasidan ancha past). */
+let previewWaitOverrideMs: number | null = null;
+export const previewWaitMs = (): number => previewWaitOverrideMs ?? Math.min(PREVIEW_MAX_SECONDS, config.VIDEO_PREVIEW_TIMEOUT_SECONDS) * 1000 + 30_000;
+/** Faqat testlar uchun. */
+export const setPreviewWaitForTests = (ms: number | null): void => {
+  previewWaitOverrideMs = ms;
+};
 
 // --------------------------------------------------------------------------- DTO
 
@@ -482,7 +496,7 @@ async function execute(job: JobRow): Promise<void> {
     const report: RunReport = await runWorker({
       jobId: job.id,
       spec,
-      timeoutMs: timeoutMs + 20_000,
+      timeoutMs: timeoutMs + killMarginMs,
       memoryLimitMb: config.VIDEO_WORKER_MEMORY_MB,
       signal: ac.signal,
       onSpawn: (pid) => void db.update(motionJobs).set({ workerPid: pid }).where(eq(motionJobs.id, job.id)).catch(() => undefined),
