@@ -99,7 +99,7 @@ export type DocValidationResult = { ok: true; doc: unknown } | { ok: false; mess
 const NODE_SET: ReadonlySet<string> = new Set(DOC_NODE_TYPES);
 const MARK_SET: ReadonlySet<string> = new Set(DOC_MARK_TYPES);
 /** `//host` va `/\\host` — brauzer ikkalasini ham protokolsiz tashqi manzil deb o'qiydi, shu sabab sayt ichidagi yo'l (`/...`) ularni qabul qilmaydi. */
-const SAFE_URL = /^(https?:\/\/|mailto:|\/(?![\/\\])|#)/i;
+const SAFE_URL = /^(https?:\/\/|mailto:|\/(?![/\\])|#)/i;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isInt = (v: unknown, min: number, max: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
