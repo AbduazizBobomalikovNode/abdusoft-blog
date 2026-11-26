@@ -394,6 +394,48 @@ describe("local backend: the watchdog counts and kills the WHOLE process tree (t
   });
 });
 
+describe("local backend refuses to run until the preflight has passed", () => {
+  it("creating a job is refused with the setup hint, and a queued job does not start", async () => {
+    const pre = await import("./local-preflight.js");
+    pre.setPreflightForTests({ ok: false, hint: "Run `bash scripts/setup-motion-browser.sh` on the server", at: null });
+    try {
+      const r = await jobs.createJob(actor(), { kind: "preview", storyboard: sbOf("ok") });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.extra).toMatchObject({ code: "local_preflight_missing" });
+      // a job that was queued before the marker disappeared waits instead of starting
+      pre.setPreflightForTests({ ok: true, hint: "", at: null });
+      const created = await create("slow", "preview", { postId: null });
+      pre.setPreflightForTests({ ok: false, hint: "x", at: null });
+      await db.update(schema.motionJobs).set({ status: "queued", startedAt: null }).where(eq(schema.motionJobs.id, created.id));
+      await jobs.tickQueue();
+      await new Promise((r2) => setTimeout(r2, 300));
+      expect((await rowOf(created.id)).status).toBe("queued");
+    } finally {
+      pre.setPreflightForTests({ ok: true, hint: "", at: null });
+    }
+  }, 30_000);
+
+  it("the real marker file is read: absent or ok:false means not ready, ok:true means ready", async () => {
+    const pre = await import("./local-preflight.js");
+    const { writeFileSync: write, rmSync: rm, mkdirSync: mk } = await import("node:fs");
+    pre.setPreflightForTests(null);
+    try {
+      mk(path.dirname(pre.preflightFile()), { recursive: true });
+      rm(pre.preflightFile(), { force: true });
+      expect(pre.localPreflight().ok).toBe(false);
+      write(pre.preflightFile(), JSON.stringify({ ok: false }));
+      expect(pre.localPreflight().ok).toBe(false);
+      write(pre.preflightFile(), "not json");
+      expect(pre.localPreflight().ok).toBe(false);
+      write(pre.preflightFile(), JSON.stringify({ ok: true, at: "2026-01-01T00:00:00Z" }));
+      expect(pre.localPreflight()).toMatchObject({ ok: true, at: "2026-01-01T00:00:00Z" });
+    } finally {
+      rm(pre.preflightFile(), { force: true });
+      pre.setPreflightForTests({ ok: true, hint: "", at: null });
+    }
+  });
+});
+
 describe("orphan recovery", () => {
   it("fails jobs left 'running', kills a stale worker group and sweeps leftover files", async () => {
     const stale = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", "packages/motion/src/worker/main.ts"], { detached: true, stdio: "ignore" });
