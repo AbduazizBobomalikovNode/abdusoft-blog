@@ -13,6 +13,7 @@ import {
   defaultScopeSelection,
   displayClientName,
   hasDangerSelected,
+  hasSensitiveSelected,
   isReadOnlySelection,
   rawOAuthQuery,
   registeredAgo,
@@ -192,6 +193,7 @@ export default function ConsentPage() {
       const ago = registeredAgo(view.info.client?.registeredAt);
       const readOnly = isReadOnlySelection(selected);
       const dangerOn = hasDangerSelected(selected);
+      const sensitiveOn = hasSensitiveSelected(selected);
       return (
         <Shell {...key(<ShieldCheck className="size-5" aria-hidden="true" />, "Ilovani blogingizga ulash")}>
           <Card>
@@ -287,6 +289,12 @@ export default function ConsentPage() {
               {dangerOn ? (
                 <p className="text-xs text-destructive">
                   Diqqat: bu ilova postlarni o&apos;chira olishi yoki izohlarni boshqarishi mumkin. Faqat ishonchli ilovaga ruxsat bering.
+                </p>
+              ) : null}
+              {sensitiveOn ? (
+                <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                  Juda muhim: xodim taklif havolasi parol kabi — uni ochgan kishi xodim bo&apos;ladi; sayt sozlamalari esa ochiq saytni darhol o&apos;zgartiradi.
+                  Bu ruxsatlarni faqat ishonchli ilovaga va faqat kerak bo&apos;lganda bering. Kalit va parollarga ilova baribir yetmaydi.
                 </p>
               ) : null}
               {error ? (
