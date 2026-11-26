@@ -32,6 +32,13 @@ export async function GET() {
   <atom:link href="${escapeXml(site.url)}/rss.xml" rel="self" type="application/rss+xml" />
   <description>${escapeXml(`${site.name} — IT, sun'iy intellekt va dasturlash haqida blog.`)}</description>
   <language>uz</language>
+  <image>
+    <url>${escapeXml(`${site.url}/brand/abdusoft-mark-192.png`)}</url>
+    <title>${escapeXml(site.name)}</title>
+    <link>${escapeXml(site.url)}</link>
+    <width>144</width>
+    <height>144</height>
+  </image>
   ${items}
 </channel>
 </rss>`;
