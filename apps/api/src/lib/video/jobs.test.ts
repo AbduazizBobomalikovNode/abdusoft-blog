@@ -287,9 +287,11 @@ describe("limits that always end a job", () => {
   });
 
   it("API shutdown kills every worker group and aborts the jobs", async () => {
+    rmSync(path.join(cwd, "hang.pid"), { force: true });
     const created = await create("hang");
     await waitFor(() => readPid(cwd, "hang.pid"), 10_000);
     const pid = readPid(cwd, "hang.pid")!;
+    await waitFor(() => runner.liveWorkerCount() === 1, 10_000);
     expect(runner.liveWorkerCount()).toBe(1);
     jobs.abortAllRunning();
     const { row } = await settle(created.id);
