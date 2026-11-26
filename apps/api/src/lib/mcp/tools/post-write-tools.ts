@@ -114,7 +114,40 @@ async function documentFromMarkdown(markdown: string): Promise<ContentNode> {
       "Put the title in the 'title' field and start the Markdown at a '## ' heading or paragraph. Use ## and ### for headings inside the post.",
     );
   }
+  await assertOnlyOwnImages(doc);
   return doc;
+}
+
+/**
+ * Bitta qoida ikkala yo'l uchun (tuzilmaviy hujjat `validateConnectorDocument`da, Markdown — tahlildan KEYIN shu yerda):
+ * hujjatdagi rasmlar faqat blogning o'z media manzillari bo'lishi mumkin. Aks holda server tashqi manzilni Telegram uchun yuklab
+ * olishga majbur bo'lardi (SSRF yuzasi) va tashqi rasm sayt sahifasida kuzatuvchi sifatida ishlardi.
+ */
+async function assertOnlyOwnImages(doc: ContentNode): Promise<void> {
+  const isOwn = await ownMediaMatcher();
+  const stack: ContentNode[] = [doc];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (node.type === "image") {
+      const src = (node.attrs as { src?: unknown } | undefined)?.src;
+      if (typeof src !== "string" || !isOwn(src)) {
+        // Faqat host ko'rsatiladi: manzil so'rovi imzo/token tashishi mumkin.
+        let host = "";
+        try {
+          host = typeof src === "string" ? new URL(src).host.slice(0, 80) : "";
+        } catch {
+          host = "";
+        }
+        const shown = host ? ` (host: ${host})` : "";
+        throw new ToolError(
+          "invalid_input",
+          `content_markdown contains an image that is not one of this blog's own media${shown}. Nothing was written.`,
+          "Upload the image first with upload_image (it needs the media:upload permission) and use the returned url, as ![alt](url). External image addresses are not accepted.",
+        );
+      }
+    }
+    for (const child of node.content ?? []) stack.push(child);
+  }
 }
 
 async function validatedDocument(doc: unknown): Promise<ContentNode> {
