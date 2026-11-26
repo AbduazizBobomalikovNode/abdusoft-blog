@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash, createHmac } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
 import { readFixture } from "../test-helpers.ts";
 import type { ExecuteOptions, ExecuteOutcome } from "../worker/execute.ts";
@@ -246,5 +247,41 @@ describe("runner script", () => {
     expect(p).toMatchObject({ kind: "preview", width: 320, at: [1], scene: "intro", maxOutputBytes: 600_000, concurrency: 4 });
     const g = specFor(baseClaim({ kind: "gif", videoName: "clip.gif", options: { from: 1, to: 3, loop: true } }), "/w", "/c", 1);
     expect(g).toMatchObject({ kind: "gif", outName: "clip.gif", from: 1, to: 3, loop: true, concurrency: 1 });
+  });
+});
+
+describe("the long-lived secret does not reach render child processes (L5)", () => {
+  it("is removed from process.env after the per-job token is derived, before the render starts; a spawned child cannot see it", async () => {
+    const saved = { ...process.env };
+    process.env.JOB_ID = JOB;
+    process.env.VIDEO_RUNNER_SECRET = SECRET;
+    process.env.VIDEO_API_ORIGIN = "https://api.example.test";
+    process.env.GITHUB_RUN_ID = "777";
+    process.env.RUNNER_TEMP = dir;
+    const d = apiDouble();
+    let childSaw = "not run";
+    let envSaw: string | undefined = "not run";
+    try {
+      const { exit } = await run(process.env as RunnerEnv, async (o) => {
+        envSaw = process.env.VIDEO_RUNNER_SECRET;
+        // exactly what a browser/ffmpeg/bundler child gets: the default (inherited) environment
+        childSaw = execFileSync(process.execPath, ["-e", "const v = Object.entries(process.env).filter(([k, x]) => k.includes('RUNNER_SECRET') || String(x).includes(process.argv[1])); process.stdout.write(JSON.stringify(v))", SECRET], { encoding: "utf8" });
+        return okRender(path.join(o.spec.outDir, "video.mp4"));
+      }, d);
+      expect(exit).toEqual({ code: 0, summary: "done" });
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+    expect(envSaw).toBeUndefined();
+    expect(childSaw).toBe("[]");
+    // the API was still authenticated with the derived per-job token
+    expect(d.seen[0]!.auth).toBe(`Bearer ${runnerToken(SECRET, JOB)}`);
+  });
+
+  it("the same holds for the env object a caller passes (nothing keeps the secret after the claim)", async () => {
+    const e = env();
+    await run(e, async (o) => okRender(path.join(o.spec.outDir, "video.mp4")), apiDouble());
+    expect(e.VIDEO_RUNNER_SECRET).toBeUndefined();
   });
 });

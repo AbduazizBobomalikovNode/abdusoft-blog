@@ -3,6 +3,7 @@
  * GitHub Actions entry point: renders ONE queued video job for the blog API and uploads the result. Plain Node 24
  * (types are stripped), no build step. Configuration comes ONLY from the environment:
  *   JOB_ID, VIDEO_RUNNER_SECRET, VIDEO_API_ORIGIN (+ GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT set by Actions).
+ * `runGithubJob` derives the per-job token and then deletes VIDEO_RUNNER_SECRET from `process.env`, before anything is spawned.
  * The log of a public repository is public, so this script prints stage names, timings and sizes only.
  */
 import { enterDedicatedRenderProcess } from "../render/private-tmp.ts";

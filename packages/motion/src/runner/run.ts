@@ -53,6 +53,9 @@ export async function runGithubJob(env: RunnerEnv, deps: RunnerDeps): Promise<Ru
   } catch (e) {
     return { code: 1, summary: (e as Error).message };
   }
+  // The long-lived secret has done its job (the per-job token is derived): remove it from the environment BEFORE any child process
+  // (browser, ffmpeg, bundler) is started, since children inherit `process.env`. `env` is `process.env` in `github-main.ts`.
+  delete env.VIDEO_RUNNER_SECRET;
 
   const t0 = Date.now();
   const report = async (code: RunnerFailCode, message: string): Promise<void> => {
