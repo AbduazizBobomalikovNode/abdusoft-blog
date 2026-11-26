@@ -120,7 +120,7 @@ export async function progress(id: string, body: z.infer<typeof ProgressBody>, n
   if (!row.runnerClaimedAt) throw new RunnerError(409, "not_claimed");
   await db
     .update(motionJobs)
-    .set({ progress: phasePercent(body.phase, body.fraction), phase: body.phase.replace(/[^a-z_]/g, "").slice(0, 30) || null, message: body.message.replace(/[\u0000-\u001f]/g, " ").slice(0, 120) })
+    .set({ progress: phasePercent(body.phase, body.fraction), phase: body.phase.replace(/[^a-z_]/g, "").slice(0, 30) || null, message: Array.from(body.message, (ch) => (ch.charCodeAt(0) < 32 ? " " : ch)).join("").slice(0, 120) })
     .where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running")));
   return { cancel: false };
 }

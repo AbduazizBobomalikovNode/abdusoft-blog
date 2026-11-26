@@ -14,6 +14,7 @@ vi.hoisted(() => {
   delete process.env.DISTRIBUTION_ENABLED;
 });
 
+type Rec = Record<string, Record<string, unknown> | string | boolean | null> & { token: Record<string, unknown>; repo: Record<string, unknown>; github: Record<string, unknown>; resources: Record<string, unknown> };
 let app: Hono;
 let admin: TestUser;
 let staff: TestUser;
@@ -46,7 +47,7 @@ describe("videoEnabled capability in GET /admin/me", () => {
 describe("status and GitHub settings", () => {
   it("status shows the backend and WHAT is configured, never a value; the server does not look for a browser", async () => {
     const r = await req("/admin/video/status", admin);
-    const body = (await r.json()) as Record<string, any>;
+    const body = (await r.json()) as Rec;
     expect(body).toMatchObject({ enabled: true, runner: "github", browser: null, local: null, github: { tokenConfigured: false, secretConfigured: true, repoConfigured: false, repo: null, lastSuccessAt: null } });
     expect(body.resources).toMatchObject({ freeMemoryMb: null, minFreeMemoryMb: 0 });
     expect(JSON.stringify(body)).not.toContain("aaaaaaaa");
@@ -55,16 +56,16 @@ describe("status and GitHub settings", () => {
   it("saves the token encrypted, returns only a mask, locks nothing when env is empty, audits without the value", async () => {
     const put = await req("/admin/video/settings", admin, { method: "PUT", json: { githubToken: "github_pat_SUPERSECRET1234", githubRepo: "me/blog" } });
     expect(put.status).toBe(200);
-    const view = (await put.json()) as Record<string, any>;
+    const view = (await put.json()) as Rec;
     expect(view.token).toMatchObject({ isSet: true, masked: "••••1234", source: "db" });
     expect(view.repo).toMatchObject({ value: "me/blog", source: "db" });
     expect(JSON.stringify(view)).not.toContain("SUPERSECRET");
     const [row] = await db.select().from(s.siteSettings).where((await import("drizzle-orm")).eq(s.siteSettings.key, "settings:video"));
     expect(JSON.stringify(row?.value)).not.toContain("SUPERSECRET");
     expect((row?.value as { githubToken: string }).githubToken).toMatch(/^enc:v1:/);
-    const get = (await (await req("/admin/video/settings", admin)).json()) as Record<string, any>;
+    const get = (await (await req("/admin/video/settings", admin)).json()) as Rec;
     expect(JSON.stringify(get)).not.toContain("SUPERSECRET");
-    const status = (await (await req("/admin/video/status", admin)).json()) as Record<string, any>;
+    const status = (await (await req("/admin/video/status", admin)).json()) as Rec;
     expect(status.github).toMatchObject({ tokenConfigured: true, secretConfigured: true, repoConfigured: true, repo: "me/blog" });
     const audit = (await db.select().from(s.auditLog)).filter((a) => a.action === "video.settings_update");
     expect(audit).toHaveLength(1);
@@ -73,12 +74,12 @@ describe("status and GitHub settings", () => {
 
   it("a masked value means 'keep'; an empty string clears; a bad repository or a token with spaces is refused", async () => {
     const keep = await req("/admin/video/settings", admin, { method: "PUT", json: { githubToken: "••••1234" } });
-    expect(((await keep.json()) as Record<string, any>).token.isSet).toBe(true);
+    expect(((await keep.json()) as Rec).token.isSet).toBe(true);
     expect((await req("/admin/video/settings", admin, { method: "PUT", json: { githubRepo: "no slash" } })).status).toBe(422);
     expect((await req("/admin/video/settings", admin, { method: "PUT", json: { githubToken: "has space" } })).status).toBe(422);
     expect((await req("/admin/video/settings", admin, { method: "PUT", json: { extra: 1 } })).status).toBe(400);
     const clear = await req("/admin/video/settings", admin, { method: "PUT", json: { githubToken: "" } });
-    expect(((await clear.json()) as Record<string, any>).token.isSet).toBe(false);
+    expect(((await clear.json()) as Rec).token.isSet).toBe(false);
   });
 
   it("only admins may read or change the settings", async () => {
