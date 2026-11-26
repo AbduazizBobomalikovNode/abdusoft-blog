@@ -1,3 +1,4 @@
+/* global process, Buffer, setTimeout, setInterval */
 // A stand-in for packages/motion's render worker, used by the service tests (no browser, no Remotion).
 // It speaks the same JSON-lines protocol; the storyboard's `title` selects the behaviour.
 import { spawn } from "node:child_process";

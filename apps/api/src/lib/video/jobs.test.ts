@@ -65,8 +65,8 @@ async function insertPost(slug: string, extra: Record<string, unknown> = {}): Pr
   const [row] = await db
     .insert(schema.posts)
     .values({ slug, title: slug, contentJson: { type: "doc", content: [] }, contentHtml: "", toc: [], status: "draft", ...extra } as never)
-    .returning({ id: schema.posts.id });
-  return row!.id;
+    .returning();
+  return (row as { id: string }).id;
 }
 
 const create = async (mode: string, kind: "preview" | "render" | "gif" = "render", over: { postId?: string | null; options?: Record<string, unknown>; scenes?: number } = {}) => {
