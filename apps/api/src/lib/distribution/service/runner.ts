@@ -75,13 +75,20 @@ function secretsOf(account: Awaited<ReturnType<typeof getActiveAccount>>): strin
   return [c.accessToken, c.refreshToken ?? ""].filter(Boolean);
 }
 
-async function finishSent(row: DistributionRow, result: { externalId: string; url: string | null }, text: string): Promise<void> {
+/**
+ * Har bir "claim" o'z belgisiga ega: claim qatorning `updatedAt`ini `now`ga qo'yadi va bu qiymat shu urinish tugaguncha o'zgarmaydi
+ * (`sending` holatidagi qatorni hech qanday boshqa yozuv o'zgartirmaydi; tiklash ham uni saqlab qoladi). Natija yozuvlari shu belgini
+ * talab qiladi: eski urinishning kech natijasi (qayta urinish `attempts`ni nolga qaytargan) yangi urinishni bosib ketmaydi.
+ */
+const claimed = (row: DistributionRow) => eq(distributions.updatedAt, row.updatedAt);
+
+async function finishSent(row: DistributionRow, result: { externalId: string; url: string | null }, text: string, titleForNotice: string): Promise<void> {
   const now = distNow();
   const sentFields = { status: "sent" as const, sentText: text, externalId: result.externalId, externalUrl: result.url, sentAt: now, lastErrorKind: null, lastErrorMessage: null, step: null, partial: null, nextAttemptAt: null, updatedAt: now };
   let [updated] = await db
     .update(distributions)
     .set(sentFields)
-    .where(and(eq(distributions.id, row.id), eq(distributions.status, "sending")))
+    .where(and(eq(distributions.id, row.id), eq(distributions.status, "sending"), claimed(row)))
     .returning();
   let late = false;
   if (!updated) {
@@ -90,11 +97,14 @@ async function finishSent(row: DistributionRow, result: { externalId: string; ur
     [updated] = await db
       .update(distributions)
       .set(sentFields)
-      .where(and(eq(distributions.id, row.id), eq(distributions.status, "needs_checking"), eq(distributions.lastErrorMessage, RECOVERED_MESSAGE), eq(distributions.attempts, row.attempts)))
+      .where(and(eq(distributions.id, row.id), eq(distributions.status, "needs_checking"), eq(distributions.lastErrorMessage, RECOVERED_MESSAGE), claimed(row)))
       .returning();
     late = Boolean(updated);
   }
-  if (!updated) return;
+  if (!updated) {
+    await reportIgnoredLateSuccess(row, result, titleForNotice);
+    return;
+  }
   await recordAuditSafe(SCHEDULER_ACTOR, {
     action: "distribution.sent",
     entityType: "distribution",
@@ -102,6 +112,28 @@ async function finishSent(row: DistributionRow, result: { externalId: string; ur
     summary: `${PROVIDER_LABEL[row.provider as ProviderId]}: yuborildi`,
     meta: { postId: row.postId, provider: row.provider, attempts: row.attempts, via: row.createdVia, ...(late ? { recordedAfterRecovery: true } : {}) },
   });
+}
+
+/**
+ * Platforma post chop etilganini xabar qildi, lekin qator bu urinishga tegishli emas (egasi "yuborilmagan" deb yopgan yoki bilib turib
+ * qayta urindi). Egasining qarori saqlanadi, lekin platformadagi post jimgina yo'qolmasligi uchun audit yozuvi va bildirishnoma.
+ */
+async function reportIgnoredLateSuccess(row: DistributionRow, result: { externalId: string; url: string | null }, titleForNotice: string): Promise<void> {
+  const current = await getDistribution(row.id);
+  if (!current || current.status === "sent") return;
+  const label = PROVIDER_LABEL[row.provider as ProviderId];
+  const closed = current.status === "cancelled";
+  await recordAuditSafe(SCHEDULER_ACTOR, {
+    action: "distribution.late_result",
+    entityType: "distribution",
+    entityId: row.id,
+    summary: `${label}: platforma postni chop etilgan deb xabar qildi, lekin yozuv boshqa holatda (${current.status}) — qo'lda tekshiring`,
+    meta: { postId: row.postId, provider: row.provider, status: current.status, externalId: result.externalId, url: result.url },
+  });
+  const where = result.url ? ` ${escapeHtml(result.url)}` : ` (id: ${escapeHtml(result.externalId)})`;
+  await notifyOwner(
+    `⚠️ <b>${escapeHtml(label)}</b>: «${escapeHtml(titleForNotice)}» platformada chop etilgani xabar qilindi${where}, lekin panelda ${closed ? "«yuborilmadi» deb yopilgan edi" : "yozuv boshqa holatda"}. Qarori o'zgarmadi — postni platformada tekshiring.`,
+  );
 }
 
 async function finishFailed(row: DistributionRow, error: unknown, secrets: readonly string[], titleForNotice: string): Promise<void> {
@@ -115,7 +147,8 @@ async function finishFailed(row: DistributionRow, error: unknown, secrets: reado
 
   if (err?.kind === "outcome_unknown") {
     // Noaniq natija: HECH QACHON avtomatik qayta urinilmaydi — odam platformani tekshiradi.
-    await db.update(distributions).set({ ...base, status: "needs_checking", nextAttemptAt: null }).where(and(eq(distributions.id, row.id), eq(distributions.status, "sending")));
+    const hit = await db.update(distributions).set({ ...base, status: "needs_checking", nextAttemptAt: null }).where(and(eq(distributions.id, row.id), eq(distributions.status, "sending"), claimed(row))).returning();
+    if (hit.length === 0) return; // eski urinishning kech xatosi: yangi urinishga tegilmaydi
     await recordAuditSafe(SCHEDULER_ACTOR, { action: "distribution.needs_checking", entityType: "distribution", entityId: row.id, summary: `${label}: natija noma'lum — tekshirish kerak`, meta: { postId: row.postId, provider: row.provider, step } });
     await notifyOwner(`❓ <b>${escapeHtml(label)}</b>: «${escapeHtml(titleForNotice)}» yuborilgani noma'lum. Platformada tekshiring va panelda hal qiling (Tarqatish).`);
     return;
@@ -123,12 +156,14 @@ async function finishFailed(row: DistributionRow, error: unknown, secrets: reado
 
   if (err?.retryable && row.attempts < MAX_AUTO_ATTEMPTS) {
     const delay = err.kind === "rate_limited" ? rateLimitDelay(err.retryAt, now) : backoffFor(row.attempts);
-    await db.update(distributions).set({ ...base, status: "scheduled", nextAttemptAt: new Date(now.getTime() + delay) }).where(and(eq(distributions.id, row.id), eq(distributions.status, "sending")));
+    const hit = await db.update(distributions).set({ ...base, status: "scheduled", nextAttemptAt: new Date(now.getTime() + delay) }).where(and(eq(distributions.id, row.id), eq(distributions.status, "sending"), claimed(row))).returning();
+    if (hit.length === 0) return;
     await recordAuditSafe(SCHEDULER_ACTOR, { action: "distribution.retry_scheduled", entityType: "distribution", entityId: row.id, summary: `${label}: vaqtinchalik xato, qayta uriniladi`, meta: { postId: row.postId, provider: row.provider, kind: safe.kind, attempt: row.attempts, inSeconds: Math.round(delay / 1000) } });
     return;
   }
 
-  await db.update(distributions).set({ ...base, status: "failed", nextAttemptAt: null }).where(and(eq(distributions.id, row.id), eq(distributions.status, "sending")));
+  const hit = await db.update(distributions).set({ ...base, status: "failed", nextAttemptAt: null }).where(and(eq(distributions.id, row.id), eq(distributions.status, "sending"), claimed(row))).returning();
+  if (hit.length === 0) return;
   await recordAuditSafe(SCHEDULER_ACTOR, { action: "distribution.failed", entityType: "distribution", entityId: row.id, summary: `${label}: yuborilmadi (${safe.kind})`, meta: { postId: row.postId, provider: row.provider, kind: safe.kind, attempts: row.attempts, step } });
   await notifyOwner(`❌ <b>${escapeHtml(label)}</b>: «${escapeHtml(titleForNotice)}» yuborilmadi — ${escapeHtml(safe.message)}`);
 }
@@ -180,7 +215,7 @@ export async function runDistribution(id: string, now: Date = distNow()): Promis
       ...(row.partial && Object.keys(row.partial).length > 0 ? { resume: row.partial as PartialRefs } : {}),
     };
     const result = await provider.publish({ deps: providerDeps(), account: toConnected(account) }, input);
-    await finishSent(row, result, plan.text);
+    await finishSent(row, result, plan.text, title);
     return "sent";
   } catch (error: unknown) {
     // Token yaroqsizligi: akkaunt "qayta ulash kerak" holatiga o'tadi (keyingi yuborishlar ham aniq xabar bilan to'xtaydi).
@@ -221,7 +256,8 @@ export async function recoverInterruptedDistributions(now: Date = distNow(), all
   const cutoff = new Date(now.getTime() - STALE_SENDING_MS);
   const rows = await db
     .update(distributions)
-    .set({ status: "needs_checking", lastErrorKind: "outcome_unknown", lastErrorMessage: RECOVERED_MESSAGE, updatedAt: now })
+    // `updatedAt` ataylab o'zgartirilmaydi: u shu urinishning claim belgisi (qarang `claimed`).
+    .set({ status: "needs_checking", lastErrorKind: "outcome_unknown", lastErrorMessage: RECOVERED_MESSAGE })
     .where(and(eq(distributions.status, "sending"), all ? undefined : lt(distributions.updatedAt, cutoff)))
     .returning();
   for (const row of rows) {
