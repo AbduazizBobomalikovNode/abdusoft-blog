@@ -19,6 +19,7 @@ import type {
   TurnstileSettingsPatch,
   UmamiSettingsPatch,
 } from "@blog/shared";
+import { validateSocialLink } from "@blog/shared";
 import { SETTING_SWITCHES } from "@/components/admin/post-settings-fields";
 import {
   GeneralSection,
@@ -145,6 +146,14 @@ function SocialTab({ initial }: { initial: SocialLinks }) {
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
+    // Yangi/o'zgargan qiymatlar tekshiriladi (avval saqlangan qiymatlar o'zgarmasa — rad etilmaydi).
+    for (const field of SOCIAL_FIELDS) {
+      if ((social[field.key] ?? null) === (initial[field.key] ?? null)) continue;
+      if (validateSocialLink(social[field.key], field.key) !== null) {
+        toast.error(`${field.label}: https:// havola yoki mailto: manzil kiriting`);
+        return;
+      }
+    }
     setSaving(true);
     try {
       await adminApi.updateSiteSettings({ social });

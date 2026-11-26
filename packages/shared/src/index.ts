@@ -16,3 +16,4 @@ export * from "./mcp.js";
 export * from "./editor-markdown-serialize.js";
 export * from "./publish-checklist.js";
 export * from "./doc-validate.js";
+export * from "./social-links.js";

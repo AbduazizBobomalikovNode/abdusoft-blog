@@ -14,7 +14,7 @@ vi.hoisted(() => {
   for (const key of ["CREATES_PER_HOUR", "EDITS_PER_HOUR", "PUBLISHES_PER_DAY", "CHANNEL_SENDS_PER_DAY", "MODERATION_PER_HOUR", "DESTRUCTIVE_PER_DAY"]) process.env[`MCP_WRITE_LIMIT_${key}`] = "0";
 });
 
-const EVERY_SCOPE = `${ALL_BLOG_SCOPES} channels:prepare`;
+const EVERY_SCOPE = `${ALL_BLOG_SCOPES} channels:prepare settings:manage`;
 let app: Hono;
 let admin: TestUser;
 let full: string;
@@ -112,5 +112,19 @@ describe("channels:prepare cannot change what a pending public channel post will
     const cur = (await ok("get_post", { id: p.id })).post.updatedAt as string;
     const r = await call(prepareOnly, "set_channel_choice", { id: p.id, expected_updated_at: cur, version_id: p.versionId });
     expect(r.isError, r.text).toBe(false);
+  });
+});
+
+describe("update_site_settings social links", () => {
+  it("refuses javascript:/data:/protocol-relative values, saves nothing, and accepts https, mailto and null", async () => {
+    for (const bad of ["javascript:alert(1)", "data:text/html,x", "//evil.example", "http://plain.example"]) {
+      const r = await call(full, "update_site_settings", { social: { github: bad } });
+      expect(r.isError, bad).toBe(true);
+    }
+    expect(JSON.stringify((await ok("get_site_settings")).social)).not.toMatch(/javascript|evil|data:/);
+    await ok("update_site_settings", { social: { github: "https://github.com/ok", email: "mailto:a@b.uz" } });
+    expect((await ok("get_site_settings")).social).toMatchObject({ github: "https://github.com/ok", email: "mailto:a@b.uz" });
+    await ok("update_site_settings", { social: { github: null } });
+    expect((await ok("get_site_settings")).social.github).toBeNull();
   });
 });
