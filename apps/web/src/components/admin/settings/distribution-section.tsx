@@ -41,6 +41,7 @@ export function CopyButton({ value, label = "Nusxa" }: { value: string; label?: 
 
 function ProviderCard({ p, onChanged }: { p: DistributionProviderSettingsDto; onChanged: (v: DistributionSettingsResponse) => void }) {
   const [clientId, setClientId] = useState(p.credentials?.clientId.value ?? "");
+  const [configId, setConfigId] = useState(p.credentials?.configId?.value ?? "");
   const [secretDraft, setSecretDraft] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -54,8 +55,9 @@ function ProviderCard({ p, onChanged }: { p: DistributionProviderSettingsDto; on
     if (!creds || p.id === "github") return;
     setSaving(true);
     try {
-      const patch: { clientId?: string; clientSecret?: string } = {};
+      const patch: { clientId?: string; clientSecret?: string; configId?: string } = {};
       if (creds.clientId.source !== "env") patch.clientId = clientId;
+      if (creds.configId && creds.configId.source !== "env") patch.configId = configId;
       if (secretDraft !== undefined) patch.clientSecret = secretDraft;
       onChanged(await adminApi.saveDistributionCredentials({ [p.id]: patch }));
       setSecretDraft(undefined);
@@ -121,7 +123,7 @@ function ProviderCard({ p, onChanged }: { p: DistributionProviderSettingsDto; on
             </p>
             <p className="text-xs text-muted-foreground">
               Ulangan: {formatDate(p.account.connectedAt)}
-              {p.account.expiresAt ? ` · muddat: ${formatDate(p.account.expiresAt)}` : ""}
+              {p.account.expiresAt ? ` · muddat: ${formatDate(p.account.expiresAt)}` : p.account.neverExpires ? " · token muddatsiz" : ""}
             </p>
           </div>
         ) : null}
@@ -147,8 +149,9 @@ function ProviderCard({ p, onChanged }: { p: DistributionProviderSettingsDto; on
 
         {oauth && creds ? (
           <div className="flex flex-col gap-3">
-            <TextFieldRow id={`dist-${p.id}-id`} label="Client ID" field={creds.clientId} value={clientId} onChange={setClientId} />
-            <SecretFieldRow id={`dist-${p.id}-secret`} label={p.id === "x" ? "Client secret (ixtiyoriy — public client)" : "Client secret"} field={creds.clientSecret} draftValue={secretDraft} onDraftChange={setSecretDraft} />
+            <TextFieldRow id={`dist-${p.id}-id`} label={p.credentialLabels?.clientId ?? "Client ID"} field={creds.clientId} value={clientId} onChange={setClientId} />
+            <SecretFieldRow id={`dist-${p.id}-secret`} label={p.credentialLabels?.clientSecret ?? (p.id === "x" ? "Client secret (ixtiyoriy — public client)" : "Client secret")} field={creds.clientSecret} draftValue={secretDraft} onDraftChange={setSecretDraft} />
+            {creds.configId ? <TextFieldRow id={`dist-${p.id}-config`} label={p.credentialLabels?.configId ?? "Config ID"} hint="Maxfiy emas — Meta ilovasidagi konfiguratsiya raqami" field={creds.configId} value={configId} onChange={setConfigId} /> : null}
             <div>
               <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => void saveCreds()}>
                 {saving ? "Saqlanmoqda…" : "Kalitlarni saqlash"}
@@ -180,7 +183,7 @@ function ProviderCard({ p, onChanged }: { p: DistributionProviderSettingsDto; on
               Uzish
             </Button>
           ) : null}
-          {oauth && !p.credentialsReady ? <span className="text-xs text-muted-foreground">Avval Client ID/Secret ni saqlang</span> : null}
+          {oauth && !p.credentialsReady ? <span className="text-xs text-muted-foreground">{p.credentialLabels ? "Avval App ID, App Secret va Config ID'ni saqlang" : "Avval Client ID/Secret ni saqlang"}</span> : null}
         </div>
 
         <div className="flex flex-col gap-1 text-xs text-muted-foreground">

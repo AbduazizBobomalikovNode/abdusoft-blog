@@ -118,6 +118,7 @@ const DAY_MS = 86_400_000;
 export function tokenLine(account: DistributionAccountDto | null, now: Date = new Date()): { tone: Tone; text: string } {
   if (!account) return { tone: "neutral", text: "Ulanmagan" };
   if (account.status === "reauth_required" || account.tokenState === "expired") return { tone: "danger", text: "Token yaroqsiz — qayta ulash kerak" };
+  if (account.neverExpires && account.expiresAt === null) return { tone: "success", text: "Token muddatsiz (tugamaydi)" };
   if (account.expiresAt === null) return { tone: "success", text: account.canRefresh ? "Token o'zi yangilanadi" : "Muddati noma'lum" };
   const left = Math.ceil((new Date(account.expiresAt).getTime() - now.getTime()) / DAY_MS);
   if (account.canRefresh && account.tokenState === "ok") return { tone: "success", text: "Token o'zi yangilanadi" };
@@ -187,6 +188,11 @@ export const CALLBACK_REASON_TEXT: Record<string, string> = {
   exchange_failed: "Platforma tokenni bermadi — Client ID/Secret va redirect URL'ni tekshiring",
   forbidden: "Bu so'rov boshqa foydalanuvchi sessiyasi uchun boshlangan",
   not_configured: "Platforma ilovasi sozlanmagan",
+  // Instagram (Unified Login):
+  no_instagram_account: "Meta konfiguratsiyasiga biriktirilgan Instagram akkaunt topilmadi — loginda akkauntni tanlang va uni Instagram Tester qiling",
+  config_invalid: "Config ID noto'g'ri yoki o'chirilgan — Meta ilovasidagi konfiguratsiyani tekshiring",
+  login_failed: "Meta login oynasi xato bilan tugadi — Meta App ID, Config ID va Redirect URL'ni tekshiring",
+  account_lookup_failed: "Token olindi, lekin Instagram akkauntlarini o'qib bo'lmadi — konfiguratsiyada instagram_basic ruxsatini tekshiring",
 };
 
 export const CALLBACK_REASON_FALLBACK = "Ulanish muvaffaqiyatsiz";
