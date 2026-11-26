@@ -6,10 +6,15 @@ import sharp from "sharp";
 /** Fixtures for the GitHub-runner tests: tiny but REAL files (the API verifies magic numbers and decoded dimensions). */
 export const jpeg = (width: number, height: number): Promise<Buffer> => sharp({ create: { width, height, channels: 3, background: "#224466" } }).jpeg().toBuffer();
 
+/** A structurally valid minimal MP4: `ftyp` (24 bytes), an empty `moov` (8) and an `mdat` that fills the rest of the file. */
 export function mp4(bytes = 4096): Buffer {
   const b = Buffer.alloc(bytes, 7);
   b.writeUInt32BE(24, 0);
   b.write("ftypisom", 4, "latin1");
+  b.writeUInt32BE(8, 24);
+  b.write("moov", 28, "latin1");
+  b.writeUInt32BE(bytes - 32, 32);
+  b.write("mdat", 36, "latin1");
   return b;
 }
 
