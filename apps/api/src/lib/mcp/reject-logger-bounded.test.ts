@@ -35,8 +35,7 @@ describe("the /mcp rejection logger never buffers an unauthenticated body", () =
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-11-25" },
       body,
-      // @ts-expect-error Node fetch needs duplex for streamed bodies
-      duplex: "half",
+      ...({ duplex: "half" } as object),
     });
     expect(res.status).toBe(413);
     // body limit (1 MB) + stream queue slack, nowhere near all 64 MB
