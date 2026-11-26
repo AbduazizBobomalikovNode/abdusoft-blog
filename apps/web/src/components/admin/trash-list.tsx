@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, Undo2 } from "lucide-react";
+import { Share2, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import type { TrashPostListItem } from "@blog/shared";
 import { EmptyState } from "@/components/admin/empty-state";
@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useDistributionEnabled } from "@/components/admin/distribution-context";
+import { DistributionDialog } from "@/components/admin/post-editor/distribution-dialog";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { formatDateTime } from "@/lib/format";
 
@@ -46,15 +48,24 @@ function RowActions({
   busy,
   onRestore,
   onPurge,
+  onDistribution,
 }: {
   item: TrashPostListItem;
   isAdmin: boolean;
   busy: boolean;
   onRestore: () => void;
   onPurge: () => void;
+  /** Berilsa (faqat admin + bayroq yoqilgan) "Tarqatish" tugmasi ko'rinadi: avval yuborilganlarni ko'rish/olib tashlash. */
+  onDistribution?: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-2 md:flex-nowrap">
+      {onDistribution ? (
+        <Button size="sm" variant="outline" className="max-md:h-11" disabled={busy} onClick={onDistribution} data-testid={`trash-distribution-${item.id}`}>
+          <Share2 className="size-4" />
+          Tarqatish
+        </Button>
+      ) : null}
       <Button size="sm" variant="outline" className="max-md:h-11" disabled={busy} onClick={onRestore} data-testid={`trash-restore-${item.id}`}>
         <Undo2 className="size-4" />
         Tiklash
@@ -81,6 +92,8 @@ export function TrashList({ items, isAdmin = true }: { items: TrashPostListItem[
   const [pending, startTransition] = useTransition();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [purgeTarget, setPurgeTarget] = useState<TrashPostListItem | null>(null);
+  const distributionOn = useDistributionEnabled() && isAdmin;
+  const [distributionPostId, setDistributionPostId] = useState<string | null>(null);
 
   function restore(item: TrashPostListItem) {
     setBusyId(item.id);
@@ -141,7 +154,7 @@ export function TrashList({ items, isAdmin = true }: { items: TrashPostListItem[
                 {deletedByText(item)} · {formatDateTime(item.deletedAt)}
               </span>
             </div>
-            <RowActions item={item} isAdmin={isAdmin} busy={pending && busyId === item.id} onRestore={() => restore(item)} onPurge={() => setPurgeTarget(item)} />
+            <RowActions item={item} isAdmin={isAdmin} busy={pending && busyId === item.id} onRestore={() => restore(item)} onPurge={() => setPurgeTarget(item)} {...(distributionOn ? { onDistribution: () => setDistributionPostId(item.id) } : {})} />
           </li>
         ))}
       </ul>
@@ -178,13 +191,15 @@ export function TrashList({ items, isAdmin = true }: { items: TrashPostListItem[
                 <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{deletedByText(item)}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(item.deletedAt)}</TableCell>
                 <TableCell>
-                  <RowActions item={item} isAdmin={isAdmin} busy={pending && busyId === item.id} onRestore={() => restore(item)} onPurge={() => setPurgeTarget(item)} />
+                  <RowActions item={item} isAdmin={isAdmin} busy={pending && busyId === item.id} onRestore={() => restore(item)} onPurge={() => setPurgeTarget(item)} {...(distributionOn ? { onDistribution: () => setDistributionPostId(item.id) } : {})} />
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </div>
+
+      {distributionOn ? <DistributionDialog postId={distributionPostId ?? ""} open={distributionPostId !== null} onOpenChange={(o) => !o && setDistributionPostId(null)} /> : null}
 
       <AlertDialog open={purgeTarget !== null} onOpenChange={(open) => (open ? undefined : setPurgeTarget(null))}>
         <AlertDialogContent>

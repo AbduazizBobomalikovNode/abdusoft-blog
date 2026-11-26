@@ -73,6 +73,7 @@ abdusoft blog — bitta muallif uchun mo'ljallangan, to'liq boshqariladigan texn
 
 - Blog egasining o'z Claude'i (claude.ai, mobil ilovalar, Claude Code) masofaviy MCP server orqali OAuth bilan ulanib, postlar, statistika, izohlar, tarix va jurnalni *o'qiy* oladi; server tomonda AI modeli yo'q, hammasi `MCP_ENABLED` orqasida. Batafsil: [docs/claude-connector.md](docs/claude-connector.md)
 - **Video (ixtiyoriy, default o'chiq):** yordamchi post uchun qisqa animatsiyali tushuntirish videosini (MP4/GIF) storyboard asosida tayyorlay oladi; serverda AI yo'q, render alohida past ustuvorlikli jarayonda (`VIDEO_ENABLED`). Qo'llanma: [docs/video.md](docs/video.md), konnektor bo'limi: [docs/claude-connector.md](docs/claude-connector.md)
+- Ijtimoiy tarqatish (LinkedIn, X, Threads, Instagram, GitHub README): admin panel va yordamchi vositalari orqali, faqat egasi aniq yuborganda (avtomatik emas); `DISTRIBUTION_ENABLED` (default `false`). Batafsil: [docs/distribution.md](docs/distribution.md)
 
 **Xavfsizlik**
 
@@ -465,6 +466,7 @@ abdusoft blog is a self-hosted, single-author tech blog platform. The public sid
 
 - The owner's own Claude (claude.ai, mobile apps, Claude Code) can connect over OAuth to a remote MCP server and *read* posts, stats, comments, history and the audit log; no AI model runs on the server and everything is behind `MCP_ENABLED`. Details: [docs/claude-connector.md](docs/claude-connector.md)
 - **Video (optional, off by default):** the assistant can make a short animated explainer (MP4/GIF) for a post from a storyboard it writes; no AI on the server, rendering runs in a separate low-priority process (`VIDEO_ENABLED`). Operator guide: [docs/video.md](docs/video.md); connector section: [docs/claude-connector.md](docs/claude-connector.md)
+- Social distribution (LinkedIn, X, Threads, Instagram, GitHub README): from the admin panel and through the assistant, only when the owner explicitly sends (never automatic); `DISTRIBUTION_ENABLED` (default `false`). Details: [docs/distribution.md](docs/distribution.md)
 
 **Security**
 

@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn } from "@/lib/auth-client";
+import { loginNotice } from "@/lib/distribution-ui";
 import { hasSignedOAuthQuery, oauthContinuationUrl } from "@/lib/oauth-flow";
 import { site } from "@/lib/site";
 import { useSiteConfig } from "@/lib/site-config";
@@ -26,6 +27,13 @@ export default function LoginPage() {
     () => () => undefined,
     () => hasSignedOAuthQuery(window.location.search),
     () => false,
+  );
+
+  // Tarqatish OAuth callback'ida sessiya tugagan bo'lsa: `?notice=<kod>` -> qat'iy matn (noma'lum kod e'tiborga olinmaydi).
+  const notice = useSyncExternalStore(
+    () => () => undefined,
+    () => loginNotice(window.location.search),
+    () => null,
   );
 
   async function handleGithubLogin() {
@@ -104,6 +112,12 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
+
+            {notice && !error ? (
+              <p role="status" className="text-sm text-muted-foreground" data-testid="login-notice">
+                {notice}
+              </p>
+            ) : null}
 
             {error ? (
               <p role="alert" className="text-sm text-destructive">

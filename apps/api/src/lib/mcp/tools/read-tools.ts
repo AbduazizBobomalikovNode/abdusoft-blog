@@ -147,6 +147,7 @@ export const whoami = defineTool({
                 uploadsPerHour: config.MCP_WRITE_LIMIT_UPLOADS_PER_HOUR || null,
                 publishesPerDay: config.MCP_WRITE_LIMIT_PUBLISHES_PER_DAY || null,
                 channelSendsPerDay: config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY || null,
+                ...(config.DISTRIBUTION_ENABLED ? { socialPostsPerDay: config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY || null } : {}),
                 moderationPerHour: config.MCP_WRITE_LIMIT_MODERATION_PER_HOUR || null,
                 destructivePerDay: config.MCP_WRITE_LIMIT_DESTRUCTIVE_PER_DAY || null,
               },

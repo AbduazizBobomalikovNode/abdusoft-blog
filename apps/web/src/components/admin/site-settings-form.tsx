@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import type {
+  DistributionSettingsResponse,
   GeneralSettingsPatch,
   GithubSettingsPatch,
   R2SettingsPatch,
@@ -29,6 +30,7 @@ import {
   TurnstileSection,
   UmamiSection,
 } from "@/components/admin/settings/sections";
+import { DistributionSection } from "@/components/admin/settings/distribution-section";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,7 +57,8 @@ type TabValue =
   | "turnstile"
   | "r2"
   | "umami"
-  | "github";
+  | "github"
+  | "tarqatish";
 
 interface TabDef {
   value: TabValue;
@@ -64,7 +67,7 @@ interface TabDef {
 
 // Tab'lar ikki guruhga bo'lingan — "Sayt" (kontent) va "Integratsiyalar" (tashqi
 // xizmatlar, har birida sozlanganlik holatini bildiruvchi nuqta bor).
-const TAB_GROUPS: { label: string; tabs: TabDef[] }[] = [
+const BASE_TAB_GROUPS: { label: string; tabs: TabDef[] }[] = [
   {
     label: "Sayt",
     tabs: [
@@ -85,7 +88,13 @@ const TAB_GROUPS: { label: string; tabs: TabDef[] }[] = [
     ],
   },
 ];
-const TABS: TabDef[] = TAB_GROUPS.flatMap((group) => group.tabs);
+const DISTRIBUTION_TAB: TabDef = { value: "tarqatish", label: "Tarqatish" };
+
+/** Bayroq o'chiq bo'lsa guruhlar AYNAN avvalgidek (yangi yorliq yo'q). */
+function tabGroups(withDistribution: boolean): { label: string; tabs: TabDef[] }[] {
+  if (!withDistribution) return BASE_TAB_GROUPS;
+  return BASE_TAB_GROUPS.map((g) => (g.label === "Integratsiyalar" ? { ...g, tabs: [...g.tabs, DISTRIBUTION_TAB] } : g));
+}
 
 type IntegrationStatus = "green" | "amber" | "gray";
 
@@ -228,10 +237,13 @@ export function SiteSettingsForm({
   initial,
   initialIntegrations,
   initialTelegramStatus,
+  distribution = null,
 }: {
   initial: SiteSettingsAdmin;
   initialIntegrations: SettingsAdmin;
   initialTelegramStatus: TelegramStatus;
+  /** `DISTRIBUTION_ENABLED` yoqilgandagina beriladi; `null` — "Tarqatish" yorlig'i umuman ko'rinmaydi. */
+  distribution?: DistributionSettingsResponse | null;
 }) {
   const [integrations, setIntegrations] = useState<SettingsAdmin>(initialIntegrations);
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus>(initialTelegramStatus);
@@ -239,6 +251,8 @@ export function SiteSettingsForm({
   // (masalan Dashboard'dagi Umami "Sozlash" havolasi).
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
+  const TAB_GROUPS = tabGroups(distribution !== null);
+  const TABS: TabDef[] = TAB_GROUPS.flatMap((group) => group.tabs);
   const initialTab: TabValue = TABS.some((t) => t.value === tabParam) ? (tabParam as TabValue) : "umumiy";
   const [activeTab, setActiveTab] = useState<TabValue>(initialTab);
   const statuses = integrationStatuses(integrations);
@@ -410,6 +424,12 @@ export function SiteSettingsForm({
             onTest={() => testSection("umami")}
           />
         </TabsContent>
+
+        {distribution ? (
+          <TabsContent value="tarqatish">
+            <DistributionSection initial={distribution} />
+          </TabsContent>
+        ) : null}
 
         <TabsContent value="github">
           <GithubSection

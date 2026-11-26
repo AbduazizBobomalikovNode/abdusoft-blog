@@ -31,6 +31,15 @@ import type {
   CreateStaffInviteResponse,
   CreateStaffPasswordLinkResponse,
   CreateTagBody,
+  DistributionChannelDto,
+  DistributionCredentialsPatch,
+  DistributionImageChoice,
+  DistributionItemDto,
+  DistributionLinkMode,
+  DistributionPostResponse,
+  DistributionPreviewResponse,
+  DistributionProviderId,
+  DistributionSettingsResponse,
   GenerateSecretResponse,
   Media,
   MediaListResponse,
@@ -174,7 +183,45 @@ function postWithToken(opts?: ConcurrencyArg): RequestInit {
   return opts?.expectedUpdatedAt ? { method: "POST", ...jsonBody({ expectedUpdatedAt: opts.expectedUpdatedAt }) } : { method: "POST" };
 }
 
+/** Tarqatish: matn/rasm/havola rejimi (`text: null` — standart shablonga qaytish). */
+export interface DistributionDraftBody {
+  text?: string | null;
+  imageChoice?: DistributionImageChoice;
+  linkMode?: DistributionLinkMode | null;
+}
+
+export type DistributionResolveBody =
+  | { action: "mark_sent"; url: string; externalId?: string }
+  | { action: "retry"; confirmDuplicateRisk: boolean }
+  | { action: "not_posted" };
+
 export const adminApi = {
+  // --- Ijtimoiy tarqatish (DISTRIBUTION_ENABLED=true bo'lganda; o'chiq bo'lsa API 404 qaytaradi) ---
+  distributionSettings: () => adminJson<DistributionSettingsResponse>("/admin/distribution/settings"),
+  saveDistributionCredentials: (patch: DistributionCredentialsPatch) =>
+    adminJson<DistributionSettingsResponse>("/admin/distribution/settings", { method: "PUT", ...jsonBody(patch) }),
+  distributionConnect: (provider: DistributionProviderId) =>
+    adminJson<{ authorizationUrl: string; redirectUrl: string }>(`/admin/distribution/accounts/${provider}/connect`, { method: "POST" }),
+  distributionPasteToken: (provider: DistributionProviderId, token: string) =>
+    adminJson<{ account: unknown }>(`/admin/distribution/accounts/${provider}/token`, { method: "POST", ...jsonBody({ token }) }),
+  distributionDisconnect: (provider: DistributionProviderId) =>
+    adminJson<{ removed: number }>(`/admin/distribution/accounts/${provider}`, { method: "DELETE" }),
+  distributionChannels: () => adminJson<{ channels: DistributionChannelDto[]; autoPost: false }>("/admin/distribution/channels"),
+  distributionForPost: (postId: string) => adminJson<DistributionPostResponse>(`/admin/distribution/posts/${postId}`),
+  distributionPreview: (postId: string, provider: DistributionProviderId, body: DistributionDraftBody = {}, live = false) =>
+    adminJson<DistributionPreviewResponse>(`/admin/distribution/posts/${postId}/${provider}/preview${live ? "?live=1" : ""}`, { method: "POST", ...jsonBody(body) }),
+  distributionSaveDraft: (postId: string, provider: DistributionProviderId, body: DistributionDraftBody) =>
+    adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/draft`, { method: "PUT", ...jsonBody(body) }),
+  distributionSend: (postId: string, provider: DistributionProviderId, body: DistributionDraftBody & { again?: boolean }) =>
+    adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/send`, { method: "POST", ...jsonBody(body) }),
+  distributionSchedule: (postId: string, provider: DistributionProviderId, scheduledAt: string, body: DistributionDraftBody & { again?: boolean }) =>
+    adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/schedule`, { method: "POST", ...jsonBody({ ...body, scheduledAt }) }),
+  distributionCancel: (id: string) => adminJson<DistributionItemDto>(`/admin/distribution/items/${id}/cancel`, { method: "POST" }),
+  distributionRetry: (id: string) => adminJson<DistributionItemDto>(`/admin/distribution/items/${id}/retry`, { method: "POST" }),
+  distributionResolve: (id: string, body: DistributionResolveBody) =>
+    adminJson<DistributionItemDto>(`/admin/distribution/items/${id}/resolve`, { method: "POST", ...jsonBody(body) }),
+  distributionRemove: (id: string) => adminJson<DistributionItemDto>(`/admin/distribution/items/${id}/remove`, { method: "POST" }),
+
   createPost: (title?: string) =>
     adminJson<CreatePostResponse>("/admin/posts", { method: "POST", ...jsonBody({ title }) }),
 

@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import type { Me } from "@blog/shared";
 import { getMe } from "@/lib/api";
 
 /**
@@ -7,9 +8,10 @@ import { getMe } from "@/lib/api";
  * himoya qiladi, lekin xodim (staff) shu sahifaga bevosita kirsa
  * bo'sh/xato holat ko'rmasin uchun serverda oldindan yo'naltiramiz.
  */
-export async function requireAdminPage(cookieHeader: string | null): Promise<void> {
+export async function requireAdminPage(cookieHeader: string | null): Promise<Me> {
   const me = await getMe(cookieHeader);
   if (me?.role !== "admin") {
     redirect("/admin/postlar");
   }
+  return me;
 }
