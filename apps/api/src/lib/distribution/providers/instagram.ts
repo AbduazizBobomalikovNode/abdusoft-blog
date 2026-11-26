@@ -47,7 +47,12 @@ export const INSTAGRAM_REASON = {
   noAccount: "no_instagram_account",
   configInvalid: "config_invalid",
   accountLookupFailed: "account_lookup_failed",
+  multipleAccounts: "multiple_instagram_accounts",
 } as const;
+
+/** Meta id'lari URL yo'liga qo'yiladi: faqat raqamlar, chegaralangan uzunlik (yo'l/so'rov belgilari kirib kelmasin). */
+export const GRAPH_ID_RE = /^\d{1,32}$/;
+export const isGraphId = (v: unknown): v is string => typeof v === "string" && GRAPH_ID_RE.test(v);
 /** Caption <= 2200 belgi, <= 30 hashtag, <= 20 @mention (media reference). Sanash birligi UNVERIFIED -> code point. */
 export const INSTAGRAM_CAPTION_MAX = 2200;
 export const INSTAGRAM_HASHTAG_MAX = 30;
@@ -169,10 +174,16 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
         } catch (e) {
           throw e instanceof DistributionError ? new DistributionError({ kind: e.kind, message: e.message, status: e.status, platformMessage: e.platformMessage, reason: INSTAGRAM_REASON.accountLookupFailed }) : e;
         }
-        const accounts = (Array.isArray(list.data) ? list.data : []).map(asRecord).filter((a) => str(a.id));
+        const accounts = (Array.isArray(list.data) ? list.data : []).map(asRecord).filter((a) => a.id !== undefined && a.id !== null && a.id !== "");
         const first = accounts[0];
         if (!first) throw new DistributionError({ kind: "validation_rejected", message: "Instagram: tizim foydalanuvchisiga biriktirilgan Instagram akkaunt topilmadi", reason: INSTAGRAM_REASON.noAccount });
-        const id = str(first.id) as string;
+        // Bir nechta akkaunt: jim birinchisini olmaymiz — ulanish rad etiladi (foydalanuvchi nomlari faqat xavfsiz xabarda/auditda).
+        if (accounts.length > 1) {
+          const names = accounts.slice(0, 5).map((a) => `@${str(a.username) ?? "?"}`).join(", ");
+          throw new DistributionError({ kind: "validation_rejected", message: `Instagram: konfiguratsiya bir nechta akkauntga ruxsat beradi (${names}) — bittasini tanlang`, reason: INSTAGRAM_REASON.multipleAccounts });
+        }
+        if (!isGraphId(first.id)) throw new DistributionError({ kind: "validation_rejected", message: "Instagram akkaunt id'si noto'g'ri shaklda (faqat raqamlar kutilgan) — so'rov yuborilmadi", reason: INSTAGRAM_REASON.accountLookupFailed });
+        const id = first.id;
         // client_business_id: token boshqaruvi API'si uchun kerak; chop etish unga bog'liq emas -> olinmasa ulanish to'xtamaydi.
         let clientBusinessId: string | undefined;
         try {
@@ -193,7 +204,7 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
           scopes: [...INSTAGRAM_SCOPES],
           issuedAt: now,
           connectedAt: now,
-          meta: { ...(clientBusinessId ? { clientBusinessId } : {}), accountCount: String(accounts.length) },
+          meta: { ...(clientBusinessId ? { clientBusinessId } : {}) },
         };
       },
     },
@@ -247,6 +258,7 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
       const token = account.accessToken;
       assertPublicHttpsUrl(input.post.url, "Maqola havolasi");
       const resumeId = input.resume?.containerId;
+      if (resumeId !== undefined && !isGraphId(resumeId)) throw new DistributionError({ kind: "validation_rejected", step: "container", message: "Instagram konteyner id'si noto'g'ri shaklda — so'rov yuborilmadi" });
       if (!input.imageUrl && !resumeId) throw new DistributionError({ kind: "validation_rejected", message: "Instagram uchun ommaviy rasm URL kerak" });
       const imageUrl = input.imageUrl ? assertPublicHttpsUrl(input.imageUrl, "Rasm URL") : undefined;
       const http = new HostClient(deps, INSTAGRAM_HOSTS, [token]);
@@ -263,8 +275,11 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
           mode: "safe_write",
         });
         if (created.status < 200 || created.status >= 300) throw http.fail(created, "safe_write", ref).with({ step: "container" });
-        containerId = str(asRecord(created.json).id);
-        if (!containerId) throw new DistributionError({ kind: "validation_rejected", step: "container", message: "Instagram konteyner id qaytarmadi" });
+        const rawId = asRecord(created.json).id;
+        if (rawId === undefined || rawId === null || rawId === "") throw new DistributionError({ kind: "validation_rejected", step: "container", message: "Instagram konteyner id qaytarmadi" });
+        // Konteyner YARATILGAN bo'lishi mumkin, lekin id'si yaroqsiz — keyingi so'rovlar yo'liga qo'yilmaydi.
+        if (!isGraphId(rawId)) throw new DistributionError({ kind: "validation_rejected", step: "container", message: "Instagram konteyner id'si noto'g'ri shaklda (faqat raqamlar kutilgan) — keyingi so'rov yuborilmadi" });
+        containerId = rawId;
       }
       const partial = { containerId };
       const cid = containerId;
@@ -296,6 +311,8 @@ export function createInstagramProvider(options: InstagramOptions = {}): Distrib
         if (pub.status < 200 || pub.status >= 300) throw http.fail(pub, "create", ref);
         const id = str(asRecord(pub.json).id);
         if (!id) throw new DistributionError({ kind: "outcome_unknown", status: pub.status, message: "Instagram post id qaytarmadi — qayta urinmang, profilni tekshiring" });
+        // Post YARATILGAN (media_publish 2xx), id yaroqsiz: yo'lga qo'ymaymiz va `outcome_unknown` (qayta urinmaslik: dublikat xavfi).
+        if (!isGraphId(id)) throw new DistributionError({ kind: "outcome_unknown", status: pub.status, message: "Instagram post id'si noto'g'ri shaklda — post chiqqan bo'lishi mumkin, qayta urinmang, profilni tekshiring" });
 
         let url: string | null = null;
         try {

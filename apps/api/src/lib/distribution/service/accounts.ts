@@ -171,7 +171,8 @@ export type CallbackReason =
   | "no_instagram_account"
   | "config_invalid"
   | "login_failed"
-  | "account_lookup_failed";
+  | "account_lookup_failed"
+  | "multiple_instagram_accounts";
 
 export const CALLBACK_REASON_TEXT: Record<CallbackReason, string> = {
   state_invalid: "Ulanish so'rovi yaroqsiz yoki allaqachon ishlatilgan — qaytadan boshlang",
@@ -184,6 +185,7 @@ export const CALLBACK_REASON_TEXT: Record<CallbackReason, string> = {
   config_invalid: "Config ID noto'g'ri yoki o'chirilgan — Meta ilovasidagi konfiguratsiyani tekshiring",
   login_failed: "Meta login oynasi xato bilan tugadi — Meta App ID, Config ID va Redirect URL'ni tekshiring",
   account_lookup_failed: "Token olindi, lekin Instagram akkauntlarini o'qib bo'lmadi — konfiguratsiyada instagram_basic ruxsatini tekshiring",
+  multiple_instagram_accounts: "Meta konfiguratsiyasi bir nechta Instagram akkauntga ruxsat beryapti — login oynasida (yoki konfiguratsiyada) aynan bittasini tanlang va qaytadan ulang",
 };
 
 function asCallbackReason(value: string | undefined): CallbackReason | undefined {
@@ -227,7 +229,7 @@ export async function completeConnect(
   } catch (error: unknown) {
     const safe = safeErrorMessage(error, [creds.clientSecret, query.code]);
     const connectReason = isDistributionError(error) ? asCallbackReason(error.reason) : undefined;
-    await recordAuditSafe(actor, { action: "distribution.account_connect_failed", entityType: "distribution_account", entityId: provider, summary: `${PROVIDER_LABEL[provider]}: ulanish muvaffaqiyatsiz`, meta: { provider, kind: safe.kind, ...(connectReason ? { reason: connectReason } : {}) } });
+    await recordAuditSafe(actor, { action: "distribution.account_connect_failed", entityType: "distribution_account", entityId: provider, summary: `${PROVIDER_LABEL[provider]}: ulanish muvaffaqiyatsiz`, meta: { provider, kind: safe.kind, ...(connectReason ? { reason: connectReason, message: safe.message } : {}) } });
     return { ok: false, reason: connectReason ?? "exchange_failed", detail: safe.message };
   }
 }
