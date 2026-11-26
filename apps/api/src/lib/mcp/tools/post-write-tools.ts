@@ -6,6 +6,7 @@ import {
   markdownToDoc,
   type ChecklistItem,
   type ContentNode,
+  isSafeConnectorUrl,
 } from "@blog/shared";
 import { config } from "../../../config.js";
 import { validateConnectorDocument } from "../../content/validate.js";
@@ -114,8 +115,28 @@ export async function documentFromMarkdown(markdown: string): Promise<ContentNod
       "Put the title in the 'title' field and start the Markdown at a '## ' heading or paragraph. Use ## and ### for headings inside the post.",
     );
   }
+  assertSafeUrls(doc);
   await assertOnlyOwnImages(doc);
   return doc;
+}
+
+/** Markdown'dan chiqqan havola/rasm manzillari ham tuzilmaviy hujjat bilan BIR XIL URL qoidasidan o'tadi (`//host`, `/\\host`, boshqaruv belgilari rad). */
+function assertSafeUrls(doc: ContentNode): void {
+  const stack: ContentNode[] = [doc];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    const attrs = (node as { attrs?: Record<string, unknown> }).attrs;
+    if (node.type === "image" && typeof attrs?.src === "string" && !isSafeConnectorUrl(attrs.src)) {
+      throw new ToolError("invalid_input", "An image URL in content_markdown is not allowed (protocol-relative '//host', '/\\host', or it contains spaces or control characters).", "Use an image of this blog (upload_image) or an absolute https:// URL.");
+    }
+    for (const mark of (node as { marks?: { type: string; attrs?: Record<string, unknown> }[] }).marks ?? []) {
+      const href = mark.attrs?.href;
+      if (mark.type === "link" && typeof href === "string" && !isSafeConnectorUrl(href)) {
+        throw new ToolError("invalid_input", "A link URL in content_markdown is not allowed (protocol-relative '//host', '/\\host', or it contains spaces or control characters).", "Use https://..., mailto:..., #anchor or a site path starting with a single '/'.");
+      }
+    }
+    for (const child of node.content ?? []) stack.push(child);
+  }
 }
 
 /**

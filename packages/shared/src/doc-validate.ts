@@ -101,6 +101,23 @@ const MARK_SET: ReadonlySet<string> = new Set(DOC_MARK_TYPES);
 /** `//host` va `/\\host` — brauzer ikkalasini ham protokolsiz tashqi manzil deb o'qiydi, shu sabab sayt ichidagi yo'l (`/...`) ularni qabul qilmaydi. */
 const SAFE_URL = /^(https?:\/\/|mailto:|\/(?![/\\])|#)/i;
 
+/** Boshqaruv belgilari (C0/C1) va bo'shliq: brauzer URL'dagi TAB/yangi qatorni jimgina olib tashlaydi (`/<TAB>/host` -> `//host`). */
+function hasControlOrSpace(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c <= 0x20 || (c >= 0x7f && c <= 0x9f)) return true;
+  }
+  return false;
+}
+
+/**
+ * Konnektor URL qoidasi (tuzilmaviy hujjat va Markdown'dan chiqqan havolalar uchun BITTA qoida): `http(s)://`, `mailto:`, `#` yoki
+ * sayt ichidagi `/yo'l`; `//host`, `/\host`, `/<TAB>/host` va har qanday boshqaruv belgisi/bo'shliq rad etiladi.
+ */
+export function isSafeConnectorUrl(url: string): boolean {
+  return !hasControlOrSpace(url) && SAFE_URL.test(url);
+}
+
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isInt = (v: unknown, min: number, max: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
 
@@ -183,7 +200,7 @@ function connectorAttrs(type: string, attrs: Record<string, unknown>, path: stri
     if (typeof src !== "string" || src === "") bad(`${path}: image needs a src`);
     const s = src as string;
     if (s.length > DOC_LIMITS.connectorMaxUrl) bad(`${path}: image src is too long`);
-    if (!SAFE_URL.test(s) || !/^(https?:\/\/|\/)/i.test(s)) bad(`${path}: image src must be an http(s) or site-relative URL`);
+    if (!isSafeConnectorUrl(s) || !/^(https?:\/\/|\/)/i.test(s)) bad(`${path}: image src must be an http(s) or site-relative URL`);
     if (!opts.isAllowedImageUrl || !opts.isAllowedImageUrl(s)) bad(`${path}: image src must be one of this blog's own media URLs (upload it with upload_image first)`);
     for (const k of ["alt", "title"] as const) {
       const v = out[k];
@@ -202,7 +219,7 @@ function connectorMark(mark: Record<string, unknown>, path: string): Record<stri
   }
   const href = attrs.href;
   if (typeof href !== "string" || href === "" || href.length > DOC_LIMITS.connectorMaxUrl) bad(`${path}: link needs an href up to ${DOC_LIMITS.connectorMaxUrl} characters`);
-  if (!SAFE_URL.test(href as string)) bad(`${path}: link href must start with http://, https://, mailto:, / or #`);
+  if (!isSafeConnectorUrl(href as string)) bad(`${path}: link href must start with http://, https://, mailto:, / or # (no "//host", "/\\host", spaces or control characters)`);
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "href" || v === null || v === undefined) continue;
     if (k in LINK_DEFAULTS && v === LINK_DEFAULTS[k]) continue;
