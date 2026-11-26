@@ -719,9 +719,14 @@ export async function storeAndFinalize(job: JobRow, files: StagedFile[], timings
 export async function cancelJob(actor: Actor, id: string): Promise<ServiceResult<MotionJobDetail>> {
   const found = await getJob(id);
   if (!found) return fail("not_found", "Video ishi topilmadi", { code: "job_not_found" });
-  const { row } = found;
+  let row = found.row;
   if (row.status === "queued") {
-    await db.update(motionJobs).set({ status: "cancelled", finishedAt: new Date(), cancelRequested: true }).where(and(eq(motionJobs.id, id), eq(motionJobs.status, "queued")));
+    const changed = await db.update(motionJobs).set({ status: "cancelled", finishedAt: new Date(), cancelRequested: true }).where(and(eq(motionJobs.id, id), eq(motionJobs.status, "queued"))).returning();
+    // The scheduler may have claimed the job a moment ago: then it is a running job and is cancelled as such.
+    if (changed.length === 0) row = (await getJob(id))?.row ?? row;
+  }
+  if (row.status === "queued") {
+    // cancelled just above
   } else if (row.status === "running" && row.runner === "github") {
     // The state is in the database: the job is cancelled at once; the runner sees the flag at its next progress call and the run is cancelled (best effort).
     await db.update(motionJobs).set({ status: "cancelled", cancelRequested: true, finishedAt: new Date(), phase: null }).where(and(eq(motionJobs.id, id), eq(motionJobs.status, "running")));

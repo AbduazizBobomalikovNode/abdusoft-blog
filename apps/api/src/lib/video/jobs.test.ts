@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { eq } from "drizzle-orm";
@@ -319,6 +319,78 @@ describe("limits that always end a job", () => {
     const escape = await settle((await create("escape")).id);
     expect(escape.row.status).toBe("failed");
     expect(escape.assets).toHaveLength(0);
+  });
+});
+
+describe("local backend: the watchdog counts and kills the WHOLE process tree (the browser is detached)", () => {
+  // pid files of earlier tests must not be mistaken for this test's browser
+  beforeEach(() => {
+    for (const f of ["browser.pid", "browser.ready", "browser_stubborn.pid", "browser_memory.pid", "browser.pid"]) rmSync(path.join(cwd, f), { force: true });
+  });
+
+  it("a detached browser child is killed on timeout (SIGTERM, then SIGKILL even when it ignores SIGTERM)", async () => {
+    setCfg({ VIDEO_RENDER_TIMEOUT_SECONDS: 1 });
+    const created = await create("browser_stubborn");
+    const browser = await waitFor(() => readPid(cwd, "browser.pid"), 10_000);
+    const { row } = await settle(created.id);
+    expect(row).toMatchObject({ status: "failed", errorCode: "timeout" });
+    expect(await waitFor(() => !alive(browser), 8000)).toBe(true);
+  }, 40_000);
+
+  it("cancelling leaves no orphan browser behind", async () => {
+    const created = await create("browser");
+    await waitFor(async () => (await rowOf(created.id)).status === "running" && readPid(cwd, "browser.pid"), 10_000);
+    const browser = readPid(cwd, "browser.pid")!;
+    await waitFor(() => runner.liveWorkerCount() === 1, 5000);
+    await jobs.cancelJob(actor(), created.id);
+    await settle(created.id);
+    expect(await waitFor(() => !alive(browser), 8000)).toBe(true);
+  }, 40_000);
+
+  it("the memory ceiling includes memory used by the detached browser, not only the worker's own", async () => {
+    setCfg({ VIDEO_WORKER_MEMORY_MB: 250 });
+    const { row } = await settle((await create("browser_memory")).id);
+    expect(row).toMatchObject({ status: "failed", errorCode: "memory" });
+    expect((row.timings as { peakRssMb: number }).peakRssMb).toBeGreaterThan(250);
+    const browser = readPid(cwd, "browser.pid")!;
+    expect(await waitFor(() => !alive(browser), 8000)).toBe(true);
+  }, 60_000);
+
+  it("FAILS CLOSED: when the process table cannot be read the job is stopped after a short grace, never treated as 0 MB", async () => {
+    runner.setPsForTests(() => null);
+    try {
+      const { row } = await settle((await create("hang")).id);
+      expect(row).toMatchObject({ status: "failed", errorCode: "memory" });
+      expect(row.errorMessage).toMatch(/could not be measured/);
+    } finally {
+      runner.setPsForTests(null);
+    }
+  }, 40_000);
+
+  it("shutdown sends SIGTERM to the worker AND its browser, waits, then SIGKILL leaves nothing alive", async () => {
+    const created = await create("browser_stubborn");
+    const browser = await waitFor(() => readPid(cwd, "browser.pid"), 10_000);
+    await waitFor(() => runner.liveWorkerCount() === 1, 5000);
+    // the browser has installed its SIGTERM handler, and the poller has seen it as a descendant
+    await waitFor(() => existsSync(path.join(cwd, "browser.ready")), 20_000);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(runner.killAllWorkersSync("SIGTERM")).toBe(1);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(alive(browser)).toBe(true); // it ignores SIGTERM
+    runner.killAllWorkersSync("SIGKILL");
+    expect(await waitFor(() => !alive(browser), 5000)).toBe(true);
+    await settle(created.id);
+  }, 40_000);
+
+  it("parses and walks the process table by parent pid (pure functions)", () => {
+    const rows = runner.parsePs("  10 1 1000\n  11 10 2048\n  12 11 4096\n  99 1 500\nbad line\n");
+    expect(rows).toHaveLength(4);
+    expect(runner.descendantsOf(10, rows!).map((r) => r.pid).sort()).toEqual([11, 12]);
+    expect(runner.parsePs("")).toBeNull();
+    return runner.treeRssMb(10, async () => rows).then((mb) => {
+      expect(mb).toBe(Math.round((1000 + 2048 + 4096) / 1024));
+      return runner.treeRssMb(10, async () => null).then((none) => expect(none).toBeNull());
+    });
   });
 });
 

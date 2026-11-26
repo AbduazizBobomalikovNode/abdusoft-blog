@@ -135,7 +135,7 @@ const killPid = (pid: number, signal: NodeJS.Signals): void => {
   }
 };
 
-interface ProcRow {
+export interface ProcRow {
   pid: number;
   ppid: number;
   rssKb: number;
@@ -170,13 +170,21 @@ export function descendantsOf(rootPid: number, rows: ProcRow[]): ProcRow[] {
   return out;
 }
 
+let psOverride: (() => ProcRow[] | null) | null = null;
+/** Faqat testlar uchun: jarayon jadvali manbasini almashtiradi (`null` qaytarsa — o'qib bo'lmadi). */
+export function setPsForTests(fn: (() => ProcRow[] | null) | null): void {
+  psOverride = fn;
+}
+
 function psAsync(): Promise<ProcRow[] | null> {
+  if (psOverride) return Promise.resolve(psOverride());
   return new Promise((resolve) => {
     execFile("ps", ["-A", "-o", "pid=,ppid=,rss="], { timeout: 3000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : parsePs(stdout)));
   });
 }
 
 function psSync(): ProcRow[] | null {
+  if (psOverride) return psOverride();
   try {
     const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,rss="], { timeout: 3000, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
     return r.status === 0 ? parsePs(r.stdout) : null;

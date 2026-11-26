@@ -35,6 +35,21 @@ if (mode === "env") {
   out({ t: "error", code: "render_failed", message: `ENV ${Object.keys(process.env).sort().join(",")} NICE=${os.getPriority()} CWD=${process.cwd()}` });
   process.exit(1);
 }
+if (mode === "browser" || mode === "browser_stubborn" || mode === "browser_memory") {
+  // Like a headless browser: spawned DETACHED (its own process group and session), so a plain group kill cannot reach it.
+  const code =
+    mode === "browser_memory"
+      ? "const hold = Buffer.alloc(300*1024*1024, 1); setInterval(() => { for (let i = 0; i < hold.length; i += 4096) hold[i] = (hold[i] + 1) & 255; }, 200);"
+      : mode === "browser_stubborn"
+        ? `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(path.join(process.cwd(), "browser.ready"))}, '1'); setInterval(() => {}, 1000);`
+        : "setInterval(() => {}, 1000);";
+  const browser = spawn(process.execPath, ["-e", code], { stdio: "ignore", detached: true });
+  writeFileSync(path.join(process.cwd(), "browser.pid"), String(browser.pid));
+  writeFileSync(path.join(process.cwd(), `${mode}.pid`), String(process.pid));
+  if (mode === "browser_stubborn") process.on("SIGTERM", () => undefined);
+  setInterval(() => out({ t: "progress", phase: "render", fraction: 0.3, message: "frame 3/90" }), 500);
+  await new Promise(() => undefined);
+}
 if (mode === "hang" || mode === "stubborn" || mode === "child" || mode === "memory") {
   if (mode === "child") {
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
