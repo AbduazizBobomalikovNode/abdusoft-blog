@@ -90,7 +90,10 @@ function contentFor(
     contentFormat: "plain_text+tiptap_json",
     contentNote:
       "'content' is readable plain text (headings prefixed with #, lists with -). It is NOT Markdown and drops inline formatting; " +
-      "'document' is the authoritative Tiptap JSON that the editor stores. Use include='markdown' to get the body as Markdown.",
+      (config.MCP_WRITE_TOOLS_ENABLED
+        ? "'document' is the authoritative Tiptap JSON that the editor stores. Use include='markdown' to get the body as Markdown."
+        : // Yozuv kaliti o'chiq: natija matni `main`dagi (yozuv vositalari yo'q paytdagi) bilan aynan bir xil.
+          "'document' is the authoritative Tiptap JSON that the editor stores. No Markdown serializer exists on the server yet."),
     ...(include !== "document" ? { content: docToReadableText(doc) } : {}),
     ...(include !== "text" ? { document: json ?? null } : {}),
   };
