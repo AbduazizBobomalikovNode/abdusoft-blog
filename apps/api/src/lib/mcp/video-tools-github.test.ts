@@ -142,6 +142,7 @@ describe("start_video_render with the github backend", () => {
     const motion = await import("../video/motion.js");
     const api = await motion.loadMotion();
     const spy = vi.spyOn(api, "validateStoryboardJson");
+    jobs.setPreviewWaitForTests(300);
     try {
       const r = await call("start_video_render", { post_id: await newPost(), storyboard: sbOf("ok", 4) });
       expect(r.isError).toBe(false);
@@ -151,6 +152,7 @@ describe("start_video_render with the github backend", () => {
       expect(p.isError).toBe(false);
       expect(spy).toHaveBeenCalledTimes(1);
     } finally {
+      jobs.setPreviewWaitForTests(null);
       spy.mockRestore();
     }
   });
