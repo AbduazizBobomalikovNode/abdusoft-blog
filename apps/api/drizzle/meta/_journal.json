@@ -134,6 +134,13 @@
       "when": 1795657164275,
       "tag": "0018_distribution_frozen_text_account",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795663234191,
+      "tag": "0019_motion_jobs",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, utimesSync } from "node:fs";
 import path from "node:path";
 import { BUNDLE_ENTRY, DEFAULT_CACHE_DIR, PACKAGE_ROOT } from "./paths.ts";
+import { sweepStale } from "./sweep.ts";
 import { sourceHash } from "./source-hash.ts";
 
 export interface BundleResult {
@@ -21,7 +22,18 @@ export const bundleDir = (cacheDir: string, hash: string): string => path.join(c
 export async function ensureBundle(cacheDir: string = DEFAULT_CACHE_DIR, onProgress?: (fraction: number) => void): Promise<BundleResult> {
   const { hash } = sourceHash();
   const dir = bundleDir(cacheDir, hash);
-  if (existsSync(path.join(dir, "index.html"))) return { serveUrl: dir, hash, cached: true, ms: 0 };
+  // Tidy first: half-built bundles from a killed run and caches of older source versions.
+  sweepStale({ cacheDir, keepBundle: path.basename(dir) });
+  if (existsSync(path.join(dir, "index.html"))) {
+    // Touch so "newest" means "last used", not "first built".
+    const now = new Date();
+    try {
+      utimesSync(dir, now, now);
+    } catch {
+      /* read-only cache: still usable */
+    }
+    return { serveUrl: dir, hash, cached: true, ms: 0 };
+  }
   const t0 = Date.now();
   mkdirSync(cacheDir, { recursive: true });
   const tmp = `${dir}.tmp-${process.pid}-${t0}`;

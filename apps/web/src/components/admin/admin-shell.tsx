@@ -13,6 +13,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { site } from "@/lib/site";
 import { cn } from "@/lib/utils";
 import { DistributionEnabledProvider } from "./distribution-context";
+import { VideoEnabledProvider } from "./video-context";
 import { isNavItemActive, navItemsForRole, titleForPath, type AdminNavItem } from "./admin-nav";
 
 // Pastki tab bar'da faqat eng ko'p ishlatiladigan 4 ta bo'lim ko'rsatiladi —
@@ -176,7 +177,9 @@ export function AdminShell({
         </Sheet>
 
         <main className="flex-1 px-4 py-5 pb-24 md:px-8 md:py-8 md:pb-8">
-          <DistributionEnabledProvider value={me.distributionEnabled === true}>{children}</DistributionEnabledProvider>
+          <DistributionEnabledProvider value={me.distributionEnabled === true}>
+            <VideoEnabledProvider value={me.videoEnabled === true}>{children}</VideoEnabledProvider>
+          </DistributionEnabledProvider>
         </main>
 
         {/* Mobile bottom tab bar — 4 ta asosiy bo'lim + "Ko'proq" */}

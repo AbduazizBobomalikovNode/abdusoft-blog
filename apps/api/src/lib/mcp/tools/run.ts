@@ -56,7 +56,7 @@ export async function runTool<Shape extends z.ZodRawShape>(
 
     const fitted = fitResult(output, ctx.limits.resultMaxChars);
     logCall({ ...base, ok: true, ms: Date.now() - started, bytes: fitted.text.length, truncated: fitted.truncated });
-    return okResult(fitted.text);
+    return okResult(fitted.text, output.images);
   } catch (error: unknown) {
     if (error instanceof ToolError) {
       logCall({ ...base, ok: false, code: error.code, ms: Date.now() - started });

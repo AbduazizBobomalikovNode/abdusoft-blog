@@ -37,7 +37,7 @@ export function isAdminActor(actor: Actor): boolean {
  * Xizmat xatolari. `kind` HTTP status bilan bir-ma-bir mos (route qatlami shu jadval orqali aylantiradi),
  * lekin xizmat o'zi Hono'ga bog'liq emas.
  */
-export type ServiceErrorKind = "bad_request" | "forbidden" | "not_found" | "conflict" | "unprocessable";
+export type ServiceErrorKind = "bad_request" | "forbidden" | "not_found" | "conflict" | "unprocessable" | "rate_limited";
 
 export const SERVICE_ERROR_STATUS = {
   bad_request: 400,
@@ -45,6 +45,7 @@ export const SERVICE_ERROR_STATUS = {
   not_found: 404,
   conflict: 409,
   unprocessable: 422,
+  rate_limited: 429,
 } as const satisfies Record<ServiceErrorKind, number>;
 
 export interface ServiceError {

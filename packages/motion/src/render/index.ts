@@ -4,3 +4,9 @@ export { MotionRenderer, type MotionRendererOptions, type StillRequest, type Sti
 export { computeHighlights, prepareRenderProps } from "./prepare.ts";
 export { sourceHash } from "./source-hash.ts";
 export { checkGifRange, type GifRange } from "./gif-limits.ts";
+export { browserStatus, installBrowser, type BrowserStatus } from "./browser.ts";
+export { isolateBrowserSignals } from "./cli-signals.ts";
+export { assertDedicatedRenderProcess, enterDedicatedRenderProcess, isDedicatedRenderProcess } from "./private-tmp.ts";
+export { clampConcurrency, clampTimeoutMs, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS, MAX_CONCURRENCY } from "./limits.ts";
+export { sweepStale, type SweepOptions, type SweepResult } from "./sweep.ts";
+export { defaultCacheDir } from "./paths.ts";

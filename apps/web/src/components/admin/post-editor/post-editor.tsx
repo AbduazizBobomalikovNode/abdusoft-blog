@@ -29,6 +29,7 @@ import { useDistributionEnabled } from "../distribution-context";
 import { DistributionDialog } from "./distribution-dialog";
 import { ConflictBanner } from "./conflict-banner";
 import { HistoryDialog } from "./history-dialog";
+import { VideoPanel } from "./video-panel";
 import { PostEditorHeader, StaffEditorHeader, type EditorMenuActions, type SaveState } from "./post-editor-header";
 import { PostEditorSettings } from "./post-editor-settings";
 import { PostEditorBubbleMenu } from "./post-editor-toolbar";
@@ -833,6 +834,8 @@ function PostEditorInner({
         showJournalLink={!isStaff}
         onRestore={handleRestoreRevision}
       />
+
+      {!isStaff ? <VideoPanel postId={post.id} /> : null}
 
       {isStaff ? <StaffReviewBanner status={status} reviewNote={reviewNote} /> : null}
       {!isStaff && status === "in_review" ? (

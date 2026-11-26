@@ -10,10 +10,18 @@ describe("write scopes are grantable only behind the switch", () => {
 
   it("switch on grants every pre-distribution scope (identical to before social posting existed), still dropping unknown ones", () => {
     // INTENTIONAL CHANGE of this test: `social:post` is defined but is NOT part of the write-only grant (needs the distribution flag too).
-    expect([...grantableScopeIds(true)]).toEqual(MCP_SCOPE_IDS.filter((id) => id !== "social:post"));
+    expect([...grantableScopeIds(true)]).toEqual(MCP_SCOPE_IDS.filter((id) => id !== "social:post" && id !== "video:render"));
     expect([...grantableScopeIds(true)]).toEqual(["blog:read", "posts:write", "media:upload", "channels:prepare", "posts:publish", "channels:send", "comments:moderate", "staff:manage", "settings:manage", "posts:delete"]);
-    // INTENTIONAL CHANGE (connector coverage PR): the list now also holds its three new permissions; `social:post` is still excluded.
+    // INTENTIONAL CHANGE (connector coverage PR): the list now also holds its three new permissions; `social:post` and `video:render` are still excluded.
     expect(clampToGrantable(["posts:write", "weird:scope", "posts:delete", "offline_access"], true)).toEqual(["posts:write", "posts:delete", "offline_access"]);
+  });
+
+  it("video rendering is grantable only when the video flag is on AND the write switch is on", () => {
+    expect([...grantableScopeIds(true, false, true)]).toEqual(MCP_SCOPE_IDS.filter((id) => id !== "social:post"));
+    expect([...grantableScopeIds(true, true, true)]).toEqual([...MCP_SCOPE_IDS]);
+    expect(clampToGrantable(["video:render", "blog:read"], true, false, false)).toEqual(["blog:read"]);
+    expect(clampToGrantable(["video:render", "blog:read"], true, false, true)).toEqual(["video:render", "blog:read"]);
+    expect(clampToGrantable(["video:render", "blog:read"], false, false, true)).toEqual(["blog:read"]);
   });
 });
 
@@ -33,7 +41,7 @@ describe("social posting scope (social:post)", () => {
     expect(grantableScopeIds(false, true)).not.toContain("social:post");
     expect(grantableScopeIds(true, false)).not.toContain("social:post");
     expect(grantableScopeIds(true, true)).toContain("social:post");
-    expect([...grantableScopeIds(true, true)]).toEqual([...MCP_SCOPE_IDS]);
+    expect([...grantableScopeIds(true, true)]).toEqual(MCP_SCOPE_IDS.filter((id) => id !== "video:render"));
     expect([...grantableOAuthScopes(false, true)]).toEqual(["blog:read", "offline_access"]);
   });
 

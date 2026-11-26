@@ -270,6 +270,7 @@
               "code": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": 2030,
                 "description": "Source text, max 14 lines of max 72 chars; use spaces, not tabs"
               },
               "steps": {
@@ -1216,6 +1217,7 @@
               "diff": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": 2044,
                 "description": "Unified-style lines: '+' added, '-' removed, ' ' (space) unchanged. Max 14 lines of max 72 chars after the marker; use spaces, not tabs"
               },
               "label": {

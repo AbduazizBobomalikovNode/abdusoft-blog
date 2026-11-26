@@ -13,10 +13,12 @@ export const ALL_OAUTH_SCOPES: string[] = [...MCP_SCOPE_IDS, MCP_OFFLINE_SCOPE];
 
 /** `social:post` faqat `DISTRIBUTION_ENABLED` ham yoqilganda (yozuv kaliti bilan birga) beriladi. */
 export const distributionEnabled = (): boolean => config.DISTRIBUTION_ENABLED;
+/** `video:render` faqat `VIDEO_ENABLED` ham yoqilganda (yozuv kaliti bilan birga) beriladi. */
+export const videoEnabled = (): boolean => config.VIDEO_ENABLED;
 
-export const grantableNow = (): string[] => [...grantableOAuthScopes(writeToolsEnabled(), distributionEnabled())];
-export const grantableIdsNow = (): string[] => [...grantableScopeIds(writeToolsEnabled(), distributionEnabled())];
-export const clampNow = (scopes: readonly string[]): string[] => clampToGrantable(scopes, writeToolsEnabled(), distributionEnabled());
+export const grantableNow = (): string[] => [...grantableOAuthScopes(writeToolsEnabled(), distributionEnabled(), videoEnabled())];
+export const grantableIdsNow = (): string[] => [...grantableScopeIds(writeToolsEnabled(), distributionEnabled(), videoEnabled())];
+export const clampNow = (scopes: readonly string[]): string[] => clampToGrantable(scopes, writeToolsEnabled(), distributionEnabled(), videoEnabled());
 
 /**
  * Ruxsat so'ralmagan so'rov uchun standart: faqat o'qish + ulanishni saqlash. Yozuv HECH QACHON standart emas — klient

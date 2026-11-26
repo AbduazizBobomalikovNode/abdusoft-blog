@@ -226,7 +226,8 @@ export function convertZodIssue(issue: ZIssue, input: unknown): StoryboardIssue 
     case "too_big": {
       const max = Number(issue.maximum);
       if (issue.origin === "string") {
-        const actual = typeof value === "string" ? [...value].length : undefined;
+        // Counting code points builds an array the size of the string: for a huge hostile string report the cheap UTF-16 length.
+        const actual = typeof value === "string" ? (value.length > 10_000 ? value.length : [...value].length) : undefined;
         return {
           ...base,
           message: `${name} is ${actual ?? "too many"} characters; the limit is ${max}`,
