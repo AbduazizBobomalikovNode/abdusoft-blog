@@ -85,6 +85,11 @@ app.route("/tags", tagsRoute);
 app.route("/site", siteRoute);
 app.route("/staff/invites", staffInvitesRoute);
 app.route("/admin", adminRoute);
+// Video: GitHub runner endpoints (`VIDEO_ENABLED=true` va `VIDEO_RUNNER=github`); o'chiq bo'lsa marshrut ham, modul ham yo'q.
+if (config.VIDEO_ENABLED && config.VIDEO_RUNNER === "github") {
+  const { runnerVideoRoute } = await import("./routes/runner-video.js");
+  app.route("/runner/video", runnerVideoRoute);
+}
 mountTelegramWebhook(app);
 mcpHttp?.mountMcp(app);
 

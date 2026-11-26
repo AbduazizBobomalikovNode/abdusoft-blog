@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Shellcheck
-        run: shellcheck -s bash scripts/server-deploy.sh scripts/server-deploy-entry.sh scripts/make-deploy-bundle.sh scripts/tests/server-deploy-sim.sh
+        run: shellcheck -s bash scripts/server-deploy.sh scripts/server-deploy-entry.sh scripts/make-deploy-bundle.sh scripts/setup-motion-browser.sh scripts/tests/server-deploy-sim.sh
 
       - uses: actions/setup-node@v4
         with:

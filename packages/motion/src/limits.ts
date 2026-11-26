@@ -90,3 +90,22 @@ export const GIF_LIMITS = {
   maxWidth: 800,
   fps: 15,
 } as const;
+
+/**
+ * Input-size guards for untrusted storyboards (an assistant or a stranger writes them). Every cap is derived
+ * from the display limits above, so a string that cannot possibly fit on screen is refused in O(1) before any
+ * line-by-line check runs.
+ */
+export const INPUT_LIMITS = {
+  /**
+   * Raw JSON text, in bytes, refused before it is parsed. A full 16-scene storyboard is a few KiB;
+   * 256 KiB leaves ample room for Uzbek (2-byte letters) and escapes.
+   */
+  maxStoryboardBytes: 256 * 1024,
+  /** Characters (UTF-16 units, so astral glyphs count 2) a code string may have: every line at its limit, doubled for astral glyphs. */
+  maxCodeChars: LIMITS.maxCodeLines * (LIMITS.maxLineChars * 2 + 1),
+  /** Same for a diff: one extra character per line for the +/-/space marker. */
+  maxDiffChars: LIMITS.maxDiffLines * (LIMITS.maxLineChars * 2 + 2),
+  /** Validation stops reporting after this many problems (the list ends with a "more problems" note). */
+  maxIssues: 40,
+} as const;

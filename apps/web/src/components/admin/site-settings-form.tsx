@@ -37,6 +37,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { VideoStatusLine } from "@/components/admin/settings/video-status-line";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { cn } from "@/lib/utils";
@@ -384,6 +385,7 @@ export function SiteSettingsForm({
         <TabsContent value="umumiy" className="flex flex-col gap-4">
           <GeneralSection admin={integrations.general} onSave={(patch) => saveSection("general", patch)} />
           <DefaultPostSettingsCard initial={initial.defaultPostSettings} />
+          <VideoStatusLine />
         </TabsContent>
 
         <TabsContent value="haqida">

@@ -1,7 +1,8 @@
-import { LIMITS } from "./limits.ts";
+import { INPUT_LIMITS, LIMITS } from "./limits.ts";
 import { convertZodIssue, formatIssues, type StoryboardIssue } from "./schema/issues.ts";
 import { type Storyboard, storyboardSchema } from "./schema/storyboard.ts";
 import { computeTimeline, type Timeline } from "./timeline.ts";
+import { structureIssue } from "./precheck.ts";
 import { FPS } from "./timing.ts";
 
 export type ValidationResult =
@@ -59,26 +60,66 @@ export function timelineIssues(sb: Storyboard, tl: Timeline): StoryboardIssue[] 
   return issues;
 }
 
-/** Validate an already-parsed JSON value. Never throws. */
-export function validateStoryboard(input: unknown): ValidationResult {
-  const parsed = storyboardSchema.safeParse(input);
-  if (!parsed.success) {
-    return { ok: false, issues: parsed.error.issues.map((i) => convertZodIssue(i, input)) };
-  }
-  const timeline = computeTimeline(parsed.data);
-  const issues = timelineIssues(parsed.data, timeline);
-  if (issues.length > 0) return { ok: false, issues };
-  return { ok: true, storyboard: parsed.data, timeline };
+/** Keep the first `maxIssues` problems and say how many were left out; a hostile input cannot make the list grow without bound. */
+export function capIssues(issues: StoryboardIssue[]): StoryboardIssue[] {
+  if (issues.length <= INPUT_LIMITS.maxIssues) return issues;
+  const kept = issues.slice(0, INPUT_LIMITS.maxIssues);
+  kept.push({
+    path: "$",
+    code: "too_many_issues",
+    message: `${issues.length - INPUT_LIMITS.maxIssues} more problems are not listed`,
+    suggestion: "Fix the problems above first, then validate again.",
+  });
+  return kept;
 }
 
-/** Validate JSON text; a syntax error is reported like any other issue. */
+function internalFailure(err: unknown): ValidationResult {
+  const message = err instanceof Error ? err.message : String(err);
+  return { ok: false, issues: [{ path: "$", code: "validation_failed", message: `the storyboard could not be validated: ${message.slice(0, 200)}`, suggestion: "Check that the input is a plain JSON object that follows the schema." }] };
+}
+
+/** Validate an already-parsed JSON value. Never throws. */
+export function validateStoryboard(input: unknown): ValidationResult {
+  try {
+    const structural = structureIssue(input);
+    if (structural) return { ok: false, issues: [structural] };
+    const parsed = storyboardSchema.safeParse(input);
+    if (!parsed.success) {
+      return { ok: false, issues: capIssues(parsed.error.issues.slice(0, INPUT_LIMITS.maxIssues + 1).map((i) => convertZodIssue(i, input))) };
+    }
+    const timeline = computeTimeline(parsed.data);
+    const issues = timelineIssues(parsed.data, timeline);
+    if (issues.length > 0) return { ok: false, issues: capIssues(issues) };
+    return { ok: true, storyboard: parsed.data, timeline };
+  } catch (err) {
+    return internalFailure(err);
+  }
+}
+
+/** Reject text that is too big to be a storyboard BEFORE parsing it. `null` when the size is fine. */
+export function oversizeIssue(byteLength: number): StoryboardIssue | null {
+  if (byteLength <= INPUT_LIMITS.maxStoryboardBytes) return null;
+  return {
+    path: "$",
+    code: "input_too_large",
+    message: `the storyboard is ${byteLength} bytes; the limit is ${INPUT_LIMITS.maxStoryboardBytes} bytes`,
+    limit: INPUT_LIMITS.maxStoryboardBytes,
+    actual: byteLength,
+    suggestion: `A storyboard is at most ${LIMITS.maxScenes} short scenes: remove text that cannot fit on screen anyway.`,
+  };
+}
+
+/** Validate JSON text; a syntax error or an oversized input is reported like any other issue. Never throws. */
 export function validateStoryboardJson(text: string): ValidationResult {
+  // UTF-8 bytes are at most 3x the UTF-16 length, so a cheap length test settles most cases without a byte count.
+  const tooBig = oversizeIssue(text.length * 3 <= INPUT_LIMITS.maxStoryboardBytes ? 0 : Buffer.byteLength(text, "utf8"));
+  if (tooBig) return { ok: false, issues: [tooBig] };
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, issues: [{ path: "$", code: "invalid_json", message: `not valid JSON: ${message}`, suggestion: "Send a single JSON object with double-quoted keys and no trailing commas or comments." }] };
+    return { ok: false, issues: [{ path: "$", code: "invalid_json", message: `not valid JSON: ${message.slice(0, 200)}`, suggestion: "Send a single JSON object with double-quoted keys and no trailing commas or comments." }] };
   }
   return validateStoryboard(value);
 }

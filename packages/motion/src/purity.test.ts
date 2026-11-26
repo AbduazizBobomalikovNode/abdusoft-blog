@@ -31,8 +31,8 @@ describe("engine stays deterministic and offline", () => {
 
   it.each(forbidden)("no %s", (name, re) => {
     const hits = sources.filter((f) => re.test(readFileSync(f, "utf8"))).map((f) => path.relative(PKG, f));
-    // The CLI/renderer may time themselves with Date.now (measurement, not pixels).
-    const allowed = name === "non-determinism in scenes" ? hits.filter((h) => !/^src\/render\//.test(h)) : hits;
+    // The renderer, the runner script, the preflight and the CLI entry may time themselves / stamp a marker file (measurement, not pixels).
+    const allowed = name === "non-determinism in scenes" ? hits.filter((h) => !/^src\/(render\/|runner\/|preflight\.ts$|cli\.ts$)/.test(h)) : hits;
     expect(allowed).toEqual([]);
   });
 

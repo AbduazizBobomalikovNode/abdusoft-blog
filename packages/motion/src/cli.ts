@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { GIF_LIMITS, LIMITS } from "./limits.ts";
+import { GIF_LIMITS, INPUT_LIMITS, LIMITS } from "./limits.ts";
 import { storyboardJsonSchema } from "./json-schema.ts";
 import { formatIssues } from "./schema/issues.ts";
 import { PRESETS } from "./theme/tokens.ts";
@@ -19,6 +20,8 @@ Commands
   schema [--out file.json]              print the storyboard JSON Schema
   stills <storyboard.json> --out <dir>  small JPEG previews (960x540); one per scene, or --at 1.5,4,9 (seconds)
   render <storyboard.json> --out <f.mp4>   silent H.264 MP4, 1920x1080 @ 30 fps
+  preflight [--out marker.json]         prove local rendering works on THIS machine (glibc >= 2.35, compositor starts, one tiny still); writes the marker the API's local backend requires
+  browser [status|install]              status: is the headless browser installed (--json). install: download Chrome Headless Shell once (the ONLY command that downloads)
   gif <storyboard.json> --out <f.gif> [--from s --to s]
                                         GIF for short clips only (<= ${GIF_LIMITS.maxSeconds} s, ${GIF_LIMITS.maxWidth} px wide, ${GIF_LIMITS.fps} fps)
 
@@ -28,9 +31,11 @@ Options
   --preset <name>      override the storyboard's style preset (default|vivid|blueprint|neon)
   --theme light|dark   override the storyboard's theme
   --json               machine-readable output (validate, timeline, stills, render, gif)
-  --cache-dir <dir>    bundle cache directory (default packages/motion/.cache or BLOG_MOTION_CACHE_DIR)
+  --cache-dir <dir>    bundle cache directory (default $BLOG_MOTION_CACHE_DIR, else ~/.cache/blog-motion)
   --browser <path>     use this Chrome/Chromium instead of Remotion's managed Chrome Headless Shell
-  --concurrency <n>    parallel frames
+  --download-browser   stills/render/gif: download Chrome Headless Shell when it is missing (default: fail with install instructions)
+  --concurrency <n>    parallel frames (default: half the cores, at most 4; the render worker uses 1)
+  --timeout <s>        whole-job time limit in seconds (default 600)
   -h, --help
 Limits: <= ${LIMITS.maxTotalSeconds} s total, <= ${LIMITS.maxScenes} scenes. Exit codes: 0 ok, 1 invalid storyboard or render error, 2 usage, 130 cancelled.
 `;
@@ -50,6 +55,8 @@ const { values, positionals } = parseArgs({
     "cache-dir": { type: "string" },
     browser: { type: "string" },
     concurrency: { type: "string" },
+    timeout: { type: "string" },
+    "download-browser": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -64,11 +71,13 @@ const usage = (msg: string): never => {
   process.exit(2);
 };
 
-function readStoryboard(): { text: string; value: unknown } {
+/** Reads the storyboard text; a file larger than the limit is refused BEFORE it is read or parsed. */
+function readStoryboard(): { text: string } {
   if (!file) usage(`${command}: missing storyboard file`);
-  const text = readFileSync(path.resolve(file as string), "utf8");
-  const value = JSON.parse(text) as unknown;
-  return { text, value };
+  const full = path.resolve(file as string);
+  const size = statSync(full).size;
+  if (size > INPUT_LIMITS.maxStoryboardBytes) throw new Error(`storyboard is ${size} bytes; the limit is ${INPUT_LIMITS.maxStoryboardBytes} bytes`);
+  return { text: readFileSync(full, "utf8") };
 }
 
 function withTheme(value: unknown): unknown {
@@ -78,6 +87,29 @@ function withTheme(value: unknown): unknown {
   return value && typeof value === "object"
     ? { ...(value as object), ...(values.theme !== undefined ? { theme: values.theme } : {}), ...(values.preset !== undefined ? { preset: values.preset } : {}) }
     : value;
+}
+
+async function browserCommand(): Promise<number> {
+  const sub = file ?? "status";
+  if (sub !== "status" && sub !== "install") return usage('browser: use "status" or "install"');
+  const { browserStatus, installBrowser } = await import("./render/browser.ts");
+  if (sub === "status") {
+    const st = await browserStatus(values.browser ? { browserExecutable: values.browser } : {});
+    if (json) print(st);
+    else log(st.installed ? `browser installed: ${st.path ?? "(managed)"}` : `browser NOT installed. ${st.hint ?? ""}`);
+    return st.installed ? 0 : 1;
+  }
+  let last = -1;
+  const st = await installBrowser((p) => {
+    const step = Math.floor(p * 10);
+    if (!json && step !== last) {
+      last = step;
+      log(`downloading Chrome Headless Shell ${Math.round(p * 100)}%`);
+    }
+  });
+  if (json) print(st);
+  else log(`browser ready: ${st.path ?? "(managed)"}`);
+  return 0;
 }
 
 async function main(): Promise<number> {
@@ -92,6 +124,22 @@ async function main(): Promise<number> {
       writeFileSync(values.out, `${text}\n`);
     } else print(text);
     return 0;
+  }
+  if (command === "browser") return browserCommand();
+  if (command === "preflight") {
+    const { runPreflight } = await import("./preflight.ts");
+    const r = await runPreflight({ ...(values.browser ? { browserExecutable: values.browser } : {}), ...(values["cache-dir"] ? { cacheDir: values["cache-dir"] } : {}) });
+    for (const line of r.steps) log(line);
+    if (values.out) {
+      const target = path.resolve(values.out);
+      mkdirSync(path.dirname(target), { recursive: true });
+      if (r.ok) writeFileSync(target, `${JSON.stringify({ ok: true, at: new Date().toISOString(), glibc: r.glibc })}\n`);
+      else writeFileSync(target, `${JSON.stringify({ ok: false, at: new Date().toISOString(), glibc: r.glibc })}\n`);
+    }
+    if (json) print({ ok: r.ok, steps: r.steps, message: r.message });
+    if (!r.ok) log(`PREFLIGHT FAILED: ${r.message ?? ""}`);
+    else log("preflight passed: this machine can render locally.");
+    return r.ok ? 0 : 1;
   }
   if (command !== "validate" && command !== "timeline" && command !== "stills" && command !== "render" && command !== "gif") usage(`unknown command "${command}"`);
 
@@ -120,6 +168,9 @@ async function main(): Promise<number> {
   }
 
   if (!values.out) usage(`${command}: --out is required`);
+  // This process exists to render: opt in to the process-wide temp-dir handling the renderer needs.
+  const { enterDedicatedRenderProcess } = await import("./render/private-tmp.ts");
+  enterDedicatedRenderProcess();
   const abort = new AbortController();
   // A persistent listener (not `once`): Node restores the default action when the last listener goes away
   // mid-handler, which would kill the process before cleanup. A second signal exits at once.
@@ -130,13 +181,16 @@ async function main(): Promise<number> {
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  const { MotionRenderer, RenderCancelledError, GifLimitError } = await import("./render/index.ts");
+  const { MotionRenderer, RenderCancelledError, RenderTimeoutError, BrowserMissingError, GifLimitError, isolateBrowserSignals } = await import("./render/index.ts");
   let lastLine = "";
   const renderer = await MotionRenderer.create({
     signal: abort.signal,
+    launchHook: isolateBrowserSignals,
+    allowBrowserDownload: values["download-browser"] === true,
+    concurrency: values.concurrency ? Number(values.concurrency) : Math.min(4, Math.max(1, Math.floor(os.availableParallelism() / 2))),
+    ...(values.timeout ? { timeoutMs: Number(values.timeout) * 1000 } : {}),
     ...(values["cache-dir"] ? { cacheDir: path.resolve(values["cache-dir"]) } : {}),
     ...(values.browser ? { browserExecutable: values.browser } : {}),
-    ...(values.concurrency ? { concurrency: Number(values.concurrency) } : {}),
     ...(values.theme === "light" || values.theme === "dark" ? { themeOverride: values.theme } : {}),
     ...(values.preset !== undefined ? { presetOverride: values.preset as (typeof PRESETS)[number] } : {}),
     onProgress: (p) => {
@@ -175,6 +229,10 @@ async function main(): Promise<number> {
     if (err instanceof RenderCancelledError) {
       log("cancelled");
       return 130;
+    }
+    if (err instanceof RenderTimeoutError || err instanceof BrowserMissingError) {
+      log(`error: ${err.message}`);
+      return 1;
     }
     if (err instanceof GifLimitError || (values.scene !== undefined && /^(no scene|scene \d+ does not)/.test((err as Error)?.message ?? ""))) {
       log(`error: ${(err as Error).message}`);

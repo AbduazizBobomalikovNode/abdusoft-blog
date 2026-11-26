@@ -105,6 +105,7 @@ const KIND_TO_CODE: Record<ServiceErrorKind, ToolErrorCode> = {
   not_found: "not_found",
   conflict: "conflict",
   unprocessable: "unprocessable",
+  rate_limited: "rate_limited",
 };
 
 /**
@@ -125,6 +126,7 @@ export async function unwrapPost<T>(result: ServiceResult<T>, postId: string, hi
     not_found: "Not found",
     conflict: "The action conflicts with the post's current state",
     unprocessable: "The request could not be processed",
+    rate_limited: "Too many requests or not enough server resources right now",
   };
   throw new ToolError(
     KIND_TO_CODE[kind],

@@ -33,7 +33,10 @@ export const adminRoute = new Hono()
     const adminUser = c.get("adminUser");
     // Veb "Tarqatish" kirish nuqtalarini ko'rsatish-ko'rsatmasligini shundan biladi (alohida 404 so'rovlarisiz).
     // Bayroq o'chiq (yoki xodim) bo'lsa javob avvalgidek — maydon yo'q.
-    return c.json(config.DISTRIBUTION_ENABLED && adminUser.role === "admin" ? { ...adminUser, distributionEnabled: true } : adminUser);
+    // Video: xuddi shunday (`videoEnabled`) — web `/admin/video/status`ni "probe" qilmaydi.
+    const isAdmin = adminUser.role === "admin";
+    const flags = { ...(config.DISTRIBUTION_ENABLED && isAdmin ? { distributionEnabled: true } : {}), ...(config.VIDEO_ENABLED && isAdmin ? { videoEnabled: true } : {}) };
+    return c.json(Object.keys(flags).length > 0 ? { ...adminUser, ...flags } : adminUser);
   })
   .route("/posts", adminPostsRoute)
   .route("/media", adminMediaRoute)
@@ -50,6 +53,11 @@ export const adminRoute = new Hono()
 // "Ulangan ilovalar" (Claude konnektori) — faqat MCP_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut yo'q.
 if (config.MCP_ENABLED) adminRoute.route("/connections", adminConnectionsRoute);
 
+// Video render xizmati — faqat VIDEO_ENABLED=true; o'chiq bo'lsa marshrut ham, modul ham yuklanmaydi (render kodi umuman).
+if (config.VIDEO_ENABLED) {
+  const { adminVideoRoute } = await import("./admin-video.js");
+  adminRoute.route("/video", adminVideoRoute);
+}
 // Ijtimoiy tarqatish — faqat DISTRIBUTION_ENABLED=true bo'lganda; o'chiq bo'lsa marshrut ham, modul ham yuklanmaydi.
 if (config.DISTRIBUTION_ENABLED) {
   const { adminDistributionRoute } = await loadDistributionModule("routes/admin-distribution", () => import("./admin-distribution.js"));

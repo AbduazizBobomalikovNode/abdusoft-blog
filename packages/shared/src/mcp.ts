@@ -28,6 +28,8 @@ export interface McpScopeInfo {
   sensitive?: boolean;
 }
 
+/** Video render ruxsati: faqat `VIDEO_ENABLED` YOQILGANDA (va yozuv kaliti ham yoqilgan bo'lsa) beriladi. */
+export const MCP_VIDEO_SCOPE_ID = "video:render";
 /**
  * Ijtimoiy tarmoqlarga post chiqarish ruxsati. FAQAT yozuv kaliti VA `DISTRIBUTION_ENABLED` ikkalasi yoqilganda beriladi
  * (`grantableScopeIds`); bayroq o'chiq bo'lsa u e'lon qilinmaydi, so'ralmaydi va rozilik sahifasida chiqmaydi.
@@ -63,6 +65,13 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     label: "Telegram kanal versiyalarini tayyorlash",
     description: "Kanal uchun maxsus matn versiyalarini yaratish, tahrirlash va o'chirish hamda postda qaysi versiya yuborilishini belgilash. Hech narsa kanalga hozir yuborilmaydi; lekin rejalashtirilgan kanalga yuborish ishlatadigan versiya yoki belgini o'zgartirish uchun \"Kanalga yuborish\" ruxsati ham kerak.",
     english: "Prepare Telegram channel versions: create, edit and delete custom versions and mark which version a post uses. Nothing is sent to the channel now; changing a version or mark that a scheduled channel send relies on also needs the channel-sending permission.",
+  },
+  {
+    id: MCP_VIDEO_SCOPE_ID,
+    group: "write",
+    label: "Video yaratish",
+    description: "Qisqa animatsiyali tushuntirish videosini (storyboard asosida) tayyorlash: ko'rik kadrlari, MP4 va GIF render qilish, ularni ro'yxatlash, bekor qilish va o'chirish. Hech narsani chop etmaydi.",
+    english: "Make short animated explainer videos from a storyboard: render preview frames, MP4 and GIF files, list, cancel and delete them. Publishes nothing.",
   },
   {
     id: "posts:publish",
@@ -137,19 +146,19 @@ export const MCP_REQUIRED_SCOPE_ID = "blog:read";
  * `true` — barcha yozuv ruxsatlari ham. Mavjud (faqat o'qish) rozilik o'z-o'zidan kengaymaydi: yangi ruxsat so'ralsa
  * server yangi rozilik talab qiladi.
  */
-export function grantableScopeIds(writeEnabled = false, distributionEnabled = false): readonly string[] {
+export function grantableScopeIds(writeEnabled = false, distributionEnabled = false, videoEnabled = false): readonly string[] {
   if (!writeEnabled) return MCP_GRANTABLE_SCOPE_IDS;
-  // Ijtimoiy post ruxsati ikkala kalit yoqilgandagina; bayroq o'chiq bo'lsa ro'yxat avvalgidek (`social:post`siz).
-  return distributionEnabled ? MCP_SCOPE_IDS : MCP_SCOPE_IDS.filter((id) => id !== MCP_SOCIAL_SCOPE_ID);
+  // `social:post` va `video:render` — har biri o'z bayrog'i yoqilgandagina; bayroqlar o'chiq bo'lsa ro'yxat avvalgidek.
+  return MCP_SCOPE_IDS.filter((id) => (id !== MCP_SOCIAL_SCOPE_ID || distributionEnabled) && (id !== MCP_VIDEO_SCOPE_ID || videoEnabled));
 }
 
-export function grantableOAuthScopes(writeEnabled = false, distributionEnabled = false): readonly string[] {
-  return [...grantableScopeIds(writeEnabled, distributionEnabled), MCP_OFFLINE_SCOPE];
+export function grantableOAuthScopes(writeEnabled = false, distributionEnabled = false, videoEnabled = false): readonly string[] {
+  return [...grantableScopeIds(writeEnabled, distributionEnabled, videoEnabled), MCP_OFFLINE_SCOPE];
 }
 
 /** `scope` ro'yxatini berilishi mumkin bo'lganlarga qisqartiradi (takrorlarsiz, tartib saqlanadi). */
-export function clampToGrantable(scopes: readonly string[], writeEnabled = false, distributionEnabled = false): string[] {
-  const allowed = grantableOAuthScopes(writeEnabled, distributionEnabled);
+export function clampToGrantable(scopes: readonly string[], writeEnabled = false, distributionEnabled = false, videoEnabled = false): string[] {
+  const allowed = grantableOAuthScopes(writeEnabled, distributionEnabled, videoEnabled);
   return [...new Set(scopes.filter((scope) => allowed.includes(scope)))];
 }
 

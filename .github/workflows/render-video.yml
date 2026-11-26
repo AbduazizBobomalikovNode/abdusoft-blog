@@ -1,0 +1,87 @@
+# Renders ONE video job for the blog API on a GitHub-hosted runner (the production server only keeps the queue, storage and quotas).
+# Started ONLY by the API through `workflow_dispatch` with the job id. Setup (once, by the owner): docs/video.md.
+#
+#   Environment `video-render` (Settings > Environments), deployment branches: main only
+#     secret   VIDEO_RUNNER_SECRET   same value as VIDEO_RUNNER_SECRET in the API environment (>= 32 random bytes)
+#     variable VIDEO_API_ORIGIN      https origin of the API, e.g. https://api.example.com (no trailing slash)
+#
+# The repository is public, so its logs are public: the runner script prints stage names, timings and sizes only, and
+# nothing is uploaded as an artifact. The storyboard, the job token and the API's answers are never printed.
+name: Render video
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Video job id (UUID) from the blog API"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One render at a time: further runs wait instead of piling up on the free runner minutes.
+concurrency:
+  group: render-video
+  cancel-in-progress: false
+
+jobs:
+  render:
+    name: Render
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: video-render
+    env:
+      # Inputs reach scripts ONLY through the environment, never interpolated into `run:` text.
+      JOB_ID: ${{ inputs.job_id }}
+    steps:
+      - name: Validate the job id
+        run: |
+          if ! [[ "$JOB_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            echo "The job id is not a valid UUID."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # pnpm versiyasi root package.json'dagi "packageManager" maydonidan olinadi.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Only what the render engine needs (not the API, the web app or their dependencies).
+      - name: Install dependencies (@blog/motion only)
+        run: pnpm install --frozen-lockfile --filter @blog/motion
+
+      - name: Read the Remotion version
+        id: remotion
+        run: echo "version=$(node -p "require('./packages/motion/package.json').dependencies.remotion")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the headless browser
+        uses: actions/cache@v4
+        with:
+          path: packages/motion/node_modules/.remotion
+          key: chrome-headless-shell-${{ runner.os }}-remotion-${{ steps.remotion.outputs.version }}
+
+      - name: Cache the Remotion bundle
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blog-motion-cache
+          key: motion-bundle-${{ runner.os }}-${{ steps.remotion.outputs.version }}-${{ hashFiles('packages/motion/src/**', 'packages/motion/assets/**', 'packages/motion/package.json') }}
+
+      # Downloads Chrome Headless Shell only when the cache did not have it (idempotent).
+      - name: Ensure the headless browser
+        working-directory: packages/motion
+        run: node --disable-warning=ExperimentalWarning src/cli.ts browser install
+
+      - name: Render and upload
+        env:
+          VIDEO_RUNNER_SECRET: ${{ secrets.VIDEO_RUNNER_SECRET }}
+          VIDEO_API_ORIGIN: ${{ vars.VIDEO_API_ORIGIN }}
+          BLOG_MOTION_CACHE_DIR: ${{ runner.temp }}/blog-motion-cache
+        run: node --disable-warning=ExperimentalWarning packages/motion/src/runner/github-main.ts

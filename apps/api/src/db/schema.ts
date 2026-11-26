@@ -10,6 +10,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  real,
   primaryKey,
   text,
   timestamp,
@@ -408,6 +409,112 @@ export const mcpIdempotency = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.clientId, table.key] }), index("mcp_idempotency_created_idx").on(table.createdAt)],
+);
+
+export const motionJobKindEnum = pgEnum("motion_job_kind", ["preview", "render", "gif"]);
+export const motionJobStatusEnum = pgEnum("motion_job_status", ["queued", "running", "ready", "failed", "cancelled"]);
+
+/**
+ * Video render xizmati (`VIDEO_ENABLED`): storyboard -> ko'rik kadrlari / MP4 / GIF ishlari. Render API jarayonida EMAS,
+ * alohida ishchi jarayonda bajariladi; navbat shu jadval (atomik "claim": `queued -> running`). `storyboard` — tekshirilgan,
+ * ishonchsiz kiritma (saqlashdan oldin, ishchi ishga tushishidan oldin va ishchi ichida qayta tekshiriladi).
+ */
+export const motionJobs = pgTable(
+  "motion_jobs",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    kind: motionJobKindEnum("kind").notNull(),
+    status: motionJobStatusEnum("status").notNull().default("queued"),
+    /** Ixtiyoriy post. Post butunlay o'chirilsa ish postsiz qoladi va saqlash qoidasi (TTL) bilan fayllari bilan birga tozalanadi (fayllar yetim qolmasin). */
+    postId: uuid("post_id").references(() => posts.id, { onDelete: "set null" }),
+    storyboard: jsonb("storyboard").notNull(),
+    /** Ishga xos tanlovlar: `at` (soniyalar), `scene`, `from`/`to`/`loop`. */
+    options: jsonb("options").notNull().default({}),
+    /** Storyboard davomiyligi (soniya) — taxmin va kvotalar uchun. */
+    durationSeconds: real("duration_seconds").notNull(),
+    /** 0..100. */
+    progress: integer("progress").notNull().default(0),
+    phase: text("phase"),
+    message: text("message"),
+    /** Xavfsiz xato (tizim yo'llari, stack, sirlarsiz): `errorCode` mashina uchun, `errorMessage` odam uchun. */
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    cancelRequested: boolean("cancel_requested").notNull().default(false),
+    /** Ishchi jarayon guruhining pid'i (API qulab tushsa, qolib ketganini topib o'ldirish uchun). Faqat `local` backend. */
+    workerPid: integer("worker_pid"),
+    /** Kim render qiladi: `github` (GitHub Actions) yoki `local` (server ichidagi ishchi). `queued` paytida bo'sh. */
+    runner: text("runner"),
+    /** GitHub Actions run id (dispatch javobidan, keyin ishchining `claim`idan). Bekor qilish uchun. */
+    runnerRunId: text("runner_run_id"),
+    runnerAttempt: integer("runner_attempt"),
+    /** Dispatch muvaffaqiyatli yuborilgan payt; bo'sh bo'lsa (API qulagan/vaqtinchalik xato) navbat kuzatuvchisi qayta yuboradi. */
+    runnerDispatchedAt: timestamp("runner_dispatched_at", { withTimezone: true }),
+    /** Ishchi `claim` qilgan payt (bir martalik): shundan keyin render muddati hisoblanadi. */
+    runnerClaimedAt: timestamp("runner_claimed_at", { withTimezone: true }),
+    dispatchAttempts: integer("dispatch_attempts").notNull().default(0),
+    /** Vaqtinchalik dispatch xatosidan keyin eng erta qayta urinish. */
+    dispatchAfter: timestamp("dispatch_after", { withTimezone: true }),
+    /** Kim va qaysi yo'l bilan so'ragan. */
+    requestedBy: text("requested_by").references(() => user.id, { onDelete: "set null" }),
+    via: text("via").notNull(),
+    clientName: text("client_name"),
+    /** Vaqtlar va o'lchovlar: `queueMs`, `renderMs`, `wallMs`, `peakRssMb`. */
+    timings: jsonb("timings").notNull().default({}),
+    /** Ko'rik kadrlari uchun: shu vaqtdan keyin fayllar tozalanadi. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("motion_jobs_status_created_idx").on(table.status, table.createdAt),
+    index("motion_jobs_post_created_idx").on(table.postId, table.createdAt),
+    // Bir postga bitta faol render/GIF: tekshiruvdagi poyga bo'lsa ham bazaning o'zi ikkinchisini rad etadi.
+    uniqueIndex("motion_jobs_one_active_per_post_idx")
+      .on(table.postId)
+      .where(sql`${table.postId} is not null and ${table.kind} in ('render', 'gif') and ${table.status} in ('queued', 'running')`),
+  ],
+);
+
+/**
+ * Kunlik kvota hisobi: har bir yaratilgan ish uchun BITTA qator, ish bilan bir tranzaksiyada yoziladi va ish o'chirilganda
+ * o'chmaydi (jobs jadvaliga bog'lanmagan). Eski qatorlar (2 kundan eski) tozalash vaqtida olib tashlanadi.
+ */
+export const motionUsage = pgTable(
+  "motion_usage",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    /** `render` (MP4 + GIF) yoki `preview`. */
+    bucket: text("bucket").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("motion_usage_bucket_created_idx").on(table.bucket, table.createdAt)],
+);
+
+/** Ish natijasi fayllari (media jadvalidan alohida: rasm kutubxonasiga aralashmasin). Fayl saqlash qatlami (R2 yoki mahalliy) orqali. */
+export const motionAssets = pgTable(
+  "motion_assets",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => motionJobs.id, { onDelete: "cascade" }),
+    /** `mp4` | `gif` | `still`. */
+    kind: text("kind").notNull(),
+    key: text("key").notNull(),
+    url: text("url").notNull(),
+    mime: text("mime").notNull(),
+    size: integer("size").notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    /** Video/GIF uchun davomiylik; kadr uchun — storyboarddagi soniya. */
+    seconds: real("seconds"),
+    /** Kadr uchun: sahna tartib raqami (0-dan) va turi. */
+    sceneIndex: integer("scene_index"),
+    sceneType: text("scene_type"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("motion_assets_job_idx").on(table.jobId)],
 );
 
 /**
