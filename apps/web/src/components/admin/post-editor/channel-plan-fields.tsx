@@ -15,7 +15,6 @@ import type {
 } from "@blog/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -24,17 +23,7 @@ import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { cn } from "cn";
 import { ChannelChecklistSummary } from "./channel-checklist";
 import { MODE_OPTIONS, TelegramPreviewCard, VARIANT_LABELS, VARIANTS_BY_MODE } from "./channel-preview";
-
-const DELAY_PRESETS: { value: number; label: string }[] = [
-  { value: 0, label: "Darhol" },
-  { value: 5, label: "5 daqiqa" },
-  { value: 15, label: "15 daqiqa" },
-  { value: 30, label: "30 daqiqa" },
-  { value: 60, label: "1 soat" },
-  { value: 180, label: "3 soat" },
-];
-const CUSTOM_VALUE = "custom";
-const MAX_DELAY_MINUTES = 10080;
+import { DelayPlanPicker } from "./delay-plan-picker";
 
 const MONTHS = ["yan", "fev", "mar", "apr", "may", "iyn", "iyl", "avg", "sen", "okt", "noy", "dek"];
 
@@ -77,6 +66,93 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof AdminApiError ? error.message : fallback;
 }
 
+/** Rejaning HOZIRGI (tekshiruv uchun) tanlovi: `useChoice` bo'lsa — joriy belgi, yo'q bo'lsa standart (rasm bo'lsa 🖼/m, aks holda 📝/m). */
+export function effectivePlanSelection(plan: ChannelPlan, markedChoice: ResolvedChannelChoice | null, canUseMedia: boolean | null): ChannelSelection {
+  if (plan.useChoice) {
+    const marked = markedChoice?.choice;
+    if (marked) return marked.kind === "version" ? { versionId: marked.versionId } : { mode: marked.mode, variant: marked.variant };
+    return { mode: canUseMedia === false ? "text" : "media", variant: "m" };
+  }
+  if (plan.versionId) return { versionId: plan.versionId };
+  return { mode: plan.mode ?? "text", variant: plan.variant ?? "m" };
+}
+
+/** Postda kover/rasm bormi (`null` — noma'lum, 🖼 Rasmli ruxsat etiladi). Faqat 400 ("rasm yo'q") holatida `false`. */
+export function useChannelPlanMedia(postId: string, value: ChannelPlan | null, markedChoice: ResolvedChannelChoice | null) {
+  const [canUseMedia, setCanUseMedia] = useState<boolean | null>(null);
+
+  async function detectMedia(): Promise<boolean> {
+    try {
+      await adminApi.channelPreview(postId, "media", "m");
+      setCanUseMedia(true);
+      return true;
+    } catch (error) {
+      // Faqat "rasm yo'q" (400) holatida 🖼 o'chiriladi; boshqa xatoda ruxsat saqlanadi.
+      if (error instanceof AdminApiError && error.status === 400) {
+        setCanUseMedia(false);
+        return false;
+      }
+      return true;
+    }
+  }
+
+  // Saqlangan reja 🖼 Rasmli bo'lsa ham — rasm yo'qolgan bo'lishi mumkin: tugma holatini aniqlaymiz.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ataylab: tashqi (API) holatini aniqlash, natija state'ga yoziladi
+    if ((value?.mode === "media" || (value?.useChoice && !markedChoice)) && canUseMedia === null) void detectMedia();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value?.mode, value?.useChoice]);
+
+  return { canUseMedia, detectMedia };
+}
+
+/**
+ * Reja yoqilgan paytda Telegram cheklovlarini tekshiradi; xato bo'lsa `onBlockingChange(true)` (chaqiruvchi "Rejalashtirish"ni o'chiradi).
+ * "Nashr" kartasidagi xulosa shu hook'ni DOIM ishlatadi — Tarqatish dialogi yopiq bo'lsa ham tekshiruv yo'qolmaydi.
+ */
+export function useChannelPlanPreflight({ postId, value, markedChoice, canUseMedia, onBlockingChange }: { postId: string; value: ChannelPlan | null; markedChoice: ResolvedChannelChoice | null; canUseMedia: boolean | null; onBlockingChange?: (blocked: boolean) => void }) {
+  const [planPreflight, setPlanPreflight] = useState<ChannelPreflightResponse | null>(null);
+  const [checking, setChecking] = useState(false);
+  const planKey = value ? `${value.useChoice ? "choice" : ""}|${JSON.stringify(effectivePlanSelection(value, markedChoice, canUseMedia))}` : "";
+
+  useEffect(() => {
+    if (!value) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reja o'chirilganda holatni tozalash
+      setPlanPreflight(null);
+      onBlockingChange?.(false);
+      return;
+    }
+    let cancelled = false;
+    setChecking(true);
+    const selection = effectivePlanSelection(value, markedChoice, canUseMedia);
+    adminApi
+      .channelPreflight(postId, selection, true)
+      .then((result) => {
+        if (cancelled) return;
+        setPlanPreflight(result);
+        onBlockingChange?.(!result.canSend);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setPlanPreflight(null);
+        // Tekshirib bo'lmasa (masalan versiya o'chirilgan) — xavfsizlik uchun saqlashni blokladi.
+        onBlockingChange?.(true);
+        toast.error(errorMessage(error, "Telegram cheklovlarini tekshirib bo'lmadi"));
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postId, planKey]);
+
+  useEffect(() => () => onBlockingChange?.(false), [onBlockingChange]);
+
+  return { planPreflight, checking };
+}
+
 export interface ChannelPlanFieldsProps {
   postId: string;
   value: ChannelPlan | null;
@@ -97,17 +173,14 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
   const [channelHandle, setChannelHandle] = useState<string | null>(null);
   /** `null` — hali tekshirilmagan. */
   const [telegramReady, setTelegramReady] = useState<boolean | null>(null);
-  /** Postda kover/rasm bormi (`null` — noma'lum, 🖼 Rasmli ruxsat etiladi). */
-  const [canUseMedia, setCanUseMedia] = useState<boolean | null>(null);
-  const [customDelay, setCustomDelay] = useState(() => value !== null && !DELAY_PRESETS.some((p) => p.value === value.delayMinutes));
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<ChannelPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [versions, setVersions] = useState<ChannelVersion[]>([]);
   const [fetchedChoice, setFetchedChoice] = useState<ResolvedChannelChoice | null>(null);
   const markedChoice = markedProp !== undefined ? markedProp : fetchedChoice;
-  const [planPreflight, setPlanPreflight] = useState<ChannelPreflightResponse | null>(null);
-  const [checking, setChecking] = useState(false);
+  const { canUseMedia, detectMedia } = useChannelPlanMedia(postId, value, markedChoice);
+  const { planPreflight, checking } = useChannelPlanPreflight({ postId, value, markedChoice, canUseMedia, onBlockingChange });
 
   useEffect(() => {
     adminApi
@@ -133,54 +206,7 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
       .catch(() => setVersions([]));
   }, [postId]);
 
-  /** Rejaning HOZIRGI (tekshiruv uchun) tanlovi: `useChoice` bo'lsa — joriy belgi, yo'q bo'lsa standart (rasm bo'lsa 🖼/m, aks holda 📝/m). */
-  function effectiveSelection(plan: ChannelPlan): ChannelSelection {
-    if (plan.useChoice) {
-      const marked = markedChoice?.choice;
-      if (marked) return marked.kind === "version" ? { versionId: marked.versionId } : { mode: marked.mode, variant: marked.variant };
-      return { mode: canUseMedia === false ? "text" : "media", variant: "m" };
-    }
-    if (plan.versionId) return { versionId: plan.versionId };
-    return { mode: plan.mode ?? "text", variant: plan.variant ?? "m" };
-  }
-
-  // Reja yoqilgan paytda Telegram cheklovlarini tekshiramiz; xato bo'lsa saqlash bloklanadi.
-  const planKey = value ? `${value.useChoice ? "choice" : ""}|${JSON.stringify(effectiveSelection(value))}` : "";
-  useEffect(() => {
-    if (!value) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- reja o'chirilganda holatni tozalash
-      setPlanPreflight(null);
-      onBlockingChange?.(false);
-      return;
-    }
-    let cancelled = false;
-    setChecking(true);
-    const selection = effectiveSelection(value);
-    adminApi
-      .channelPreflight(postId, selection, true)
-      .then((result) => {
-        if (cancelled) return;
-        const view = result;
-        setPlanPreflight(view);
-        onBlockingChange?.(!view.canSend);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setPlanPreflight(null);
-        // Tekshirib bo'lmasa (masalan versiya o'chirilgan) — xavfsizlik uchun saqlashni blokladi.
-        onBlockingChange?.(true);
-        toast.error(errorMessage(error, "Telegram cheklovlarini tekshirib bo'lmadi"));
-      })
-      .finally(() => {
-        if (!cancelled) setChecking(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [postId, planKey]);
-
-  useEffect(() => () => onBlockingChange?.(false), [onBlockingChange]);
+  const effectiveSelection = (plan: ChannelPlan) => effectivePlanSelection(plan, markedChoice, canUseMedia);
 
   function handleChoiceSelect(selected: string) {
     if (!value) return;
@@ -201,35 +227,12 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
     onChange({ mode: version.mode, versionId: version.id, delayMinutes: value.delayMinutes });
   }
 
-  async function detectMedia(): Promise<boolean> {
-    try {
-      await adminApi.channelPreview(postId, "media", "m");
-      setCanUseMedia(true);
-      return true;
-    } catch (error) {
-      // Faqat "rasm yo'q" (400) holatida 🖼 o'chiriladi; boshqa xatoda ruxsat saqlanadi.
-      if (error instanceof AdminApiError && error.status === 400) {
-        setCanUseMedia(false);
-        return false;
-      }
-      return true;
-    }
-  }
-
-  // Saqlangan reja 🖼 Rasmli bo'lsa ham — rasm yo'qolgan bo'lishi mumkin: tugma holatini aniqlaymiz.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- ataylab: tashqi (API) holatini aniqlash, natija state'ga yoziladi
-    if ((value?.mode === "media" || (value?.useChoice && !markedChoice)) && canUseMedia === null) void detectMedia();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value?.mode, value?.useChoice]);
-
   async function handleToggle(on: boolean) {
     if (!on) {
       onChange(null);
       return;
     }
     const hasMedia = await detectMedia();
-    setCustomDelay(false);
     // Belgilangan versiya bor bo'lsa — standart shu (yuborish paytida joriy belgi olinadi).
     if (markedChoice) {
       onChange({ useChoice: true, delayMinutes: 0 });
@@ -249,21 +252,6 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
     const allowed = VARIANTS_BY_MODE[mode].map((v) => v.value);
     const variant: ChannelVariant = value.variant && allowed.includes(value.variant) ? value.variant : "m";
     patch({ mode, variant });
-  }
-
-  function handleDelaySelect(selected: string) {
-    if (selected === CUSTOM_VALUE) {
-      setCustomDelay(true);
-      return;
-    }
-    setCustomDelay(false);
-    patch({ delayMinutes: Number(selected) });
-  }
-
-  function handleCustomDelayInput(raw: string) {
-    const parsed = Math.floor(Number(raw));
-    const clamped = Number.isFinite(parsed) ? Math.min(MAX_DELAY_MINUTES, Math.max(0, parsed)) : 0;
-    patch({ delayMinutes: clamped });
   }
 
   async function openPreview() {
@@ -402,39 +390,7 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
           </>
           ) : null}
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="channel-plan-delay">Saytga chiqqach</Label>
-            <div className="flex flex-wrap items-center gap-2">
-              <Select
-                value={customDelay ? CUSTOM_VALUE : String(value.delayMinutes)}
-                onValueChange={handleDelaySelect}
-              >
-                <SelectTrigger id="channel-plan-delay" className="w-fit min-w-36 max-md:data-[size=default]:h-11 max-md:min-w-0 max-md:flex-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {DELAY_PRESETS.map((preset) => (
-                    <SelectItem key={preset.value} value={String(preset.value)}>
-                      {preset.label}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value={CUSTOM_VALUE}>Boshqa (daqiqa)</SelectItem>
-                </SelectContent>
-              </Select>
-              {customDelay ? (
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={MAX_DELAY_MINUTES}
-                  value={value.delayMinutes}
-                  onChange={(event) => handleCustomDelayInput(event.target.value)}
-                  aria-label="Kechikish (daqiqa)"
-                  className="w-24 max-md:h-11"
-                />
-              ) : null}
-            </div>
-          </div>
+          <DelayPlanPicker value={value.delayMinutes} onChange={(minutes) => patch({ delayMinutes: minutes })} testId="channel-plan-delay" />
 
           <p className="text-xs leading-relaxed break-words text-muted-foreground">
             {channelPlanSummary(value, scheduledAtLocal, versions.find((v) => v.id === value.versionId)?.name, markedChoice?.label ?? null)}

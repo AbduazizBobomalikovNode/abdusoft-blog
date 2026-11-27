@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatDateTime } from "@/lib/format";
 import { ChannelChoiceSummary } from "./channel-choice-summary";
 import { ChannelPlanFields } from "./channel-plan-fields";
+import { TelegramPlanSummary } from "./telegram-plan-summary";
 import { DistributionPlansSummary } from "./distribution-plans-summary";
 import { CoverImagePicker } from "./cover-image-picker";
 import { MainVideoCard } from "./main-video-card";
@@ -67,6 +68,8 @@ export interface PostEditorSettingsProps {
   onOpenChannelSend: () => void;
   /** Ijtimoiy tarmoqlar rejasi xulosasi (faqat Tarqatish yoqilgan admin uchun); berilmasa ko'rsatilmaydi. */
   distributionPlans?: { onOpen: () => void; refreshKey: number };
+  /** Ixtiyoriy: berilsa Telegram rejasi bu yerda tahrirlanmaydi — bir qatorli xulosa + "Tarqatishda sozlash" (Tarqatish dialogining Telegram yorlig'i). Berilmasa (Tarqatish o'chiq) eski reja bloki qoladi. */
+  onOpenTelegramPlan?: () => void;
   /** Belgilangan kanal versiyasi (yo'q bo'lsa `null`) — Telegram kartasidagi xulosa va rejalashtirish uchun. */
   channelChoice?: ResolvedChannelChoice | null;
   /** "Nashr" kartasi uchun — ixtiyoriy, berilmasa status/sana bloki ko'rsatilmaydi. */
@@ -159,6 +162,7 @@ export function PostEditorSettings({
   refreshingTelegraph,
   onOpenChannelSend,
   distributionPlans,
+  onOpenTelegramPlan,
   channelChoice = null,
   status,
   publishedAt,
@@ -206,14 +210,28 @@ export function PostEditorSettings({
               ) : null}
             </div>
             {postId && onChannelPlanChange ? (
-              <ChannelPlanFields
-                postId={postId}
-                value={channelPlan}
-                onChange={onChannelPlanChange}
-                scheduledAtLocal={scheduledAtLocal}
-                onBlockingChange={onChannelPlanBlockingChange}
-                markedChoice={channelChoice}
-              />
+              onOpenTelegramPlan ? (
+                // Chop etilgan postda reja qo'yilmaydi (faqat chop etilmaganda) — xulosa ko'rsatilmaydi.
+                status !== "published" ? (
+                  <TelegramPlanSummary
+                    postId={postId}
+                    plan={channelPlan}
+                    scheduledAtLocal={scheduledAtLocal}
+                    markedChoice={channelChoice}
+                    onBlockingChange={onChannelPlanBlockingChange}
+                    onOpen={onOpenTelegramPlan}
+                  />
+                ) : null
+              ) : (
+                <ChannelPlanFields
+                  postId={postId}
+                  value={channelPlan}
+                  onChange={onChannelPlanChange}
+                  scheduledAtLocal={scheduledAtLocal}
+                  onBlockingChange={onChannelPlanBlockingChange}
+                  markedChoice={channelChoice}
+                />
+              )
             ) : null}
             {postId && distributionPlans ? (
               <DistributionPlansSummary postId={postId} onOpen={distributionPlans.onOpen} refreshKey={distributionPlans.refreshKey} published={status === "published"} />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DistributionItemDto } from "@blog/shared";
-import { canPlanForPost, clampDelay, delayText, distributionAvailableFor, isPresetDelay, isWaitingPlan, planPhrase, planStateOf, planSummaryLines } from "./distribution-plan";
+import { PLAN_PRESET_LABEL, canPlanForPost, clampDelay, delayLead, delayPickerModel, delayText, presetLabel, distributionAvailableFor, isPresetDelay, isWaitingPlan, planPhrase, planStateOf, planSummaryLines } from "./distribution-plan";
 
 const item = (over: Partial<DistributionItemDto> = {}) =>
   ({ provider: "linkedin", status: "draft", planDelayMinutes: null, planMaterializedAt: null, scheduledAt: null, lastErrorMessage: null, ...over }) as DistributionItemDto;
@@ -70,5 +70,39 @@ describe("distribution plan helpers", () => {
     );
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({ state: "scheduled", phrase: "chiqqach 30 daq", scheduledAt: "2026-11-26T10:30:00Z" });
+  });
+});
+
+describe("DelayPlanPicker model", () => {
+  it("uses the shared presets with one wording for every channel", () => {
+    const m = delayPickerModel(15, false);
+    expect(m.presets.map((p) => p.value)).toEqual([0, 15, 60, 180, 1440]);
+    expect(m.presets.map((p) => p.label)).toEqual(["Darhol", "15 daq", "1 soat", "3 soat", "1 kun"]);
+    expect(m.presets.filter((p) => p.active).map((p) => p.value)).toEqual([15]);
+    expect(m.customActive).toBe(false);
+    expect(Object.keys(PLAN_PRESET_LABEL).map(Number)).toEqual([0, 15, 60, 180, 1440]);
+  });
+  it("a non-preset value (e.g. an old Telegram 5/30 min plan) shows as custom", () => {
+    const m = delayPickerModel(30, false);
+    expect(m.customActive).toBe(true);
+    expect(m.presets.some((p) => p.active)).toBe(false);
+    expect(presetLabel(30)).toBe("30 daq");
+    expect(presetLabel(90)).toBe("1 soat 30 daq");
+  });
+  it("stays in custom mode when the typed value equals a preset", () => {
+    const m = delayPickerModel(60, true);
+    expect(m.customActive).toBe(true);
+    expect(m.presets.some((p) => p.active)).toBe(false);
+  });
+  it("clamps typed custom minutes to 0..10080", () => {
+    expect(clampDelay("0")).toBe(0);
+    expect(clampDelay("10080")).toBe(10080);
+    expect(clampDelay("10081")).toBe(10080);
+    expect(clampDelay("-3")).toBe(0);
+    expect(clampDelay("12.9")).toBe(12);
+  });
+  it("leads the hint like the old per-channel text", () => {
+    expect(delayLead(0)).toEqual({ amount: "chop etilishi bilan", after: "", tail: " (keyingi daqiqada)" });
+    expect(delayLead(15)).toEqual({ amount: "15 daq", after: " o'tib", tail: "" });
   });
 });

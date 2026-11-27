@@ -108,3 +108,30 @@ export function planSummaryLines(items: DistributionItemDto[], nameOf: (provider
 export function isWaitingPlan(item: Pick<DistributionItemDto, "status" | "planDelayMinutes"> | null): boolean {
   return item !== null && item.status === "draft" && item.planDelayMinutes !== null;
 }
+
+/** Tayyor kechikishlarning qisqa yorlig'i (barcha kanal panellari va Telegram uchun BIR XIL). Tayyor bo'lmagan qiymat — `delayText`. */
+export const PLAN_PRESET_LABEL: Readonly<Record<number, string>> = { 0: "Darhol", 15: "15 daq", 60: "1 soat", 180: "3 soat", 1440: "1 kun" };
+
+export function presetLabel(minutes: number): string {
+  return Object.hasOwn(PLAN_PRESET_LABEL, minutes) ? (PLAN_PRESET_LABEL[minutes] as string) : delayText(minutes);
+}
+
+export interface DelayPickerModel {
+  presets: { value: number; label: string; active: boolean }[];
+  /** "Boshqa" tugmasi bosilgan (yoki qiymat tayyorlar orasida yo'q). */
+  customActive: boolean;
+}
+
+/** `DelayPlanPicker` ko'rinishi: qaysi tugma faol. `customMode` — foydalanuvchi "Boshqa"ni tanlagan (qiymati tayyorga tenglashsa ham o'sha rejimda qoladi). */
+export function delayPickerModel(value: number, customMode: boolean): DelayPickerModel {
+  const customActive = customMode || !isPresetDelay(value);
+  return {
+    presets: DISTRIBUTION_PLAN_PRESETS.map((m) => ({ value: m, label: presetLabel(m), active: !customActive && value === m })),
+    customActive,
+  };
+}
+
+/** Qisqa izoh: "Post saytga chiqqach 15 daq o'tib yuboriladi" / "…chiqqach darhol yuboriladi (keyingi daqiqada)". Qalin qism — `amount`. */
+export function delayLead(minutes: number): { amount: string; after: string; tail: string } {
+  return { amount: delayText(minutes), after: minutes <= 0 ? "" : " o'tib", tail: minutes <= 0 ? " (keyingi daqiqada)" : "" };
+}
