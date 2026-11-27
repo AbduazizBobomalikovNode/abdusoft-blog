@@ -51,6 +51,7 @@ export function toItemDto(row: DistributionRow): DistributionItemDto {
     externalId: row.externalId,
     externalUrl: row.externalUrl,
     step: row.step,
+    versionId: row.versionId,
     canResume: Boolean(row.partial && Object.keys(row.partial).length > 0),
     createdBy: row.createdBy,
     createdVia: row.createdVia,

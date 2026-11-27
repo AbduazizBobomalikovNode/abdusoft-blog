@@ -148,12 +148,58 @@ export interface DistributionItemDto {
   externalUrl: string | null;
   step: string | null;
   canResume: boolean;
+  /** Yuborish/rejalashtirishda ishlatilgan nomli versiya (bo'lmasa yoki versiya o'chirilgan bo'lsa null). */
+  versionId: string | null;
   createdBy: string | null;
   createdVia: string;
   sentAt: string | null;
   removedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Bitta kanal uchun nomli matn versiyasi (Telegram kanal versiyalariga o'xshash; GitHub README'da versiya yo'q). */
+export const DISTRIBUTION_VERSION_MAX_PER_CHANNEL = 10;
+export const DISTRIBUTION_VERSION_NAME_MAX = 80;
+export const DISTRIBUTION_VERSION_TEXT_MAX = 20_000;
+
+export interface DistributionVersionDto {
+  id: string;
+  postId: string;
+  provider: DistributionProviderId;
+  name: string;
+  text: string;
+  imageChoice: DistributionImageChoice;
+  /** Faqat LinkedIn. */
+  linkMode: DistributionLinkMode | null;
+  isPrimary: boolean;
+  createdBy: string | null;
+  createdVia: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateDistributionVersionBody {
+  name?: string;
+  /** Berilmasa: `fromVersionId` versiyasining matni, u ham yo'q bo'lsa — kanalning standart matni. */
+  text?: string;
+  fromVersionId?: string;
+  imageChoice?: DistributionImageChoice;
+  linkMode?: DistributionLinkMode | null;
+  makePrimary?: boolean;
+}
+
+export interface UpdateDistributionVersionBody {
+  name?: string;
+  text?: string;
+  imageChoice?: DistributionImageChoice;
+  linkMode?: DistributionLinkMode | null;
+  /** Ixtiyoriy optimistik tekshiruv: versiyaning `updatedAt`i shunga teng bo'lmasa 409. */
+  expectedUpdatedAt?: string;
+}
+
+export interface DistributionVersionsResponse {
+  versions: DistributionVersionDto[];
 }
 
 export interface DistributionImagePreview {
@@ -196,6 +242,8 @@ export interface DistributionPreviewResponse {
 export interface DistributionPostResponse {
   channels: DistributionChannelDto[];
   distributions: DistributionItemDto[];
+  /** Barcha kanallar bo'yicha nomli versiyalar (`provider` bo'yicha guruhlanadi). */
+  versions: DistributionVersionDto[];
   /** Doim `false`: chop etilganda hech narsa avtomatik yuborilmaydi. */
   autoPost: false;
   /** Post savatda (o'chirilgan): faqat ko'rish va platformadan olib tashlash mumkin; yangi yuborish yo'q. Savatda bo'lmasa maydon yo'q. */

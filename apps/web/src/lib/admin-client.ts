@@ -38,6 +38,10 @@ import type {
   DistributionLinkMode,
   DistributionPostResponse,
   DistributionPreviewResponse,
+  DistributionVersionDto,
+  DistributionVersionsResponse,
+  CreateDistributionVersionBody,
+  UpdateDistributionVersionBody,
   DistributionProviderId,
   DistributionSettingsResponse,
   GenerateSecretResponse,
@@ -214,10 +218,20 @@ export const adminApi = {
     adminJson<DistributionPreviewResponse>(`/admin/distribution/posts/${postId}/${provider}/preview${live ? "?live=1" : ""}`, { method: "POST", ...jsonBody(body) }),
   distributionSaveDraft: (postId: string, provider: DistributionProviderId, body: DistributionDraftBody) =>
     adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/draft`, { method: "PUT", ...jsonBody(body) }),
-  distributionSend: (postId: string, provider: DistributionProviderId, body: DistributionDraftBody & { again?: boolean }) =>
+  distributionSend: (postId: string, provider: DistributionProviderId, body: DistributionDraftBody & { again?: boolean; versionId?: string }) =>
     adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/send`, { method: "POST", ...jsonBody(body) }),
-  distributionSchedule: (postId: string, provider: DistributionProviderId, scheduledAt: string, body: DistributionDraftBody & { again?: boolean }) =>
+  distributionSchedule: (postId: string, provider: DistributionProviderId, scheduledAt: string, body: DistributionDraftBody & { again?: boolean; versionId?: string }) =>
     adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/schedule`, { method: "POST", ...jsonBody({ ...body, scheduledAt }) }),
+  distributionVersions: (postId: string, provider: DistributionProviderId) =>
+    adminJson<DistributionVersionsResponse>(`/admin/distribution/posts/${postId}/${provider}/versions`),
+  distributionVersionCreate: (postId: string, provider: DistributionProviderId, body: CreateDistributionVersionBody) =>
+    adminJson<DistributionVersionDto>(`/admin/distribution/posts/${postId}/${provider}/versions`, { method: "POST", ...jsonBody(body) }),
+  distributionVersionUpdate: (id: string, body: UpdateDistributionVersionBody) =>
+    adminJson<DistributionVersionDto>(`/admin/distribution/versions/${id}`, { method: "PATCH", ...jsonBody(body) }),
+  distributionVersionDelete: (id: string) => adminJson<{ id: string; wasPrimary: boolean }>(`/admin/distribution/versions/${id}`, { method: "DELETE" }),
+  distributionVersionPrimary: (id: string) => adminJson<DistributionVersionDto>(`/admin/distribution/versions/${id}/primary`, { method: "POST" }),
+  distributionPrimaryClear: (postId: string, provider: DistributionProviderId) =>
+    adminJson<{ cleared: number }>(`/admin/distribution/posts/${postId}/${provider}/primary`, { method: "DELETE" }),
   distributionCancel: (id: string) => adminJson<DistributionItemDto>(`/admin/distribution/items/${id}/cancel`, { method: "POST" }),
   distributionRetry: (id: string) => adminJson<DistributionItemDto>(`/admin/distribution/items/${id}/retry`, { method: "POST" }),
   distributionResolve: (id: string, body: DistributionResolveBody) =>

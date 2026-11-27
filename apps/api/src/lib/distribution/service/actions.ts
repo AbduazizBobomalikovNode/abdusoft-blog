@@ -11,6 +11,7 @@ import { listChannels } from "./channels.js";
 import { distNow, getProvider, providerDeps } from "./env.js";
 import { resolvePlan, type PlanOverrides, type ResolvedPlan } from "./prepare.js";
 import { loadPostForDistribution } from "./post-source.js";
+import { getVersion, listVersionRowsForPost, toVersionDto } from "./versions.js";
 import { getActiveDistribution, getDistribution, listForPost, toItemDto, type DistributionRow } from "./rows.js";
 import { kickDistribution } from "./runner.js";
 
@@ -82,8 +83,8 @@ function auditEntry(action: string, row: DistributionRow, summary: string, meta:
 export async function listPostDistributions(postId: string): Promise<ServiceResult<DistributionPostResponse>> {
   const post = await loadPostForDistribution(postId);
   if (!post) return fail("not_found", "Post topilmadi");
-  const [channels, rows] = await Promise.all([listChannels(), listForPost(postId)]);
-  return ok({ channels, distributions: rows.map(toItemDto), autoPost: false, ...(post.deletedAt ? { postDeleted: true as const } : {}) });
+  const [channels, rows, versions] = await Promise.all([listChannels(), listForPost(postId), listVersionRowsForPost(postId)]);
+  return ok({ channels, distributions: rows.map(toItemDto), versions: versions.map(toVersionDto), autoPost: false, ...(post.deletedAt ? { postDeleted: true as const } : {}) });
 }
 
 /** Matn/rasm tanlovini saqlaydi (qoralama). Hech narsa yuborilmaydi. */
@@ -117,6 +118,8 @@ function failChecks(plan: ResolvedPlan): ReturnType<typeof fail> {
 }
 
 export interface QueueInput extends DraftInput {
+  /** Tanlangan nomli versiya (faqat qayd uchun: `distributions.version_id`). Yuboriladigan matn baribir `text`/standart. */
+  versionId?: string | undefined;
   /** Avval yuborilgan postni yana yuborishga rozilik (dublikat). */
   again?: boolean | undefined;
 }
@@ -144,12 +147,19 @@ async function queue(
     const sent = await db.select().from(distributions).where(and(eq(distributions.postId, postId), eq(distributions.provider, provider), eq(distributions.status, "sent"))).limit(1);
     if (sent.length > 0) return fail("conflict", "Bu post shu kanalga allaqachon yuborilgan. Yana yuborish dublikat yaratadi — tasdiqlang (again).", { code: "already_sent", previous: toItemDto(sent[0]!) });
   }
+  let versionId: string | null = null;
+  if (input.versionId) {
+    const version = await getVersion(input.versionId);
+    if (!version || version.postId !== postId || version.provider !== provider) return fail("bad_request", "Versiya topilmadi yoki bu post/kanalga tegishli emas");
+    versionId = version.id;
+  }
   const row = await ensureActiveRow(actor, postId, provider);
   const account = await getActiveAccount(provider);
   const [updated] = await db
     .update(distributions)
     .set({
       ...draftFields(input),
+      versionId,
       status: "scheduled",
       // Ko'rsatilgan matn va akkaunt "muzlatiladi": yuborish paytida postning keyingi o'zgarishi yoki boshqa akkaunt ta'sir qilmaydi.
       renderedText: provider === "github" ? null : plan.text,
