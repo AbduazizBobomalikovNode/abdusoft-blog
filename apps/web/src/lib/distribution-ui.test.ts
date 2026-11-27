@@ -4,7 +4,7 @@ import { counterView, groupChecks, isFutureEnough, isHttpsUrl, itemActions, loca
 
 const item = (over: Partial<DistributionItemDto> = {}): DistributionItemDto => ({
   id: "i", postId: "p", provider: "x", status: "draft", text: null, sentText: null, imageChoice: "auto", linkMode: null, scheduledAt: null, nextAttemptAt: null,
-  attempts: 0, lastErrorKind: null, lastErrorMessage: null, externalId: null, externalUrl: null, step: null, canResume: false, versionId: null, createdBy: null, createdVia: "web",
+  attempts: 0, lastErrorKind: null, lastErrorMessage: null, externalId: null, externalUrl: null, step: null, canResume: false, versionId: null, planDelayMinutes: null, planMaterializedAt: null, createdBy: null, createdVia: "web",
   sentAt: null, removedAt: null, createdAt: "2026-11-26T10:00:00Z", updatedAt: "2026-11-26T10:00:00Z", ...over,
 });
 const account = (over: Partial<DistributionAccountDto> = {}): DistributionAccountDto => ({

@@ -222,6 +222,10 @@ export const adminApi = {
     adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/send`, { method: "POST", ...jsonBody(body) }),
   distributionSchedule: (postId: string, provider: DistributionProviderId, scheduledAt: string, body: DistributionDraftBody & { again?: boolean; versionId?: string }) =>
     adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/schedule`, { method: "POST", ...jsonBody({ ...body, scheduledAt }) }),
+  distributionSetPlan: (postId: string, provider: DistributionProviderId, body: DistributionDraftBody & { delayMinutes: number; versionId?: string }) =>
+    adminJson<DistributionItemDto>(`/admin/distribution/posts/${postId}/${provider}/plan`, { method: "PUT", ...jsonBody(body) }),
+  distributionClearPlan: (postId: string, provider: DistributionProviderId) =>
+    adminJson<{ cleared: boolean; cancelled: boolean; distribution: DistributionItemDto | null }>(`/admin/distribution/posts/${postId}/${provider}/plan`, { method: "DELETE" }),
   distributionVersions: (postId: string, provider: DistributionProviderId) =>
     adminJson<DistributionVersionsResponse>(`/admin/distribution/posts/${postId}/${provider}/versions`),
   distributionVersionCreate: (postId: string, provider: DistributionProviderId, body: CreateDistributionVersionBody) =>

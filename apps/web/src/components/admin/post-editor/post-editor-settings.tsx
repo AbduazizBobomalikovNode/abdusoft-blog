@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatDateTime } from "@/lib/format";
 import { ChannelChoiceSummary } from "./channel-choice-summary";
 import { ChannelPlanFields } from "./channel-plan-fields";
+import { DistributionPlansSummary } from "./distribution-plans-summary";
 import { CoverImagePicker } from "./cover-image-picker";
 import { MainVideoCard } from "./main-video-card";
 import { TagMultiselect } from "./tag-multiselect";
@@ -64,6 +65,8 @@ export interface PostEditorSettingsProps {
   onRefreshTelegraph: () => void;
   refreshingTelegraph: boolean;
   onOpenChannelSend: () => void;
+  /** Ijtimoiy tarmoqlar rejasi xulosasi (faqat Tarqatish yoqilgan admin uchun); berilmasa ko'rsatilmaydi. */
+  distributionPlans?: { onOpen: () => void; refreshKey: number };
   /** Belgilangan kanal versiyasi (yo'q bo'lsa `null`) — Telegram kartasidagi xulosa va rejalashtirish uchun. */
   channelChoice?: ResolvedChannelChoice | null;
   /** "Nashr" kartasi uchun — ixtiyoriy, berilmasa status/sana bloki ko'rsatilmaydi. */
@@ -155,6 +158,7 @@ export function PostEditorSettings({
   onRefreshTelegraph,
   refreshingTelegraph,
   onOpenChannelSend,
+  distributionPlans,
   channelChoice = null,
   status,
   publishedAt,
@@ -210,6 +214,9 @@ export function PostEditorSettings({
                 onBlockingChange={onChannelPlanBlockingChange}
                 markedChoice={channelChoice}
               />
+            ) : null}
+            {postId && distributionPlans ? (
+              <DistributionPlansSummary postId={postId} onOpen={distributionPlans.onOpen} refreshKey={distributionPlans.refreshKey} published={status === "published"} />
             ) : null}
           </div>
         </SettingsCard>
