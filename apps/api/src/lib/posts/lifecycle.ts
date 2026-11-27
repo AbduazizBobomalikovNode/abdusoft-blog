@@ -1,5 +1,5 @@
 import { and, eq, isNull, lte } from "drizzle-orm";
-import { ChannelPlanSchema, isAbsoluteChannelPlan, type ChannelPlan } from "@blog/shared";
+import { ChannelPlanSchema, isAbsoluteChannelPlan, type ChannelPlan, type ChannelPublishOutcome } from "@blog/shared";
 import { db } from "../../db/index.js";
 import { user } from "../../db/auth-schema.js";
 import { posts, telegramRefs } from "../../db/schema.js";
@@ -8,7 +8,8 @@ import { recordAudit, type AuditEntry } from "../audit.js";
 import { actorMayTouchChannel, CHANNEL_REMOVAL_REFUSED, postHasChannelMessage } from "./channel-guard.js";
 import { announcePublished, announceUnpublished } from "./effects.js";
 import { checkAbsoluteTime, preparePlan } from "./plan.js";
-import { planPatchOnPublish } from "./publish-plan.js";
+import { planOnPublish } from "./publish-plan.js";
+import type { Executor } from "../executor.js";
 import { snapshotPost, type RevisionReason } from "./revisions.js";
 import {
   loadPost,
@@ -27,8 +28,8 @@ type PostPatch = Partial<typeof posts.$inferInsert>;
 interface TransitionSpec {
   /** Qulflangan (joriy) qator ustida tekshiruv — xato qaytarsa, hech narsa o'zgarmaydi. */
   guard?: (post: PostRow) => ServiceResult<never> | null;
-  /** O'zgartiriladigan ustunlar (`updatedAt`, `updatedBy`, `updatedVia` har doim o'rnatiladi). */
-  buildPatch: (post: PostRow, now: Date) => PostPatch;
+  /** O'zgartiriladigan ustunlar (`updatedAt`, `updatedBy`, `updatedVia` har doim o'rnatiladi). Qulflangan qator va tranzaksiya (`tx`) beriladi. */
+  buildPatch: (post: PostRow, now: Date, tx: Executor) => PostPatch | Promise<PostPatch>;
   /** Jurnal yozuvi — o'zgarish bilan BIR tranzaksiyada yoziladi. */
   audit: (before: PostRow, after: PostRow) => AuditEntry;
   /** Berilsa — yozishdan OLDIN joriy holat revision sifatida saqlanadi. */
@@ -72,7 +73,7 @@ async function transition(
     const [after] = await tx
       .update(posts)
       .set({
-        ...spec.buildPatch(before, now),
+        ...(await spec.buildPatch(before, now, tx)),
         updatedAt: now,
         // Har bir o'tish ijrochini yozadi; scheduler/tizim uchun `updatedBy = null` (foydalanuvchi id'si o'ylab topilmaydi).
         updatedBy: actor.userId,
@@ -134,9 +135,8 @@ async function executePublish(
   id: string,
   args: PublishArgs,
   guard?: TransitionSpec["guard"],
-): Promise<ServiceResult<PostRow>> {
-  // Kanalga allaqachon yuborilganmi — chop etish yangilanishidan OLDIN aniqlanadi (reja `status` bilan bir yangilanishda hisoblanadi).
-  const alreadySent = await channelAlreadySent(id);
+): Promise<ServiceResult<{ post: PostRow; channel: ChannelPublishOutcome }>> {
+  let channel: ChannelPublishOutcome = { state: "none" };
   const result = await transition(actor, id, {
     guard,
     revision: "publish",
@@ -144,9 +144,19 @@ async function executePublish(
       args.kind === "approve" ? "post.approve" : args.kind === "scheduled" ? "post.publish_scheduled" : "post.publish",
       args.kind === "approve" ? "tasdiqlandi va chop etildi" : "chop etildi",
     ),
-    buildPatch: (post, now) => {
-      // Telegram rejasi (har qanday chop etish yo'li): `planPatchOnPublish` — kechikish chop etilgan vaqtdan, aniq vaqt saqlanadi.
-      const planPatch = planPatchOnPublish({ stored: post.channelPlan, kind: args.kind, wasPublished: post.status === "published", alreadySent, now });
+    buildPatch: async (post, now, tx) => {
+      // Telegram rejasi (har qanday chop etish yo'li): kechikish chop etilgan vaqtdan, aniq vaqt saqlanadi; kanalga allaqachon yuborilgan
+      // bo'lsa yoki aktyorda kanal huquqi bo'lmasa reja tashlanadi. "Allaqachon yuborilgan" qulflangan qator bilan BIR tranzaksiyada o'qiladi.
+      const planResult = planOnPublish({
+        stored: post.channelPlan,
+        kind: args.kind,
+        wasPublished: post.status === "published",
+        alreadySent: post.channelPlan != null && (await channelAlreadySent(id, tx)),
+        mayTouchChannel: actorMayTouchChannel(actor),
+        now,
+      });
+      channel = planResult.outcome;
+      const planPatch = planResult.patch;
       switch (args.kind) {
         case "approve":
           return {
@@ -167,7 +177,19 @@ async function executePublish(
   if (!result.ok) return result;
 
   await announcePublished(result.data.after, { skipChannel: !actorMayTouchChannel(actor) });
-  return ok(result.data.after);
+  return ok({ post: result.data.after, channel });
+}
+
+/** Dry-run: shu aktyor hozir chop etsa saqlangan Telegram rejasi nima bo'lardi (hech narsa yozilmaydi). */
+export async function previewChannelOnPublish(actor: Actor, post: PostRow, kind: PublishKind = "manual"): Promise<ChannelPublishOutcome> {
+  return planOnPublish({
+    stored: post.channelPlan,
+    kind,
+    wasPublished: post.status === "published",
+    alreadySent: post.channelPlan != null && (await channelAlreadySent(post.id)),
+    mayTouchChannel: actorMayTouchChannel(actor),
+    now: new Date(),
+  }).outcome;
 }
 
 /** `POST /admin/posts/:id/publish` — holatidan qat'i nazar chop etadi (eski xatti-harakat saqlangan). */
@@ -175,11 +197,11 @@ export async function publishPost(
   actor: Actor,
   id: string,
   opts: ConcurrencyOptions = {},
-): Promise<ServiceResult<LifecycleSummary>> {
+): Promise<ServiceResult<LifecycleSummary & { channel: ChannelPublishOutcome }>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
   const result = await executePublish(actor, id, { kind: "manual", ...opts });
-  return result.ok ? ok(toLifecycleSummary(result.data)) : result;
+  return result.ok ? ok({ ...toLifecycleSummary(result.data.post), channel: result.data.channel }) : result;
 }
 
 /** `in_review -> published` — HTTP va Telegram (`pr:ok:<id>`) ikkalasi ham shu funksiyani chaqiradi. */
@@ -187,12 +209,13 @@ export async function approvePost(
   actor: Actor,
   id: string,
   opts: ConcurrencyOptions = {},
-): Promise<ServiceResult<PostRow>> {
+): Promise<ServiceResult<PostRow & { channel: ChannelPublishOutcome }>> {
   const denied = requireAdminActor(actor);
   if (denied) return denied;
-  return executePublish(actor, id, { kind: "approve", reviewerId: actor.userId, ...opts }, (post) =>
+  const result = await executePublish(actor, id, { kind: "approve", reviewerId: actor.userId, ...opts }, (post) =>
     post.status !== "in_review" ? fail("conflict", "Post ko'rib chiqishda emas") : null,
   );
+  return result.ok ? ok({ ...result.data.post, channel: result.data.channel }) : result;
 }
 
 /** Scheduler: vaqti kelgan `scheduled` postlarni chop etadi. Har biri alohida tranzaksiya. */
@@ -208,7 +231,7 @@ export async function publishDuePosts(now: Date = new Date()): Promise<void> {
       const result = await executePublish(SCHEDULER_ACTOR, id, { kind: "scheduled" }, (post) =>
         post.status !== "scheduled" ? fail("conflict", "Post endi rejalashtirilmagan") : null,
       );
-      if (result.ok) console.log(`Rejalashtirilgan post chop etildi: ${result.data.slug}`);
+      if (result.ok) console.log(`Rejalashtirilgan post chop etildi: ${result.data.post.slug}`);
     } catch (error: unknown) {
       console.error(`Rejalashtirilgan postni chop etib bo'lmadi (${id}):`, error instanceof Error ? error.message : error);
     }
@@ -255,7 +278,7 @@ export function unpublishPost(actor: Actor, id: string, opts: ConcurrencyOptions
     id,
     // Telegram rejasi SAQLANADI (boshqa kanallar kabi), faqat navbat vaqti olinadi: qayta chop etilganda qayta hisoblanadi.
     // Yuborilayotgan (claim qilingan) yuborishga tegilmaydi — ishchi o'zi tugatadi yoki `not_published` bilan to'xtaydi.
-    () => ({ status: "draft", channelSendAt: null }),
+    () => ({ status: "draft", channelSendAt: null, channelLastError: null, channelLastErrorAt: null }),
     statusChange("post.unpublish", "qoralamaga qaytarildi"),
     "unpublish",
     opts,
@@ -267,16 +290,18 @@ export function archivePost(actor: Actor, id: string, opts: ConcurrencyOptions =
     actor,
     id,
     // Arxiv — deyarli yakuniy holat: Telegram rejasi tozalanadi (qoralamaga qaytarilsa reja qayta qo'yiladi).
-    () => ({ status: "archived", channelPlan: null, channelSendAt: null }),
+    () => ({ status: "archived", channelPlan: null, channelSendAt: null, channelLastError: null, channelLastErrorAt: null }),
     statusChange("post.archive", "arxivlandi"),
     "archive",
     opts,
   );
 }
 
-/** Saqlangan (qayta rejalashtirishda) aniq vaqtli reja yangi chop etish vaqtidan oldin bo'lsa `true` (kechikishli rejada doim `false`). */
-function keptAbsoluteTooEarly(plan: ChannelPlan, scheduledAt: Date): boolean {
-  return isAbsoluteChannelPlan(plan) && new Date(plan.sendAt).getTime() < scheduledAt.getTime();
+/** Qayta rejalashtirishda saqlanadigan reja: yaroqli bo'lsa va aniq vaqti yangi chop etish vaqtidan oldin bo'lmasa — o'zi, aks holda `null`. */
+function keptPlan(stored: unknown, scheduledAt: Date): ChannelPlan | null {
+  const kept = ChannelPlanSchema.safeParse(stored);
+  if (!kept.success) return null;
+  return isAbsoluteChannelPlan(kept.data) && new Date(kept.data.sendAt).getTime() < scheduledAt.getTime() ? null : kept.data;
 }
 
 export interface ScheduleInput extends ConcurrencyOptions {
@@ -298,12 +323,8 @@ export async function schedulePost(
   if (Number.isNaN(scheduledAt.getTime())) return fail("bad_request", "Noto'g'ri sana");
 
   let storedPlan: ChannelPlan | null = null;
-  if (input.channelPlan === undefined) {
-    // Reja berilmagan (masalan MCP `schedule_post`) — qoralamaga qaytarilganda saqlangan Telegram rejasi YO'QOLMAYDI.
-    // Saqlangan aniq vaqt yangi chop etish vaqtidan oldin bo'lsa (yoki yaroqsiz bo'lsa) — olib tashlanadi.
-    const kept = ChannelPlanSchema.safeParse(post.channelPlan);
-    if (kept.success && !keptAbsoluteTooEarly(kept.data, scheduledAt)) storedPlan = kept.data;
-  } else if (input.channelPlan) {
+  if (input.channelPlan && !actorMayTouchChannel(actor)) return fail("forbidden", "Kanalga yuborish rejasini qo'yish uchun 'channels:send' ruxsati kerak");
+  if (input.channelPlan) {
     // Aniq vaqt: kanal vaqti post saytga chiqishidan oldin bo'lmasin (qoralamada ham shu yerda — rejalashtirishda — tekshiriladi).
     const timeError = checkAbsoluteTime(input.channelPlan, scheduledAt);
     if (timeError) return fail("bad_request", timeError);
@@ -318,9 +339,11 @@ export async function schedulePost(
     revision: "schedule",
     audit: statusChange("post.schedule", "rejalashtirildi", {
       scheduledAt: scheduledAt.toISOString(),
-      hasChannelPlan: storedPlan !== null,
+      hasChannelPlan: input.channelPlan === undefined ? post.channelPlan != null : storedPlan !== null,
     }),
-    buildPatch: () => ({ status: "scheduled", scheduledAt, channelPlan: storedPlan, channelSendAt: null }),
+    // Reja berilmagan (masalan MCP `schedule_post`) — qoralamaga qaytarilganda saqlangan Telegram rejasi YO'QOLMAYDI: u QULFLANGAN
+    // qatordan o'qiladi. Saqlangan aniq vaqt yangi chop etish vaqtidan oldin bo'lsa (yoki yaroqsiz bo'lsa) — olib tashlanadi.
+    buildPatch: (locked) => ({ status: "scheduled", scheduledAt, channelPlan: input.channelPlan === undefined ? keptPlan(locked.channelPlan, scheduledAt) : storedPlan, channelSendAt: null }),
   }, { expectedUpdatedAt: input.expectedUpdatedAt });
   if (!result.ok) return result;
   if (result.data.before.status === "published") await announceUnpublished(result.data.after, { skipChannel: !actorMayTouchChannel(actor) });
@@ -332,8 +355,8 @@ export async function schedulePost(
 // ---------------------------------------------------------------------------
 
 /** Post kanalga allaqachon yuborilganmi (idempotentlik: ikki marta yuborish yo'q). */
-async function channelAlreadySent(postId: string): Promise<boolean> {
-  const [ref] = await db.select({ sentAt: telegramRefs.channelSentAt }).from(telegramRefs).where(eq(telegramRefs.postId, postId)).limit(1);
+async function channelAlreadySent(postId: string, executor: Executor = db): Promise<boolean> {
+  const [ref] = await executor.select({ sentAt: telegramRefs.channelSentAt }).from(telegramRefs).where(eq(telegramRefs.postId, postId)).limit(1);
   return ref?.sentAt != null;
 }
 

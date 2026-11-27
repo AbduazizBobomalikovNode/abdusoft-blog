@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planPatchOnPublish, type PublishPlanInput } from "./publish-plan.js";
+import { planOnPublish, planPatchOnPublish, type PublishPlanInput } from "./publish-plan.js";
 
 const NOW = new Date("2026-11-28T10:00:00.000Z");
 const base = (over: Partial<PublishPlanInput>): PublishPlanInput => ({ stored: { mode: "text", variant: "m", delayMinutes: 30 }, kind: "manual", wasPublished: false, alreadySent: false, now: NOW, ...over });
@@ -29,3 +29,24 @@ describe("planPatchOnPublish", () => {
     expect(planPatchOnPublish(base({ stored: past, kind: "scheduled" })).channelSendAt).toEqual(NOW);
   });
 });
+
+describe("planOnPublish outcome", () => {
+  it("reports none / armed / dropped with the reason", () => {
+    expect(planOnPublish(base({ stored: null })).outcome).toEqual({ state: "none" });
+    expect(planOnPublish(base({})).outcome).toEqual({ state: "armed", at: "2026-11-28T10:30:00.000Z" });
+    expect(planOnPublish(base({ alreadySent: true })).outcome).toEqual({ state: "dropped", reason: "already_sent" });
+    expect(planOnPublish(base({ stored: { junk: 1 } })).outcome).toEqual({ state: "dropped", reason: "invalid" });
+    const past = { mode: "text", variant: "m", delayMinutes: 0, sendAt: "2026-11-28T08:00:00.000Z" };
+    expect(planOnPublish(base({ stored: past })).outcome).toEqual({ state: "dropped", reason: "past_time" });
+  });
+  it("an actor without channel rights never arms: the plan is dropped (published post never keeps plan with NULL send_at)", () => {
+    const r = planOnPublish(base({ mayTouchChannel: false }));
+    expect(r.patch).toEqual({ channelPlan: null, channelSendAt: null });
+    expect(r.outcome).toEqual({ state: "dropped", reason: "no_permission" });
+    for (const kind of ["manual", "approve", "scheduled"] as const) {
+      const out = planOnPublish(base({ kind, stored: { mode: "text", variant: "m", delayMinutes: 0, sendAt: "2026-11-28T12:00:00.000Z" } }));
+      expect(out.patch.channelPlan == null || out.patch.channelSendAt != null).toBe(true);
+    }
+  });
+});
+

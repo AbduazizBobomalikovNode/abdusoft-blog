@@ -1,4 +1,4 @@
-import { CHANNEL_SEND_AT_MAX_DAYS, isAbsoluteChannelPlan, type AdminPostStatus, type ChannelPlan, type ChannelSelection, type ChannelStatus, type ResolvedChannelChoice } from "@blog/shared";
+import { CHANNEL_SEND_AT_MAX_DAYS, isAbsoluteChannelPlan, type AdminPostStatus, type ChannelPlan, type ChannelPublishOutcome, type ChannelSelection, type ChannelStatus, type ResolvedChannelChoice } from "@blog/shared";
 import { canPlanForPost, planPhrase } from "./distribution-plan";
 import { localInputToIso } from "./distribution-ui";
 
@@ -148,6 +148,22 @@ export function telegramDotTone(status: ChannelStatus | null): "planned" | "send
   if (status.state === "none") return status.lastError ? "failed" : null;
   if (status.sentAt && status.state === "planned") return "sent";
   return status.state;
+}
+
+/**
+ * Chop etishdan keyin saqlangan Telegram rejasi haqida toast matni: navbatga qo'yildi (`info`) yoki tashlandi (`warning`, sababi bilan).
+ * Reja bo'lmasa `null`. `now` — faqat vaqtni formatlash uchun.
+ */
+export function channelPublishNotice(outcome: ChannelPublishOutcome | null | undefined, now: Date = new Date()): { tone: "info" | "warning"; text: string } | null {
+  if (!outcome || outcome.state === "none") return null;
+  if (outcome.state === "armed") return { tone: "info", text: `Telegram rejasi ishga tushdi: kanalga ${formatChannelAt(outcome.at, now)} da yuboriladi` };
+  const why = {
+    past_time: "aniq vaqti allaqachon o'tib ketgan",
+    already_sent: "post kanalga allaqachon yuborilgan",
+    no_permission: "kanalga yuborish ruxsati yo'q",
+    invalid: "reja yaroqsiz edi",
+  }[outcome.reason];
+  return { tone: "warning", text: `Telegram rejasi bekor qilindi (${why}) — kanalga avtomatik yuborilmaydi` };
 }
 
 /** Tahrirlagichni saqlatish natijasi: hech narsa o'zgarmagan / saqlandi / saqlanmadi. */

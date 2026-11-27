@@ -193,17 +193,18 @@ async function handleFailure(
   now: Date,
 ): Promise<boolean> {
   // Har bir muvaffaqiyatsiz urinish (oxirgisi ham) panelda ko'rinadi; qayta urinishlar soni va xabarnoma o'zgarmaydi.
-  await recordChannelError(postId, reason, now);
+  // Yuborish paytida post qoralamaga qaytarilgan bo'lsa (`not_published` va shunga o'xshash) — bu haqiqiy yuborish xatosi emas, yozilmaydi.
+  await recordChannelError(postId, reason, now, { onlyIfPublished: true });
   if (attempts >= MAX_CHANNEL_PLAN_ATTEMPTS) {
     await clearPlan(postId);
     await notifyAdmin(`⚠️ Kanalga yuborilmadi: ${escapeHtml(title)} — ${escapeHtml(reason)}`);
     return false;
   }
-  // Keyingi tick'da qayta uriniladi (faqat reja hali bekor qilinmagan bo'lsa VA post hamon chop etilgan bo'lsa:
-  // yuborish paytida qoralamaga qaytarilgan postda reja saqlanadi, lekin `channel_send_at` qo'yilmaydi — qayta chop etilganda qayta hisoblanadi).
+  // Keyingi tick'da qayta uriniladi (faqat reja hali bekor qilinmagan, post hamon chop etilgan VA `channel_send_at` hamon NULL bo'lsa:
+  // yuborish paytida qoralamaga qaytarilib qayta chop etilgan postning yangi navbat vaqti ustiga yozilmaydi).
   await db
     .update(posts)
     .set({ channelPlan: { ...plan, attempts }, channelSendAt: now })
-    .where(and(eq(posts.id, postId), eq(posts.status, "published"), isNotNull(posts.channelPlan)));
+    .where(and(eq(posts.id, postId), eq(posts.status, "published"), isNotNull(posts.channelPlan), isNull(posts.channelSendAt)));
   return true;
 }

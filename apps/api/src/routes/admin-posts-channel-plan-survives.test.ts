@@ -12,6 +12,9 @@ import { uploadsDir } from "../lib/media/store.js";
 import { invalidateSettingsCache, saveSettings } from "../lib/settings.js";
 import { reconfigureBot } from "../telegram/client.js";
 import { recoverInterruptedChannelSends, runDueChannelSends } from "../telegram/channel-plan.js";
+import { previewChannelOnPublish, publishPost, schedulePost, updatePost } from "../lib/posts/index.js";
+import type { Actor } from "../lib/posts/types.js";
+import { recordChannelError } from "../telegram/channel-last-error.js";
 import { sendPostToChannel } from "../telegram/channel-send.js";
 import { CHANNEL_LAST_ERROR_MAX, sanitizeChannelError } from "../telegram/channel-last-error.js";
 import { registerTelegramPublishing } from "../telegram/publish.js";
@@ -375,12 +378,87 @@ describe("last send error", () => {
 
   it("sanitizeChannelError hides tokens, collapses whitespace and caps the length", () => {
     const token = "123456789:AAEhBOweik6ad9r_QXMENQjcrTu-oQE8Gi";
-    const out = sanitizeChannelError(new Error(`Call to https://api.telegram.org/bot${token}/sendMessage failed\n\n  Bearer abc.def-123 token=xyz`));
+    const out = sanitizeChannelError(new Error(`Call to https://api.telegram.org/bot${token}/sendMessage failed\n\n  Bearer abc.def-123-abc.def-123 token=xyz Basic auth failed token: expired`));
     expect(out).not.toContain(token);
-    expect(out).not.toContain("abc.def-123");
+    expect(out).not.toContain("abc.def-123-abc.def-123");
+    expect(out).toContain("Basic auth failed"); // oddiy matn qirqilmaydi
+    expect(out).toContain("token: expired");
     expect(out).not.toContain("xyz");
     expect(out).not.toMatch(/\s{2,}/);
     expect(sanitizeChannelError("x".repeat(2000)).length).toBe(CHANNEL_LAST_ERROR_MAX);
+    const emoji = Array.from(sanitizeChannelError("😀".repeat(900)));
+    expect(emoji.length).toBe(CHANNEL_LAST_ERROR_MAX); // Unicode belgi bo'yicha, juft surrogat bo'linmaydi
+    expect(emoji.slice(0, -1).every((c) => c === "😀")).toBe(true);
     expect(sanitizeChannelError("   ")).toBe("Noma'lum xato");
   });
+});
+
+const mcpActor = (channelsSend: boolean): Actor => ({ userId: admin.id, role: "admin", via: "mcp", mcp: { clientId: "c", clientName: "t", tool: "t", channelsSend } });
+
+describe("channel permission and publish result", () => {
+  it("setting/changing a plan needs channels:send (PATCH service and schedule); omitted plan and clearing are fine", async () => {
+    const id = await createPost({ withMedia: false });
+    const denied = await updatePost(mcpActor(false), id, { channelPlan: delayPlan(5) as never });
+    expect(denied.ok).toBe(false);
+    expect((await loadPost(id)).channelPlan).toBeNull();
+    const deniedSchedule = await schedulePost(mcpActor(false), id, { scheduledAt: inH(2), channelPlan: delayPlan(5) as never });
+    expect(deniedSchedule.ok).toBe(false);
+    expect((await loadPost(id)).status).toBe("draft");
+    expect((await updatePost(mcpActor(true), id, { channelPlan: delayPlan(5) as never })).ok).toBe(true);
+    expect((await updatePost(mcpActor(false), id, { title: "Yangi sarlavha" })).ok).toBe(true); // reja berilmagan — tegilmaydi
+    expect((await loadPost(id)).channelPlan).toMatchObject({ delayMinutes: 5 });
+    expect((await schedulePost(mcpActor(false), id, { scheduledAt: inH(2) })).ok).toBe(true); // omitted = keep
+    expect((await loadPost(id)).channelPlan).toMatchObject({ delayMinutes: 5 });
+    expect((await updatePost(mcpActor(false), id, { channelPlan: null })).ok).toBe(true);
+    expect((await loadPost(id)).channelPlan).toBeNull();
+  });
+
+  it("publish by an actor without channels:send drops the plan (never plan + NULL send_at on a published post) and says so", async () => {
+    const id = await draftWithPlan(delayPlan(10));
+    const preview = await previewChannelOnPublish(mcpActor(false), await loadPost(id));
+    expect(preview).toEqual({ state: "dropped", reason: "no_permission" });
+    expect((await loadPost(id)).channelPlan).not.toBeNull(); // dry-run hech narsa yozmaydi
+    const res = await publishPost(mcpActor(false), id);
+    expect(res.ok && res.data.channel).toEqual({ state: "dropped", reason: "no_permission" });
+    const row = await loadPost(id);
+    expect(row.status).toBe("published");
+    expect(row.channelPlan).toBeNull();
+    expect(row.channelSendAt).toBeNull();
+    await recoverInterruptedChannelSends();
+    expect((await loadPost(id)).channelSendAt).toBeNull();
+  });
+
+  it("HTTP publish and approve return channel: armed / dropped; dry-run preview matches", async () => {
+    const id = await draftWithPlan(delayPlan(10));
+    const body = (await (await publish(id)).json()) as { channel: { state: string; at?: string } };
+    expect(body.channel.state).toBe("armed");
+    expect(near(new Date(body.channel.at!), Date.now() + 10 * MIN)).toBe(true);
+
+    const past = await draftWithPlan(delayPlan(10));
+    await db.update(posts).set({ channelPlan: { ...delayPlan(0), sendAt: new Date(Date.now() - HOUR).toISOString() } }).where(eq(posts.id, past));
+    expect(((await (await publish(past)).json()) as { channel: unknown }).channel).toEqual({ state: "dropped", reason: "past_time" });
+
+    const reviewed = await draftWithPlan(delayPlan(20));
+    await db.update(posts).set({ status: "in_review" }).where(eq(posts.id, reviewed));
+    const approved = (await (await send("POST", `/admin/posts/${reviewed}/approve`, admin.cookie)).json()) as { channel: { state: string } };
+    expect(approved.channel.state).toBe("armed");
+
+    const none = await createPost({ withMedia: false });
+    expect(((await (await publish(none)).json()) as { channel: unknown }).channel).toEqual({ state: "none" });
+  });
+
+  it("unpublish and archive clear the last error; a failure recorded for an unpublished post is ignored", async () => {
+    const id = await draftWithPlan(delayPlan(10));
+    await publish(id);
+    await db.update(posts).set({ channelLastError: "xato", channelLastErrorAt: new Date() }).where(eq(posts.id, id));
+    await unpublish(id);
+    expect((await loadPost(id)).channelLastError).toBeNull();
+    await recordChannelError(id, "kech xato", new Date(), { onlyIfPublished: true }); // post qoralama — yozilmaydi
+    expect((await loadPost(id)).channelLastError).toBeNull();
+    await publish(id);
+    await db.update(posts).set({ channelLastError: "xato", channelLastErrorAt: new Date() }).where(eq(posts.id, id));
+    await send("POST", `/admin/posts/${id}/archive`, admin.cookie);
+    expect((await loadPost(id)).channelLastError).toBeNull();
+  });
+
 });

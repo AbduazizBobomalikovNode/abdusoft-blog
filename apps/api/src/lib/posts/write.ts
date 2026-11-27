@@ -276,6 +276,10 @@ export async function updatePost(
     }
   }
   if (data.channelPlan !== undefined) {
+    // Reja qo'yish/o'zgartirish chop etilganda kanalga yuborishni ishga tushiradi — `set_channel_plan` bilan bir xil huquq (`channels:send`). Tozalash (null) ruxsatsiz ham mumkin.
+    if (data.channelPlan !== null && !actorMayTouchChannel(actor)) {
+      return fail("forbidden", "Kanalga yuborish rejasini qo'yish uchun 'channels:send' ruxsati kerak");
+    }
     if (data.channelPlan === null) {
       update.channelPlan = null;
       update.channelSendAt = null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelPlan, ChannelStatus, ResolvedChannelChoice } from "@blog/shared";
-import { absoluteTimeError, canEditSendAt, formatChannelAt, isoToLocalInput, planTiming, planWithDelay, planWithSendAt, telegramDotTone, telegramErrorLine, telegramStatusLine, TELEGRAM_PLAN_NOTE, createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
+import { absoluteTimeError, canEditSendAt, formatChannelAt, isoToLocalInput, planTiming, planWithDelay, planWithSendAt, channelPublishNotice, telegramDotTone, telegramErrorLine, telegramStatusLine, TELEGRAM_PLAN_NOTE, createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
 
 const choice = (over: Partial<ResolvedChannelChoice> = {}) =>
   ({ choice: { kind: "auto", mode: "media", variant: "m" }, label: "Rasmli · O'rtacha", mode: "media", visibleLength: 812, limit: 1024, passes: true, ...over }) as ResolvedChannelChoice;
@@ -158,5 +158,18 @@ describe("last send error", () => {
     expect(telegramDotTone(status({ state: "sending", lastError: err }))).toBe("sending");
     expect(telegramDotTone(status({ state: "sent", sentAt: AT }))).toBe("sent");
     expect(telegramDotTone(status())).toBeNull();
+  });
+});
+
+describe("channelPublishNotice", () => {
+  it("armed -> info with the time; dropped -> warning with the reason; none -> null", () => {
+    expect(channelPublishNotice(undefined)).toBeNull();
+    expect(channelPublishNotice({ state: "none" })).toBeNull();
+    expect(channelPublishNotice({ state: "armed", at: AT }, NOW)).toEqual({ tone: "info", text: "Telegram rejasi ishga tushdi: kanalga 28.11 14:30 da yuboriladi" });
+    for (const [reason, part] of [["past_time", "o'tib ketgan"], ["already_sent", "allaqachon yuborilgan"], ["no_permission", "ruxsati yo'q"], ["invalid", "yaroqsiz"]] as const) {
+      const n = channelPublishNotice({ state: "dropped", reason });
+      expect(n?.tone).toBe("warning");
+      expect(n?.text).toContain(part);
+    }
   });
 });

@@ -59,6 +59,7 @@ import { isHintText } from "@blog/shared";
 import { site } from "@/lib/site";
 import { formatTime } from "@/lib/format";
 import { canPlanForPost } from "@/lib/distribution-plan";
+import { channelPublishNotice } from "@/lib/distribution-telegram";
 
 function toDatetimeLocal(iso: string | null): string {
   if (!iso) return "";
@@ -476,6 +477,8 @@ function PostEditorInner({
       else if (send?.state === "failed") toast.error(`Post chop etildi, lekin kanalga yuborilmadi: ${send.error ?? "noma'lum xato"}`);
       else if (send?.state === "pending") toast.success("Post chop etildi — kanalga yuborilmoqda, natija admin chatiga keladi");
       else toast.success("Post chop etildi");
+      const notice = send ? null : channelPublishNotice(result.channel);
+      if (notice) (notice.tone === "warning" ? toast.warning : toast.info)(notice.text);
     } catch (error) {
       if (!handledAsConflict(error)) toast.error(errorMessage(error, "Chop etishda xatolik"));
     }

@@ -65,6 +65,7 @@ import type {
   MotionGithubSettings,
   MotionGithubSettingsPatch,
   MotionStatus,
+  ChannelPublishOutcome,
 } from "@blog/shared";
 import { site } from "./site";
 
@@ -94,6 +95,8 @@ interface LifecycleSummary {
   updatedAt: string;
   /** Faqat `sendToChannel: true` so'ralganda — belgilangan versiyani kanalga yuborish natijasi. */
   channelSend?: PublishChannelSendResult;
+  /** `publish` / `approve`: saqlangan Telegram rejasi chop etishda nima bo'ldi (navbatga qo'yildi / tashlandi). */
+  channel?: ChannelPublishOutcome;
 }
 
 /** Ixtiyoriy "optimistic concurrency" tokeni: berilsa serverga `expectedUpdatedAt` sifatida yuboriladi. */

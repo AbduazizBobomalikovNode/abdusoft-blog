@@ -11,6 +11,7 @@
 - O'ZGARISH: qo'lda yoki tasdiqlash bilan BIRINCHI chop etishda «saytga chiqqach N daqiqa» rejasi endi bekor qilinmaydi — chop etilgan vaqtdan N daqiqa keyin yuboriladi (boshqa kanallar bilan bir xil). O'tib ketgan aniq vaqt qo'lda chop etishda avvalgidek tashlanadi; scheduler kech qolsa darhol yuboradi.
 - Qoralama / ko'rib chiqishdagi postga ham reja qo'yiladi (avtosaqlanadi); `schedule_post` reja bermasa saqlangan reja yo'qolmaydi. Veb: «Nashr» kartasi va Telegram panelida yangi izoh.
 - Oxirgi yuborish xatosi: har bir muvaffaqiyatsiz urinishda (qo'lda yuborishda ham) tozalangan qisqa matn saqlanadi, muvaffaqiyatli yuborishda tozalanadi. `GET /channel/status` → `lastError`; Claude `get_post` → `channel.lastError`; panelda qizil qator va qizil yorliq nuqtasi. Qayta urinishlar va xabarnomalar o'zgarmagan.
+- Ruxsat: reja qo'yish/o'zgartirish `channels:send` talab qiladi; ruxsatsiz aktyor chop etganda saqlangan reja ishga tushmaydi (tashlanadi). `publish`/`approve` javobi va Claude `publish_post`/`approve_post` (dry-run ham) `channel` qaytaradi (`armed`/`dropped`+sabab); veb toast ko'rsatadi.
 - Additiv migratsiya `0024`: `posts.channel_last_error`, `posts.channel_last_error_at`. Claude vositalari tavsifi (`set_channel_plan`, `cancel_channel_plan`, `publish_post`, `unpublish_post`, `archive_post`) yangilandi.
 
 **Telegram: aniq vaqtda yuborish («Aniq vaqt») va yagona holat**
@@ -68,6 +69,7 @@
 - CHANGE: on the FIRST manual or approve publish, an "N minutes after the site goes live" plan is no longer dropped - it sends N minutes after that publish (same as the other channels). A past exact time is still dropped on manual publish; the scheduler still sends a late one at once.
 - Drafts / in-review posts can hold a plan too (autosaved); `schedule_post` without a plan no longer wipes a saved one. Web: new note in the "Nashr" card and the Telegram panel.
 - Last send error: every failed attempt (manual sends too) stores a short sanitized message, cleared by a successful send. `GET /channel/status` -> `lastError`; Claude `get_post` -> `channel.lastError`; red line and red tab dot in the panel. Retries and notifications unchanged.
+- Permission: setting or changing a plan needs `channels:send`; an actor without it publishing does not arm the saved plan (it is dropped). `publish`/`approve` responses and Claude `publish_post`/`approve_post` (also dry-run) return `channel` (`armed`/`dropped` + reason); the web shows a toast.
 - Additive migration `0024`: `posts.channel_last_error`, `posts.channel_last_error_at`. Claude tool descriptions (`set_channel_plan`, `cancel_channel_plan`, `publish_post`, `unpublish_post`, `archive_post`) updated.
 
 **Telegram: exact-time send ("Aniq vaqt") and one status**

@@ -4,6 +4,7 @@ import {
   buildPublishChecklist,
   MARKDOWN_LIMITS,
   markdownToDoc,
+  type ChannelPublishOutcome,
   type ChecklistItem,
   type ContentNode,
   isSafeConnectorUrl,
@@ -14,6 +15,7 @@ import { ownMediaMatcher } from "../../media/own-url.js";
 import { renderPost } from "../../content/render.js";
 import {
   approvePost,
+  previewChannelOnPublish,
   archivePost,
   createDraft,
   publishPost,
@@ -523,6 +525,16 @@ async function checkPublishable(post: PostRow): Promise<{ items: ChecklistItem[]
   return { items, summary: compactChecklist(items) };
 }
 
+/** Natijaga qisqa izoh: saqlangan Telegram rejasi chop etishda nima bo'ldi (hech narsa bo'lmasa bo'sh). */
+function channelPlanNote(channel: ChannelPublishOutcome): string {
+  if (channel.state === "armed") return ` The saved Telegram channel plan is armed: it sends at ${channel.at}.`;
+  if (channel.state === "dropped") {
+    const why = { past_time: "its exact time had already passed", already_sent: "the post was already sent to the channel", no_permission: "this connection lacks channels:send", invalid: "it was invalid" }[channel.reason];
+    return ` The saved Telegram channel plan was DROPPED (${why}); nothing will be sent automatically.`;
+  }
+  return "";
+}
+
 export const publishPostTool = defineTool({
   name: "publish_post",
   title: "Publish a post",
@@ -567,6 +579,7 @@ export const publishPostTool = defineTool({
           canPublish: summary.blockers.length === 0,
           checks: summary,
           ...(args.send_to_channel ? { channelPreflight: await preflightForMarkedChoice(post.id) } : {}),
+          channel: await previewChannelOnPublish(ctx.actor, post, "manual"),
           post: postBlock(post),
         },
       );
@@ -575,10 +588,11 @@ export const publishPostTool = defineTool({
     if (summary.blockers.length > 0) {
       throw new ToolError("unprocessable", "The pre-publish checks block this post. Nothing was changed.", "Fix the blockers with update_post, re-read, then publish again.", { blockers: summary.blockers, warnings: summary.warnings });
     }
-    await unwrapPost(await publishPost(ctx.actor, args.id, { expectedUpdatedAt: args.expected_updated_at }), args.id);
+    const published = await unwrapPost(await publishPost(ctx.actor, args.id, { expectedUpdatedAt: args.expected_updated_at }), args.id);
     const channelSend = args.send_to_channel ? await queueChannelSend(args.id) : undefined;
-    return done(`Published: "${post.title}".${channelSend ? ` Telegram: ${channelSend.state}.` : ""}`, {
+    return done(`Published: "${post.title}".${channelSend ? ` Telegram: ${channelSend.state}.` : ""}${channelPlanNote(published.channel)}`, {
       post: await freshBlock(args.id),
+      channel: published.channel,
       warnings: summary.warnings,
       ...(channelSend ? { channelSend } : {}),
     });
@@ -617,13 +631,14 @@ export const approvePostTool = defineTool({
         wouldDo: `Approve and publish "${post.title}" (in_review -> published).`,
         canPublish: summary.blockers.length === 0,
         checks: summary,
+        channel: await previewChannelOnPublish(ctx.actor, post, "approve"),
         post: postBlock(post),
       });
     }
     if (summary.blockers.length > 0) throw new ToolError("unprocessable", "The pre-publish checks block this post. Nothing was changed.", "Ask for changes with request_post_changes or fix it with update_post.", { blockers: summary.blockers, warnings: summary.warnings });
-    await unwrapPost(await approvePost(ctx.actor, args.id, { expectedUpdatedAt: args.expected_updated_at }), args.id);
+    const approved = await unwrapPost(await approvePost(ctx.actor, args.id, { expectedUpdatedAt: args.expected_updated_at }), args.id);
     const channelSend = args.send_to_channel ? await queueChannelSend(args.id) : undefined;
-    return done(`Approved and published: "${post.title}".`, { post: await freshBlock(args.id), warnings: summary.warnings, ...(channelSend ? { channelSend } : {}) });
+    return done(`Approved and published: "${post.title}".${channelPlanNote(approved.channel)}`, { post: await freshBlock(args.id), channel: approved.channel, warnings: summary.warnings, ...(channelSend ? { channelSend } : {}) });
   },
 });
 
