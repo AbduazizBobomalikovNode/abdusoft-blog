@@ -615,6 +615,13 @@ export const distributions = pgTable(
     partial: jsonb("partial").$type<Record<string, string>>(),
     /** Yuborish/rejalashtirishda tanlangan nomli versiya (`distribution_versions`); versiya o'chirilsa `null`. Matn baribir `rendered_text`da. */
     versionId: uuid("version_id").references((): AnyPgColumn => distributionVersions.id, { onDelete: "set null" }),
+    /**
+     * "Saytga chiqqach N daqiqadan keyin" rejasi (0..10080): post chop etilganda `chop etilgan vaqt + N daqiqa`ga aylanadi (`scheduled_at`).
+     * `null` — reja yo'q. Reja qatorning o'zida saqlanadi (faol qator + `version_id`/matn/rasm tanlovi); holatlar enum'i o'zgarmagan.
+     */
+    planDelayMinutes: integer("plan_delay_minutes"),
+    /** Reja haqiqiy `scheduled_at`ga aylantirilgan (yoki xato bilan yopilgan) vaqt; `null` — hali chop etilmagan (kutmoqda). Idempotentlik belgisi. */
+    planMaterializedAt: timestamp("plan_materialized_at", { withTimezone: true }),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     /** `web` | `mcp` | `scheduler`. */
     createdVia: text("created_via").notNull().default("web"),

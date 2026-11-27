@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { DISTRIBUTION_PROVIDERS, type DistributionItemDto, type DistributionVersionDto } from "@blog/shared";
+import { DISTRIBUTION_PLAN_MAX_DELAY_MINUTES, DISTRIBUTION_PROVIDERS, type DistributionItemDto, type DistributionVersionDto } from "@blog/shared";
 import { clearPrimary, createVersion, deleteVersion, getVersion, listVersions, setPrimary, toVersionDto, updateVersion } from "../../distribution/service/versions.js";
 import { cancel, getDistributionDto, listPostDistributions, removeFromPlatform, retry, saveDraft, schedule, sendNow, type DraftInput, type QueueInput } from "../../distribution/service/actions.js";
+import { checkPlan, clearPlan, setPlan } from "../../distribution/service/plans.js";
 import { listChannels } from "../../distribution/service/channels.js";
 import { buildPreview } from "../../distribution/service/prepare.js";
 import { getDistribution } from "../../distribution/service/rows.js";
@@ -66,7 +67,7 @@ export const listDistributionChannelsTool = defineTool({
     return {
       data: {
         autoPost: false,
-        note: "Nothing is distributed automatically when a post is published; only explicit send/schedule calls do.",
+        note: "Nothing is distributed automatically when a post is published unless the owner (or you, on request) set a plan with set_distribution_plan; otherwise only explicit send/schedule calls distribute.",
         channels: channels.map((c) => ({
           id: c.id,
           name: c.name,
@@ -352,6 +353,87 @@ export const removeDistributionTool = defineTool({
   },
 });
 
+const PLAN_WARNING =
+  "ACTS ON THE PUBLIC INTERNET LATER: a plan makes the server post to the owner's real public account automatically, delay_minutes after the post is published (by anyone, any way, including its scheduled publish time) - not now. ASK THE OWNER FOR APPROVAL EVERY TIME (show the channel, the delay and the text first; use dry_run=true to get the checks) and never plan several channels without being asked. ";
+
+export const setDistributionPlanTool = defineTool({
+  name: "set_distribution_plan",
+  title: "Plan a social post for after the blog post is published",
+  description:
+    U + PLAN_WARNING + `Set (or replace) the relative plan for ONE channel of a post that is NOT yet published (draft, in review or scheduled): "delay_minutes after it goes live" (0 = at the next minute tick, max ${DISTRIBUTION_PLAN_MAX_DELAY_MINUTES} = 7 days). When the post is published the server turns the plan into a normal scheduled distribution at publish time + delay, using the text at that moment: the named version (version_id, or the channel's primary version when you pass neither version_id nor text) read live, else the text you pass, else the saved text/default template. The same checks as schedule_distribution run THEN; if they fail the distribution becomes failed with the reason (visible in list_post_distributions) and nothing is posted. Unpublishing returns not-yet-sent plans to waiting; the plan is kept. A post that is already published cannot be planned - use schedule_distribution. dry_run=true only reports the checks. Requires the social-posting permission (social:post), separate from the Telegram channel permission.`,
+  scope: "social:post",
+  limit: "social",
+  inputSchema: {
+    post_id: uuidField("post id"),
+    channel: channelField,
+    delay_minutes: z.number().int().min(0).max(DISTRIBUTION_PLAN_MAX_DELAY_MINUTES).describe(`Minutes after the post is published (0-${DISTRIBUTION_PLAN_MAX_DELAY_MINUTES}).`),
+    version_id: z.string().uuid().optional().describe("Optional: the named version (list_distribution_versions) whose text is posted; its text is read when the post is published."),
+    text: textField,
+    image_choice: imageField,
+    link_mode: linkModeField,
+    dry_run: dryRunField,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  kind: "write",
+  async handler(args, ctx) {
+    const channel = args.channel as ProviderId;
+    const post = await loadPostAnyState(args.post_id);
+    if (!post || post.deletedAt) throw new ToolError("not_found", "No live post with this id.", "Use list_posts to find the post.");
+    if (args.dry_run) {
+      const summary = await checkPlan(args.post_id, channel, draftOf({ text: args.text, image: args.image_choice, link_mode: args.link_mode }));
+      const publishedNow = post.status === "published";
+      return {
+        data: {
+          ok: true,
+          dryRun: true,
+          summary: publishedNow ? "Dry run: refused, the post is already published (use schedule_distribution)." : "Dry run: the plan can be set; nothing was saved or sent.",
+          canSet: !publishedNow && post.status !== "archived",
+          wouldDo: `After the post is published, post to ${channel} ${args.delay_minutes} minute(s) later, publicly, as the owner's account.`,
+          ...(summary ? { text: summary.text, length: summary.length, limit: summary.limit, failingChecks: summary.checks.filter((c) => c.status !== "ok").map((c) => ({ status: c.status, message: c.message })) } : {}),
+          ...untrusted(["text"]),
+        },
+      };
+    }
+    const result = await setPlan(ctx.actor, args.post_id, channel, {
+      delayMinutes: args.delay_minutes,
+      ...(args.version_id ? { versionId: args.version_id } : {}),
+      ...draftOf({ text: args.text, image: args.image_choice, link_mode: args.link_mode }),
+    });
+    if (!result.ok) {
+      throw new ToolError(
+        result.error.kind === "conflict" ? "conflict" : result.error.kind === "not_found" ? "not_found" : result.error.kind === "bad_request" ? "invalid_input" : "unprocessable",
+        result.error.message,
+        undefined,
+        undefined,
+        ["error.message"],
+      );
+    }
+    return { data: { ok: true, summary: "Plan saved. Nothing is sent now: the server posts it automatically after the blog post is published.", distribution: item(result.data), post: postBlock(post), ...untrusted(["post.title", "distribution.text"]) } };
+  },
+});
+
+export const clearDistributionPlanTool = defineTool({
+  name: "clear_distribution_plan",
+  title: "Remove a channel's after-publish plan",
+  description:
+    U + "Remove the relative \"N minutes after publish\" plan of one post + channel. If the plan had already been turned into a scheduled distribution that has not been sent yet, that scheduled distribution is cancelled too; sent or sending ones are never touched. Saved text and versions stay. Requires the social-posting permission (social:post), separate from the Telegram channel permission.",
+  scope: "social:post",
+  limit: "edit",
+  inputSchema: { post_id: uuidField("post id"), channel: channelField, dry_run: dryRunField },
+  annotations: LOCAL_WRITE,
+  kind: "write",
+  async handler(args, ctx) {
+    const channel = args.channel as ProviderId;
+    if (args.dry_run) {
+      const res = unwrap(await listPostDistributions(args.post_id), { notFound: "Use list_posts to find the post." });
+      const row = res.distributions.find((d) => d.provider === channel && d.planDelayMinutes !== null && ["draft", "scheduled", "sending", "failed", "needs_checking"].includes(d.status));
+      return { data: { ok: true, dryRun: true, summary: row ? "Dry run: the plan would be removed." : "Dry run: there is no plan for this channel.", hasPlan: Boolean(row), wouldCancelScheduled: row?.status === "scheduled" && row.planMaterializedAt !== null } };
+    }
+    const res = unwrap(await clearPlan(ctx.actor, args.post_id, channel), { notFound: "Use list_posts to find the post." });
+    return { data: { ok: true, summary: res.cleared ? (res.cancelled ? "Plan removed and the not-yet-sent scheduled distribution cancelled." : "Plan removed.") : "There was no plan; nothing was changed.", alreadyInState: !res.cleared, distribution: res.distribution ? item(res.distribution) : null, ...untrusted(["distribution.text"]) } };
+  },
+});
+
 const versionChannelField = z.enum(["linkedin", "x", "threads", "instagram"]).describe("Channel: linkedin | x | threads | instagram (GitHub has no editable text, so no versions).");
 const versionIdField = uuidField("distribution version id (from list_distribution_versions)");
 const versionNameField = z.string().max(80).optional().describe("Version name, up to 80 characters (default: '<N>-versiya').");
@@ -504,4 +586,4 @@ export const setDistributionPrimaryTool = defineTool({
 });
 
 export const DISTRIBUTION_READ_TOOLS: McpToolDef[] = [listDistributionChannelsTool, previewDistributionTool, listPostDistributionsTool, getDistributionStatusTool, listDistributionVersionsTool] as unknown as McpToolDef[];
-export const DISTRIBUTION_WRITE_TOOLS: McpToolDef[] = [saveDistributionTextTool, sendDistributionTool, scheduleDistributionTool, cancelDistributionTool, retryDistributionTool, removeDistributionTool, createDistributionVersionTool, updateDistributionVersionTool, deleteDistributionVersionTool, setDistributionPrimaryTool] as unknown as McpToolDef[];
+export const DISTRIBUTION_WRITE_TOOLS: McpToolDef[] = [saveDistributionTextTool, sendDistributionTool, scheduleDistributionTool, cancelDistributionTool, retryDistributionTool, removeDistributionTool, createDistributionVersionTool, updateDistributionVersionTool, deleteDistributionVersionTool, setDistributionPrimaryTool, setDistributionPlanTool, clearDistributionPlanTool] as unknown as McpToolDef[];

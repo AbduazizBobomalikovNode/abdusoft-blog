@@ -28,7 +28,7 @@ let runner: typeof import("../distribution/service/runner.js");
 let mock: ReturnType<typeof import("../distribution/service/test-support.js").createPlatformMock>;
 const NOW = new Date("2026-11-26T10:00:00Z");
 
-const WRITE_NAMES = ["save_distribution_text", "send_distribution", "schedule_distribution", "cancel_distribution", "retry_distribution", "remove_distribution_from_platform", "create_distribution_version", "update_distribution_version", "delete_distribution_version", "set_distribution_primary"];
+const WRITE_NAMES = ["save_distribution_text", "send_distribution", "schedule_distribution", "cancel_distribution", "retry_distribution", "remove_distribution_from_platform", "create_distribution_version", "update_distribution_version", "delete_distribution_version", "set_distribution_primary", "set_distribution_plan", "clear_distribution_plan"];
 const READ_NAMES = ["list_distribution_channels", "preview_distribution", "list_post_distributions", "get_distribution_status", "list_distribution_versions"];
 
 const call = (name: string, args: Record<string, unknown> = {}, t = full) => callTool(app, t, name, args);
@@ -332,6 +332,8 @@ describe("separate social-posting permission (social:post)", () => {
     update_distribution_version: { version_id: distId, text: "a" },
     delete_distribution_version: { version_id: distId },
     set_distribution_primary: { version_id: distId },
+    set_distribution_plan: { post_id: postId, channel: "x", delay_minutes: 5 },
+    clear_distribution_plan: { post_id: postId, channel: "x" },
   });
 
   it("a connection approved only for the Telegram channel (channels:send) cannot use ANY social write tool; nothing is created or contacted", async () => {
@@ -385,7 +387,7 @@ describe("separate social-posting permission (social:post)", () => {
     expect(config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY).toBe(5);
     expect(WRITE_LIMITS.social.envName).toBe("MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY");
     expect(WRITE_LIMITS.channel.actions).toEqual(["post.channel_send", "post.channel_replace"]);
-    expect(WRITE_LIMITS.social.actions).toEqual(["distribution.send", "distribution.schedule", "distribution.retry"]);
+    expect(WRITE_LIMITS.social.actions).toEqual(["distribution.send", "distribution.schedule", "distribution.retry", "distribution.plan_set"]);
     const beforeCh = config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY;
     const beforeSo = config.MCP_WRITE_LIMIT_SOCIAL_SENDS_PER_DAY;
     config.MCP_WRITE_LIMIT_CHANNEL_SENDS_PER_DAY = 1;
@@ -491,5 +493,53 @@ describe("named distribution versions (social:post)", () => {
     const sent = await ok("send_distribution", { post_id: post.id, channel: "x", expected_updated_at: post.updatedAt.toISOString(), text: "Versiya matni", version_id: v.version.id, idempotency_key: "ver-key-1" });
     expect(sent.distribution.versionId).toBe(v.version.id);
     expect(sent.distribution.text).toBe("Versiya matni");
+  });
+});
+
+describe("relative plan tools (set_distribution_plan / clear_distribution_plan, social:post)", () => {
+  const draft = () => fx.insertPost({ status: "draft", publishedAt: null });
+
+  it("set -> list shows the plan -> publish materialises it -> clear; reads need only blog:read; Telegram-only is refused", async () => {
+    await fx.insertAccount("x", NOW);
+    const post = await draft();
+    const v = await ok("create_distribution_version", { post_id: post.id, channel: "x", text: "Reja versiyasi" });
+    const set = await ok("set_distribution_plan", { post_id: post.id, channel: "x", delay_minutes: 15, version_id: v.version.id });
+    expect(set.distribution).toMatchObject({ status: "draft", planDelayMinutes: 15, planMaterializedAt: null, versionId: v.version.id, createdVia: "mcp" });
+    expect(set.summary).toMatch(/Nothing is sent now/);
+    const listed = await ok("list_post_distributions", { post_id: post.id });
+    expect(listed.distributions[0]).toMatchObject({ provider: "x", planDelayMinutes: 15 });
+    expect((await call("list_post_distributions", { post_id: post.id }, readOnly)).isError).toBe(false);
+    expect((await call("get_distribution_status", { distribution_id: set.distribution.id }, readOnly)).json.distribution.planDelayMinutes).toBe(15);
+
+    const life = await import("../posts/lifecycle.js");
+    expect((await life.publishPost(fx.ADMIN_ACTOR, post.id)).ok).toBe(true);
+    const after = await ok("get_distribution_status", { distribution_id: set.distribution.id });
+    expect(after.distribution).toMatchObject({ status: "scheduled", planDelayMinutes: 15 });
+    expect(new Date(after.distribution.scheduledAt).getTime()).toBe(NOW.getTime() + 15 * 60_000);
+    expect(mock.calls).toHaveLength(0);
+
+    const cleared = await ok("clear_distribution_plan", { post_id: post.id, channel: "x" });
+    expect(cleared.distribution.status).toBe("cancelled");
+    expect((await ok("clear_distribution_plan", { post_id: post.id, channel: "x" })).alreadyInState).toBe(true);
+  });
+
+  it("dry_run saves nothing; published posts, bad delays and a missing post are refused; write scope required", async () => {
+    await fx.insertAccount("x", NOW);
+    const post = await draft();
+    const dry = await ok("set_distribution_plan", { post_id: post.id, channel: "x", delay_minutes: 0, text: "Sinov", dry_run: true });
+    expect(dry).toMatchObject({ dryRun: true, canSet: true });
+    expect(dry.failingChecks).toEqual([]);
+    expect(await db.select().from(s.distributions)).toHaveLength(0);
+    const dryClear = await ok("clear_distribution_plan", { post_id: post.id, channel: "x", dry_run: true });
+    expect(dryClear.hasPlan).toBe(false);
+
+    await rejected("set_distribution_plan", { post_id: post.id, channel: "x", delay_minutes: 10081 });
+    await rejected("set_distribution_plan", { post_id: post.id, channel: "x", delay_minutes: 1.5 });
+    const published = await fx.insertPost();
+    await fails("set_distribution_plan", { post_id: published.id, channel: "x", delay_minutes: 5 }, "conflict");
+    expect((await ok("set_distribution_plan", { post_id: published.id, channel: "x", delay_minutes: 5, dry_run: true })).canSet).toBe(false);
+    await fails("set_distribution_plan", { post_id: "00000000-0000-4000-8000-000000000000", channel: "x", delay_minutes: 5 }, "not_found");
+    await fails("set_distribution_plan", { post_id: post.id, channel: "x", delay_minutes: 5 }, "insufficient_scope", telegramOnly);
+    expect(await db.select().from(s.distributions)).toHaveLength(0);
   });
 });

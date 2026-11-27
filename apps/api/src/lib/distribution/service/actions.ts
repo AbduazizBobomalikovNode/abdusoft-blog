@@ -31,7 +31,7 @@ function pgCode(error: unknown): string | undefined {
   return e?.code ?? e?.cause?.code;
 }
 
-function validateDraft(provider: ProviderId, input: DraftInput): string | null {
+export function validateDraft(provider: ProviderId, input: DraftInput): string | null {
   if (typeof input.text === "string" && input.text.length > MAX_TEXT_CHARS) return `Matn juda uzun (${MAX_TEXT_CHARS} belgidan oshmasin)`;
   if (typeof input.text === "string" && provider === "github") return "GitHub README bloki avtomatik yig'iladi — matn tahrirlanmaydi";
   if (input.imageChoice !== undefined && !DISTRIBUTION_IMAGE_CHOICES.includes(input.imageChoice)) return "Noto'g'ri rasm tanlovi";
@@ -39,7 +39,7 @@ function validateDraft(provider: ProviderId, input: DraftInput): string | null {
   return null;
 }
 
-function draftFields(input: DraftInput): Partial<typeof distributions.$inferInsert> {
+export function draftFields(input: DraftInput): Partial<typeof distributions.$inferInsert> {
   const f: Partial<typeof distributions.$inferInsert> = {};
   if (input.text !== undefined) f.text = input.text === null || input.text.trim() === "" ? null : input.text;
   if (input.imageChoice !== undefined) f.imageChoice = input.imageChoice;
@@ -48,7 +48,7 @@ function draftFields(input: DraftInput): Partial<typeof distributions.$inferInse
 }
 
 /** Faol qatorni topadi yoki yaratadi (unique indeks bir vaqtdagi ikki yaratishni to'xtatadi). */
-async function ensureActiveRow(actor: Actor, postId: string, provider: ProviderId): Promise<DistributionRow> {
+export async function ensureActiveRow(actor: Actor, postId: string, provider: ProviderId): Promise<DistributionRow> {
   const existing = await getActiveDistribution(postId, provider);
   if (existing) return existing;
   const account = await getActiveAccount(provider);
@@ -66,13 +66,13 @@ async function ensureActiveRow(actor: Actor, postId: string, provider: ProviderI
   return again;
 }
 
-async function guardPost(postId: string) {
+export async function guardPost(postId: string) {
   const post = await loadPostForDistribution(postId);
   if (!post || post.deletedAt) return null;
   return post;
 }
 
-function auditEntry(action: string, row: DistributionRow, summary: string, meta: Record<string, unknown> = {}) {
+export function auditEntry(action: string, row: DistributionRow, summary: string, meta: Record<string, unknown> = {}) {
   return { action, entityType: "distribution", entityId: row.id, summary: `${PROVIDER_LABEL[row.provider as ProviderId]}: ${summary}`, meta: { postId: row.postId, provider: row.provider, ...meta } };
 }
 
@@ -160,6 +160,9 @@ async function queue(
     .set({
       ...draftFields(input),
       versionId,
+      // Qo'lda yuborish/rejalashtirish "saytga chiqqach" rejasini almashtiradi (reja bilan birga ikki marta yuborilmaydi).
+      planDelayMinutes: null,
+      planMaterializedAt: null,
       status: "scheduled",
       // Ko'rsatilgan matn va akkaunt "muzlatiladi": yuborish paytida postning keyingi o'zgarishi yoki boshqa akkaunt ta'sir qilmaydi.
       renderedText: provider === "github" ? null : plan.text,
@@ -181,7 +184,7 @@ async function queue(
   return ok(toItemDto(updated));
 }
 
-function toOverrides(input: DraftInput): PlanOverrides {
+export function toOverrides(input: DraftInput): PlanOverrides {
   const o: PlanOverrides = {};
   if (input.text !== undefined) o.text = input.text === null || input.text.trim() === "" ? null : input.text;
   if (input.imageChoice !== undefined) o.imageChoice = input.imageChoice;

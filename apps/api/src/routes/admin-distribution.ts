@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { DISTRIBUTION_IMAGE_CHOICES, DISTRIBUTION_PROVIDERS, type CreateDistributionVersionBody, type UpdateDistributionVersionBody } from "@blog/shared";
+import { DISTRIBUTION_IMAGE_CHOICES, DISTRIBUTION_PLAN_MAX_DELAY_MINUTES, DISTRIBUTION_PROVIDERS, type CreateDistributionVersionBody, type UpdateDistributionVersionBody } from "@blog/shared";
 import { config } from "../config.js";
 import { auth } from "../lib/auth.js";
 import { requireAdmin } from "../lib/require-admin.js";
@@ -10,6 +10,7 @@ import { completeConnect, connectWithPastedToken, disconnectAccount, startConnec
 import { cancel, getDistributionDto, listPostDistributions, removeFromPlatform, resolveNeedsChecking, retry, saveDraft, schedule, sendNow, type DraftInput, type QueueInput } from "../lib/distribution/service/actions.js";
 import { listChannels } from "../lib/distribution/service/channels.js";
 import { CredentialsValidationError, saveCredentials } from "../lib/distribution/service/credentials.js";
+import { clearPlan, setPlan, type PlanInput } from "../lib/distribution/service/plans.js";
 import { clearPrimary, createVersion, deleteVersion, listVersions, setPrimary, updateVersion } from "../lib/distribution/service/versions.js";
 import { isProviderId } from "../lib/distribution/service/env.js";
 import { buildPreview } from "../lib/distribution/service/prepare.js";
@@ -28,6 +29,7 @@ const DraftBody = z
   })
   .strict();
 const SendBody = DraftBody.extend({ again: z.boolean().optional(), versionId: z.string().regex(UUID_RE).optional() }).strict();
+const PlanBody = DraftBody.extend({ delayMinutes: z.number().int().min(0).max(DISTRIBUTION_PLAN_MAX_DELAY_MINUTES), versionId: z.string().regex(UUID_RE).optional() }).strict();
 const VersionName = z.string().max(80);
 const CreateVersionBody = z
   .object({
@@ -183,6 +185,21 @@ export const adminDistributionRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi (scheduledAt majburiy)" }, 400);
     const { scheduledAt, ...rest } = parsed.data;
     return respond(c, await schedule(actorOf(c), postId, provider, new Date(scheduledAt), rest as QueueInput));
+  })
+  // --- "Saytga chiqqach N daqiqadan keyin" rejasi (post chop etilishidan oldin ham qo'yiladi) ---
+  .put("/posts/:postId/:provider/plan", async (c) => {
+    const postId = c.req.param("postId");
+    const provider = providerParam(c);
+    if (!provider || !UUID_RE.test(postId)) return c.json({ error: "Topilmadi" }, 404);
+    const parsed = PlanBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi (delayMinutes 0–10080 butun son)" }, 400);
+    return respond(c, await setPlan(actorOf(c), postId, provider, parsed.data as PlanInput));
+  })
+  .delete("/posts/:postId/:provider/plan", async (c) => {
+    const postId = c.req.param("postId");
+    const provider = providerParam(c);
+    if (!provider || !UUID_RE.test(postId)) return c.json({ error: "Topilmadi" }, 404);
+    return respond(c, await clearPlan(actorOf(c), postId, provider));
   })
   // --- Nomli matn versiyalari (kanal bo'yicha; GitHub'da yo'q) ---
   .get("/posts/:postId/:provider/versions", async (c) => {

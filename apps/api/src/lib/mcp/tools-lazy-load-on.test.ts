@@ -12,7 +12,7 @@ describe("distribution flag on: the tools are loaded lazily by the index and reg
     const tools = getTools();
     const dist = tools.filter((t) => /distribution/.test(t.name));
     expect(dist.map((t) => t.name).sort()).toEqual(
-      ["cancel_distribution", "create_distribution_version", "delete_distribution_version", "get_distribution_status", "list_distribution_channels", "list_distribution_versions", "set_distribution_primary", "update_distribution_version", "list_post_distributions", "preview_distribution", "remove_distribution_from_platform", "retry_distribution", "save_distribution_text", "schedule_distribution", "send_distribution"].sort(),
+      ["cancel_distribution", "create_distribution_version", "delete_distribution_version", "get_distribution_status", "list_distribution_channels", "list_distribution_versions", "set_distribution_primary", "update_distribution_version", "list_post_distributions", "preview_distribution", "remove_distribution_from_platform", "retry_distribution", "save_distribution_text", "schedule_distribution", "send_distribution", "set_distribution_plan", "clear_distribution_plan"].sort(),
     );
     for (const t of dist.filter((x) => x.kind === "write")) expect(t.scope, t.name).toBe("social:post");
     for (const t of dist.filter((x) => x.kind === "read")) expect(t.scope, t.name).toBe("blog:read");

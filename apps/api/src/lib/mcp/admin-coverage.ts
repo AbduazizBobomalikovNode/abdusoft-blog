@@ -78,6 +78,8 @@ export const ADMIN_ROUTE_TOOLS: Readonly<Record<string, readonly string[]>> = {
   "PUT /admin/distribution/posts/:postId/:provider/draft": ["save_distribution_text"],
   "POST /admin/distribution/posts/:postId/:provider/send": ["send_distribution"],
   "POST /admin/distribution/posts/:postId/:provider/schedule": ["schedule_distribution"],
+  "PUT /admin/distribution/posts/:postId/:provider/plan": ["set_distribution_plan"],
+  "DELETE /admin/distribution/posts/:postId/:provider/plan": ["clear_distribution_plan"],
   "GET /admin/distribution/posts/:postId/:provider/versions": ["list_distribution_versions"],
   "POST /admin/distribution/posts/:postId/:provider/versions": ["create_distribution_version"],
   "DELETE /admin/distribution/posts/:postId/:provider/primary": ["set_distribution_primary"],
