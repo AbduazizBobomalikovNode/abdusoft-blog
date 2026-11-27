@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelPlan, ResolvedChannelChoice } from "@blog/shared";
-import { previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
+import { createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
 
 const choice = (over: Partial<ResolvedChannelChoice> = {}) =>
   ({ choice: { kind: "auto", mode: "media", variant: "m" }, label: "Rasmli · O'rtacha", mode: "media", visibleLength: 812, limit: 1024, passes: true, ...over }) as ResolvedChannelChoice;
@@ -53,5 +53,23 @@ describe("telegram panel helpers", () => {
     expect(telegramPlanLine(null)).toContain("rejasi yo'q");
     expect(telegramPlanLine({ delayMinutes: 15 } as ChannelPlan)).toBe("Telegram · saytga chiqqach 15 daq");
     expect(telegramPlanLine({ delayMinutes: 0 } as ChannelPlan)).toBe("Telegram · saytga chop etilishi bilan");
+  });
+});
+
+describe("send gate (flush before send)", () => {
+  it("sends only when nothing was saved in this click", () => {
+    expect(sendGate("clean")).toBe("send");
+    expect(sendGate("saved")).toBe("stop-saved");
+    expect(sendGate("failed")).toBe("stop-failed");
+  });
+});
+
+describe("in-flight guard", () => {
+  it("rejects a second synchronous entry until left", () => {
+    const g = createInFlightGuard();
+    expect(g.tryEnter()).toBe(true);
+    expect(g.tryEnter()).toBe(false);
+    g.leave();
+    expect(g.tryEnter()).toBe(true);
   });
 });

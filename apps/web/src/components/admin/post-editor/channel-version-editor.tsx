@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { cn } from "cn";
 import { MODE_OPTIONS } from "./channel-preview";
+import type { FlushOutcome } from "@/lib/distribution-telegram";
 
 const AUTOSAVE_DELAY_MS = 800;
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
@@ -48,7 +49,7 @@ interface Props {
   /** Har bir muvaffaqiyatli saqlashdan keyin (yangi versiya bilan). */
   onSaved: (version: ChannelVersion) => void;
   /** Ota komponent qadam almashtirishdan oldin kutilmagan o'zgarishlarni saqlatishi uchun. `true` — hammasi saqlangan. */
-  registerFlush: (flush: (() => Promise<boolean>) | null) => void;
+  registerFlush: (flush: (() => Promise<FlushOutcome>) | null) => void;
 }
 
 /** 2-qadam: maxsus versiyani tahrirlash (cheklangan Tiptap + rasm tanlagich + avtosaqlash). */
@@ -131,10 +132,12 @@ export function ChannelVersionEditor({ postId, version, postImages, onSaved, reg
 
   useEffect(() => {
     registerFlush(async () => {
+      const hadChanges = dirtyRef.current || savingRef.current !== null;
       await savingRef.current;
       await saveRef.current();
       // Saqlash muvaffaqiyatsiz bo'lsa (`dirty` qolgan) — chaqiruvchi qadam almashtirmasligi kerak.
-      return !dirtyRef.current;
+      if (dirtyRef.current) return "failed";
+      return hadChanges ? "saved" : "clean";
     });
     return () => {
       registerFlush(null);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { DISTRIBUTION_PLAN_MAX_DELAY_MINUTES, clampDelay, delayLead, delayPickerModel } from "@/lib/distribution-plan";
+import { DISTRIBUTION_PLAN_MAX_DELAY_MINUTES, clampDelay, delayLead, isPresetDelay, delayPickerModel } from "@/lib/distribution-plan";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,7 +24,7 @@ export function DelayPlanPicker({
   hint?: ReactNode;
   testId?: string;
 }) {
-  const [customMode, setCustomMode] = useState(false);
+  const [customMode, setCustomMode] = useState(() => !isPresetDelay(value));
   const model = delayPickerModel(value, customMode);
   const lead = delayLead(value);
   return (

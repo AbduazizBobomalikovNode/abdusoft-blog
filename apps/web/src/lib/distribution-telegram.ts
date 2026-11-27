@@ -51,3 +51,31 @@ export function telegramDefaultSelection(canUseMedia: boolean | null): ChannelSe
 export function telegramPlanLine(plan: ChannelPlan | null): string {
   return plan ? `Telegram · saytga ${planPhrase(plan.delayMinutes)}` : "Telegram rejasi yo'q — post chop etilgach kanalga hech narsa yuborilmaydi.";
 }
+
+/** Tahrirlagichni saqlatish natijasi: hech narsa o'zgarmagan / saqlandi / saqlanmadi. */
+export type FlushOutcome = "clean" | "saved" | "failed";
+
+export const FLUSH_SAVED_HINT = "O'zgarishlar saqlandi — tekshiruvni ko'rib, qayta bosing";
+
+/**
+ * Yuborishdan oldingi saqlash qarori: faqat "clean"da yuboriladi. "saved"da matn o'zgargan — ko'rsatilgan tekshiruv/ogohlantirish
+ * ESKI matn uchun edi, shuning uchun shu bosishda yuborilmaydi (ko'rinish qayta yuklanib, tekshiruv qayta ishlaydi).
+ */
+export function sendGate(outcome: FlushOutcome): "send" | "stop-saved" | "stop-failed" {
+  return outcome === "clean" ? "send" : outcome === "saved" ? "stop-saved" : "stop-failed";
+}
+
+/** Sinxron "jarayonda" qo'riqchisi: ikkinchi bosish (qayta render kutmasdan) rad etiladi. */
+export function createInFlightGuard() {
+  let busy = false;
+  return {
+    tryEnter(): boolean {
+      if (busy) return false;
+      busy = true;
+      return true;
+    },
+    leave(): void {
+      busy = false;
+    },
+  };
+}

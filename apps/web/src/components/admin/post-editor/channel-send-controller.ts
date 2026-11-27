@@ -13,6 +13,7 @@ import type {
   ResolvedChannelChoice,
 } from "@blog/shared";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
+import { FLUSH_SAVED_HINT, createInFlightGuard, sendGate, type FlushOutcome } from "@/lib/distribution-telegram";
 import { VARIANTS_BY_MODE } from "./channel-preview";
 
 /**
@@ -87,18 +88,22 @@ export function useChannelSend({ postId, active, mode: dialogMode = "send", read
   const [channelHandle, setChannelHandle] = useState<string | null>(null);
   const [confirmReplaceOpen, setConfirmReplaceOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ChannelVersion | null>(null);
-  const flushRef = useRef<(() => Promise<boolean>) | null>(null);
-  const registerFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+  const flushRef = useRef<(() => Promise<FlushOutcome>) | null>(null);
+  const [sendGuard] = useState(createInFlightGuard);
+  const [notice, setNotice] = useState<string | null>(null);
+  const registerFlush = useCallback((flush: (() => Promise<FlushOutcome>) | null) => {
     flushRef.current = flush;
   }, []);
-  /** Tahrirlagichdagi saqlanmagan o'zgarishlarni saqlatadi (`true` — hammasi saqlangan yoki tahrirlagich yo'q). */
-  const flushPending = useCallback(async (): Promise<boolean> => {
-    if (!flushRef.current) return true;
-    const saved = await flushRef.current();
+  /** Tahrirlagichdagi saqlanmagan o'zgarishlarni saqlatadi va natijani aytadi ("clean" — tahrirlagich yo'q yoki o'zgarish yo'q). */
+  const flushOutcome = useCallback(async (): Promise<FlushOutcome> => {
+    if (!flushRef.current) return "clean";
+    const outcome = await flushRef.current();
     // Saqlanmagan o'zgarishlar bilan oldinga o'tish eskirgan versiyani tekshirib yuborishga olib keladi.
-    if (!saved) toast.error("O'zgarishlar saqlanmadi — qayta urinib ko'ring");
-    return saved;
+    if (outcome === "failed") toast.error("O'zgarishlar saqlanmadi — qayta urinib ko'ring");
+    return outcome;
   }, []);
+  /** Eski mantiq: `true` — hammasi saqlangan (qadam almashtirish mumkin). */
+  const flushPending = useCallback(async (): Promise<boolean> => (await flushOutcome()) !== "failed", [flushOutcome]);
   // Eskirgan javoblar yangisini bosib ketmasligi uchun (tez-tez almashtirishda) — oxirgi so'rov g'olib.
   const previewSeq = useRef(0);
   const preflightSeq = useRef(0);
@@ -346,8 +351,18 @@ export function useChannelSend({ postId, active, mode: dialogMode = "send", read
   }
 
   async function handleSend(replaceExisting: boolean) {
+    // Sinxron qo'riqchi + `sending`: saqlash kutilayotgan paytdagi ikkinchi bosish ham ikkinchi yuborishni boshlamaydi.
+    if (!sendGuard.tryEnter()) return;
     setSending(true);
+    setNotice(null);
     try {
+      const gate = sendGate(await flushOutcome());
+      if (gate !== "send") {
+        // Matn endi saqlandi: ko'rinish qayta yuklanadi, tekshiruv/ogohlantirish yangi matn uchun qayta hisoblanadi — bu bosishda yuborilmaydi.
+        if (gate === "stop-saved") setNotice(FLUSH_SAVED_HINT);
+        setConfirmReplaceOpen(false);
+        return;
+      }
       await adminApi.channelSend(postId, toSelection(choice), replaceExisting);
       toast.success(replaceExisting ? "Qayta yuborildi" : "Kanalga yuborildi");
       setConfirmReplaceOpen(false);
@@ -357,6 +372,7 @@ export function useChannelSend({ postId, active, mode: dialogMode = "send", read
       setConfirmReplaceOpen(false);
       toast.error(errorMessage(error, "Yuborib bo'lmadi"));
     } finally {
+      sendGuard.leave();
       setSending(false);
     }
   }
@@ -391,7 +407,7 @@ export function useChannelSend({ postId, active, mode: dialogMode = "send", read
     postId, dialogMode, readOnly, sending_,
     marking, step, setStep, choice, canUseMedia, versions, setVersions, preview, loading, preflight, setPreflight, checking, ack, setAck,
     sending, resyncing, channelHandle, confirmReplaceOpen, setConfirmReplaceOpen, deleteTarget, setDeleteTarget,
-    registerFlush, flushPending, choiceRef,
+    registerFlush, flushPending, flushOutcome, sendGuard, notice, setNotice, choiceRef,
     selectedVersion, loadVersions, loadPreview, runPreflight, selectAuto, handleModeChange, selectVersion, goToStep,
     handleFork, handleDuplicate, handleDelete, applyMark, clearMark, handleSend, handleResync,
     hasErrors, needsAck, sendBlocked, autoChoice, markedChoice, currentIsMarked, sortedVersions,

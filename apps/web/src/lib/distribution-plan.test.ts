@@ -106,3 +106,15 @@ describe("DelayPlanPicker model", () => {
     expect(delayLead(15)).toEqual({ amount: "15 daq", after: " o'tib", tail: "" });
   });
 });
+
+describe("DelayPlanPicker custom mode is sticky", () => {
+  it("starts in custom mode for a saved non-preset value and stays there while typing preset numbers", () => {
+    const initialCustom = !isPresetDelay(30);
+    expect(initialCustom).toBe(true);
+    // 30 -> user types 15 / 60: customMode stays true, so the input does not disappear
+    for (const typed of [1, 15, 60, 1440]) expect(delayPickerModel(typed, initialCustom).customActive).toBe(true);
+    // a preset value starts non-custom; clicking a preset button resets customMode to false
+    expect(!isPresetDelay(15)).toBe(false);
+    expect(delayPickerModel(15, false).customActive).toBe(false);
+  });
+});

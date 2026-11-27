@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { ExternalLink } from "lucide-react";
 import type { AdminPostStatus, ChannelPlan, ResolvedChannelChoice } from "@blog/shared";
 import { Button } from "@/components/ui/button";
-import { telegramPanelMode, telegramPlanEditable, telegramPlanStorageHint, telegramTabSummary } from "@/lib/distribution-telegram";
+import { FLUSH_SAVED_HINT, sendGate, telegramPanelMode, telegramPlanEditable, telegramPlanStorageHint, telegramTabSummary } from "@/lib/distribution-telegram";
 import { ChannelPlanFields } from "./channel-plan-fields";
 import { TelegramPreviewCard } from "./channel-preview";
 import { toSelection, useChannelSend } from "./channel-send-controller";
@@ -31,7 +31,7 @@ export interface DistributionTelegramInfo {
 export function DistributionTelegramPanel({ postId, postStatus, info }: { postId: string; postStatus: AdminPostStatus; info: DistributionTelegramInfo }) {
   const mode = telegramPanelMode(postStatus);
   const c = useChannelSend({ postId, active: true, mode, onChoiceChange: info.onChoiceChange });
-  const { preview, loading, runPreflight, choiceRef, flushPending, handleSend, setConfirmReplaceOpen, sendBlocked, sending, resyncing, handleResync } = c;
+  const { preview, loading, runPreflight, choiceRef, flushOutcome, sendGuard, notice, setNotice, handleSend, setConfirmReplaceOpen, sendBlocked, sending, resyncing, handleResync } = c;
 
   // Belgilanmagan bo'lsa ham `useChannelSend` standart ko'rinishni yuklaydi (rasm bo'lsa 🖼/m, aks holda 📝/m) — oldindan ko'rish bo'sh qolmaydi.
   // Tekshiruv har yangi ko'rinishdan keyin (tanlov o'zgargani yoki tahrir saqlangani) avtomatik qayta ishga tushadi.
@@ -43,13 +43,19 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
   const sendMode = mode === "send";
   const planEditable = telegramPlanEditable(postStatus) && Boolean(info.onPlanChange);
 
+  // Saqlash (flush) + yuborish `handleSend` ichida, sinxron qo'riqchi bilan: ikki marta bosish ikki yuborish bermaydi.
   async function sendNow() {
-    // Tahrirlagichdagi saqlanmagan o'zgarishlar yuborishdan OLDIN saqlanadi (3 qadamli oynadagi 2→3 o'tishdagidek).
-    if (!(await flushPending())) return;
     await handleSend(false);
   }
   async function askReplace() {
-    if (await flushPending()) setConfirmReplaceOpen(true);
+    if (sending || !sendGuard.tryEnter()) return;
+    try {
+      const gate = sendGate(await flushOutcome());
+      if (gate === "send") setConfirmReplaceOpen(true);
+      else if (gate === "stop-saved") setNotice(FLUSH_SAVED_HINT);
+    } finally {
+      sendGuard.leave();
+    }
   }
 
   return (
@@ -75,6 +81,7 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
 
         <ChannelCheckStep c={c} showSentNote={false} />
 
+        {sendMode && notice ? <p className="text-xs text-amber-700 dark:text-amber-300" data-testid="dist-telegram-notice">{notice}</p> : null}
         {sendMode ? (
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3" data-testid="dist-telegram-send">
             {preview?.alreadySent && !preview.alreadySent.versionId ? (
@@ -83,7 +90,7 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
               </Button>
             ) : null}
             {preview?.alreadySent ? (
-              <Button type="button" size="sm" variant="destructive" disabled={sendBlocked} onClick={() => void askReplace()}>Qayta yuborish</Button>
+              <Button type="button" size="sm" variant="destructive" disabled={sendBlocked || loading} onClick={() => void askReplace()}>Qayta yuborish</Button>
             ) : (
               <Button type="button" size="sm" disabled={sendBlocked || loading} onClick={() => void sendNow()}>{sending ? "Yuborilmoqda…" : "Kanalga yuborish"}</Button>
             )}
