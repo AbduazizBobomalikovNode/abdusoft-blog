@@ -1,4 +1,4 @@
-import type { PostDetail } from "@blog/shared";
+import type { PostDetail, PostMainVideo } from "@blog/shared";
 
 /**
  * Next.js `app/(site)/[slug]/opengraph-image.tsx` marshrutiga qo'shadigan hash qo'shimchasi.
@@ -78,6 +78,38 @@ export function buildBlogPostingJsonLd(post: JsonLdPost, site: JsonLdSite): Reco
     data.keywords = post.tags.map((tag) => tag.name).join(", ");
   }
 
+  return data;
+}
+
+/** Soniyalar -> ISO 8601 davomiylik (`PT58S`, `PT1M5S`, `PT1H2M3S`); butun songa yaxlitlanadi, kamida 1 s. */
+export function isoDuration(seconds: number): string {
+  const total = Math.max(1, Math.round(Number.isFinite(seconds) ? seconds : 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  return `PT${h ? `${h}H` : ""}${m ? `${m}M` : ""}${sec || (!h && !m) ? `${sec}S` : ""}`;
+}
+
+/** Asosiy video bor post uchun `VideoObject` (schema.org). `thumbnailUrl` — poster yoki muqova (absolyut manzil). */
+export function buildVideoObjectJsonLd(
+  post: JsonLdPost,
+  video: Pick<PostMainVideo, "url" | "width" | "height" | "seconds">,
+  thumbnailUrl: string,
+  site: JsonLdSite,
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    name: post.title,
+    description: post.excerpt ?? `${post.title} — ${site.name}`,
+    thumbnailUrl,
+    duration: isoDuration(video.seconds),
+    contentUrl: video.url,
+    width: video.width,
+    height: video.height,
+    url: `${site.url}/${post.slug}`,
+  };
+  if (post.publishedAt) data.uploadDate = post.publishedAt;
   return data;
 }
 

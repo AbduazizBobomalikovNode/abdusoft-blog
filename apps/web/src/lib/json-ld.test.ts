@@ -4,6 +4,8 @@ import {
   OG_IMAGE_ROUTE_SUFFIX,
   buildBlogPostingJsonLd,
   buildHomeJsonLd,
+  buildVideoObjectJsonLd,
+  isoDuration,
   ogImageUrl,
   serializeJsonLd,
   type JsonLdPost,
@@ -88,5 +90,53 @@ describe("serializeJsonLd", () => {
   it("stays valid JSON that round-trips to the original data", () => {
     const evil = buildBlogPostingJsonLd({ ...post, title: `</script> & "quoted"` }, site);
     expect(JSON.parse(serializeJsonLd(evil))).toEqual(evil);
+  });
+});
+
+describe("buildVideoObjectJsonLd", () => {
+  const video = { url: "https://cdn.example.test/v.mp4", width: 1920, height: 1080, seconds: 57.6 };
+
+  it("fills the VideoObject fields from the post and the video", () => {
+    expect(buildVideoObjectJsonLd(post, video, "https://cdn.example.test/cover.jpg", site)).toEqual({
+      "@context": "https://schema.org",
+      "@type": "VideoObject",
+      name: "Salom, dunyo",
+      description: "Qisqa tavsif",
+      thumbnailUrl: "https://cdn.example.test/cover.jpg",
+      duration: "PT58S",
+      contentUrl: "https://cdn.example.test/v.mp4",
+      width: 1920,
+      height: 1080,
+      url: "https://blog.example.test/salom-dunyo",
+      uploadDate: "2026-05-01T10:00:00.000Z",
+    });
+  });
+
+  it("falls back to title + site name and omits uploadDate when the post has none", () => {
+    const data = buildVideoObjectJsonLd({ ...post, excerpt: null, publishedAt: null }, video, "https://x.test/t.jpg", site);
+    expect(data.description).toBe("Salom, dunyo — abdusoft");
+    expect(data).not.toHaveProperty("uploadDate");
+  });
+
+  it("is escaped by serializeJsonLd so a hostile title cannot close the script tag", () => {
+    const out = serializeJsonLd(buildVideoObjectJsonLd({ ...post, title: "</script><script>alert(1)</script>" }, video, "https://x.test/t.jpg", site));
+    expect(out).not.toContain("</script>");
+    expect(JSON.parse(out).name).toBe("</script><script>alert(1)</script>");
+  });
+});
+
+describe("isoDuration", () => {
+  it("formats seconds as ISO 8601", () => {
+    expect(isoDuration(58)).toBe("PT58S");
+    expect(isoDuration(57.6)).toBe("PT58S");
+    expect(isoDuration(60)).toBe("PT1M");
+    expect(isoDuration(65)).toBe("PT1M5S");
+    expect(isoDuration(3723)).toBe("PT1H2M3S");
+    expect(isoDuration(3600)).toBe("PT1H");
+  });
+  it("never returns an empty or invalid duration", () => {
+    expect(isoDuration(0)).toBe("PT1S");
+    expect(isoDuration(Number.NaN)).toBe("PT1S");
+    expect(isoDuration(-5)).toBe("PT1S");
   });
 });
