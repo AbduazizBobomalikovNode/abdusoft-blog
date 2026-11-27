@@ -240,6 +240,8 @@ Aniq URL Sozlamalar → Tarqatish yorlig'ida nusxalash tugmasi bilan ko'rinadi. 
 
 **Telegram: aniq vaqt (2-bosqich).** Telegram rejasi endi aniq vaqt ham bo'lishi mumkin: `posts.channel_plan`ga ixtiyoriy `sendAt` (ISO UTC) qo'shiladi, `delayMinutes` bu holda `0` (migratsiya yo'q; ikkalasi bir vaqtda mumkin emas). Yuborishni kechikishli reja bilan BIR XIL ishchi (`runDueChannelSends`) bajaradi — yangi supurgi yo'q; Telegram tekshiruvi reja qo'yilganda ham, yuborish paytida ham ishlaydi. Chop etilgan postga `PUT /admin/posts/:id/channel/schedule` (vaqt kelajakda, ko'pi bilan 365 kun; `channel_send_at = sendAt`), rejalashtirilgan postga reja `POST /schedule`/`PATCH` bilan (vaqt `>=` chop etilish vaqti; chop etilganda saqlanadi), qoralamaga — faqat «Rejalashtirish»da tekshiriladi. Qo'lda chop etish kelajakdagi aniq vaqtli rejani saqlaydi, chop etishdan chiqarish tozalaydi. Allaqachon yuborilgan yoki hozir yuborilayotgan postga reja qo'yilmaydi (409). `DELETE /channel/schedule` — bekor qilish; `GET /channel/status` — faqat o'qish holati. Claude: `set_channel_plan` (`send_at` yoki `delay_minutes`), `cancel_channel_plan`. Batafsil jadval — pastdagi inglizcha bo'limda.
 
+**Ma'lum cheklovlar (Telegram aniq vaqt).** (1) Reja bor, lekin `channel_send_at` bo'sh (ishchi claim qilgan, jarayon yuborishdan oldin to'xtagan) post keyingi ishga tushirishdagi tiklashgacha (`recoverInterruptedChannelSends`) kutadi. (2) Rejalashtirilgan postning chop etish vaqti keyin o'zgartirilsa, saqlangan `sendAt` tekshirilmaydi: yangi chop etish vaqtidan oldin qolsa, post chiqishi bilan darhol yuboriladi.
+
 
 **X zanjiri (thread) — ixtiyoriy, standart bitta tvit.** X kanalida "Zanjir (thread)" yoqilsa (`distributions.x_thread`), matn ketma-ket javob tvitlariga bo'linadi. Sof bo'lgich `splitXThread` (`packages/shared/src/x-thread.ts`) web ko'rinishi va API'da AYNAN bir xil:
 - **Ajratgich:** faqat `---` dan iborat satr (atrofida bo'shliq mumkin) — shu yerda yangi tvit boshlanadi. Satr ichidagi `---` yoki `----` ajratgich EMAS. Zanjir o'chiq bo'lsa `---` oddiy matn (ogohlantirish chiqadi).
@@ -399,6 +401,8 @@ Everything below is behind `DISTRIBUTION_ENABLED=true` (default off). Off: no ne
 | `GET /admin/posts/:id/channel/status` | Read-only `{ state: none \| planned \| sending \| sent, plan: { kind: delay \| at }, sendAt, sentAt, messageIds, attempts }` from `posts` + `telegram_refs`; not gated by `DISTRIBUTION_ENABLED` (the dialog that shows it only exists with the flag on). No last-error is stored for Telegram, so none is shown |
 
 Claude: `set_channel_plan` takes `send_at` OR `delay_minutes` (exactly one); `send_at` works on scheduled and published posts, `cancel_channel_plan` on both. Both stay `channels:send` (public action later).
+
+**Known limitations (Telegram exact time).** (1) A post with a plan but an empty `channel_send_at` (the worker claimed it and the process stopped before sending) waits until the next boot recovery (`recoverInterruptedChannelSends`). (2) If a scheduled post's publish time is changed later, the stored `sendAt` is not re-validated: if it ends up before the new publish time, it is sent right after the post goes live.
 
 
 No API, DB or Claude-tool changes.

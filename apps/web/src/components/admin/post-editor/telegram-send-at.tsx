@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import type { ChannelStatus } from "@blog/shared";
 import { Button } from "@/components/ui/button";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
-import { absoluteTimeError, isoToLocalInput, telegramStatusLine } from "@/lib/distribution-telegram";
+import { absoluteTimeError, canEditSendAt, isoToLocalInput, telegramStatusLine } from "@/lib/distribution-telegram";
 import { AbsoluteTimeField } from "./delay-plan-picker";
 
 /**
@@ -18,7 +18,7 @@ export function TelegramSendAt({ postId, status, onChanged }: { postId: string; 
   const [busy, setBusy] = useState(false);
   const shown = sendAt ?? (status?.state === "planned" ? status.sendAt : null);
   const error = shown ? absoluteTimeError(isoToLocalInput(shown)) : null;
-  const blocked = status?.state === "sending" || status?.state === "sent";
+  const blocked = !canEditSendAt(status);
 
   async function run(action: () => Promise<unknown>, done: string) {
     if (busy) return;

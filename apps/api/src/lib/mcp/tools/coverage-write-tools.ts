@@ -8,7 +8,7 @@ import { createStaffInviteAudited, removeStaffMemberAudited, revokeStaffInviteAu
 import { saveSettingsAudited, updateSiteSettings } from "../../site-admin.js";
 import { SettingsValidationError, getSettings } from "../../settings.js";
 import { loadSiteSettings } from "../../site-settings.js";
-import { cancelChannelSend, scheduleChannelSend, updatePost } from "../../posts/index.js";
+import { cancelChannelSend, channelScheduleBlocker, scheduleChannelSend, updatePost } from "../../posts/index.js";
 import { postHasChannelMessage } from "../../posts/channel-guard.js";
 import { previewChannelPost } from "../../../telegram/channel-actions.js";
 import { checkAbsoluteTime, preparePlan } from "../../posts/plan.js";
@@ -259,8 +259,10 @@ export const setChannelPlanTool = defineTool({
     }
     if (args.dry_run) {
       const timeError = absolute ? checkAbsoluteTime(plan, post.status === "scheduled" && post.scheduledAt ? post.scheduledAt : new Date()) : null;
-      const prepared = timeError ? null : await preparePlan(post.id, plan);
-      const refused = timeError ?? (prepared && !prepared.ok ? prepared.error.message : null);
+      // Chop etilgan post: haqiqiy chaqiruvdagi rad sabablari (allaqachon yuborilgan / hozir yuborilmoqda) dry-run'da ham hisobga olinadi.
+      const blocker = !timeError && post.status === "published" ? await channelScheduleBlocker(post) : null;
+      const prepared = timeError || blocker ? null : await preparePlan(post.id, plan);
+      const refused = timeError ?? (blocker && !blocker.ok ? blocker.error.message : null) ?? (prepared && !prepared.ok ? prepared.error.message : null);
       return { data: { ok: true, dryRun: true, summary: refused ? "Dry run: the plan would be refused." : "Dry run: the plan passes the Telegram checks.", canPlan: !refused, ...(refused ? { refusedBecause: refused } : {}), post: postBlock(post), ...untrusted(["post.title", "refusedBecause"]) } };
     }
     if (post.status === "published") {

@@ -351,6 +351,15 @@ async function channelAlreadySent(postId: string): Promise<boolean> {
 /** Ishchi rejani "claim" qilgan, yuborish tugamagan (reja bor, `channel_send_at` NULL) — shu paytda tegilmaydi. */
 const IN_FLIGHT_MESSAGE = "Hozir kanalga yuborilmoqda — biroz kutib qayta urinib ko'ring";
 
+/** Chop etilgan postga aniq vaqtli reja qo'yish mumkinmi (dry-run va haqiqiy chaqiruv bir xil tekshiradi): rad sababi yoki `null`. */
+export async function channelScheduleBlocker(post: PostRow): Promise<ServiceResult<never> | null> {
+  if (await channelAlreadySent(post.id)) {
+    return fail("conflict", "Post kanalga allaqachon yuborilgan — qayta yuborish uchun «Qayta yuborish» ishlating");
+  }
+  if (post.channelPlan != null && post.channelSendAt == null) return fail("conflict", IN_FLIGHT_MESSAGE);
+  return null;
+}
+
 export interface ScheduleChannelSendInput extends ConcurrencyOptions {
   /** `sendAt` bor reja (kanal tanlovi `useChoice` / `mode`+`variant` / `versionId`). */
   plan: ChannelPlan;
@@ -379,9 +388,8 @@ export async function scheduleChannelSend(actor: Actor, id: string, input: Sched
   if (!parsed.success || !isAbsoluteChannelPlan(parsed.data)) return fail("bad_request", "Noto'g'ri kanal rejasi");
   const timeError = checkAbsoluteTime(parsed.data, new Date());
   if (timeError) return fail("bad_request", timeError);
-  if (await channelAlreadySent(id)) {
-    return fail("conflict", "Post kanalga allaqachon yuborilgan — qayta yuborish uchun «Qayta yuborish» ishlating");
-  }
+  const blocker = await channelScheduleBlocker(post);
+  if (blocker) return blocker;
   const prepared = await preparePlan(id, parsed.data);
   if (!prepared.ok) return prepared;
   const storedPlan: ChannelPlan = { ...prepared.data, attempts: 0 };

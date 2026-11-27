@@ -112,6 +112,7 @@ export function telegramStatusLine(status: ChannelStatus | null, now: Date = new
     case "sending":
       return "Kanalga yuborilmoqda…";
     case "planned":
+      if (status.sentAt) return `Kanalga yuborilgan · ${formatChannelAt(status.sentAt, now)} (kutayotgan reja qolgan)`;
       if (status.sendAt) return `Kanalga ${formatChannelAt(status.sendAt, now)} da yuboriladi`;
       return status.plan?.kind === "delay" ? `Kanalga saytga ${planPhrase(status.plan.delayMinutes ?? 0)} yuboriladi` : "Kanalga yuborish rejalashtirilgan";
     case "sent":
@@ -121,9 +122,15 @@ export function telegramStatusLine(status: ChannelStatus | null, now: Date = new
   }
 }
 
+/** "Aniq vaqt" bloki tahrirlanadimi: yuborilgan (`sentAt`) yoki yuborilayotgan postda — yo'q (server rad etadi). */
+export function canEditSendAt(status: ChannelStatus | null): boolean {
+  return status !== null && status.state !== "sending" && status.state !== "sent" && status.sentAt === null;
+}
+
 /** Yorliq nuqtasi uchun Telegram holati: `null` — reja ham, yuborish ham yo'q (nuqta avvalgidek). */
 export function telegramDotTone(status: ChannelStatus | null): "planned" | "sending" | "sent" | null {
   if (!status || status.state === "none") return null;
+  if (status.sentAt && status.state === "planned") return "sent";
   return status.state;
 }
 

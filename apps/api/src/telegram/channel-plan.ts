@@ -99,7 +99,8 @@ export async function runChannelPlanFor(id: string, now: Date = new Date()): Pro
   const [claimed] = await db
     .update(posts)
     .set({ channelSendAt: null })
-    .where(and(eq(posts.id, id), eq(posts.status, "published"), isNull(posts.deletedAt), isNotNull(posts.channelSendAt)))
+    // `channel_send_at <= now`: ro'yxat tanlangandan keyin post kelajakka qayta rejalashtirilgan bo'lsa (PUT /channel/schedule) — erta yuborilmaydi.
+    .where(and(eq(posts.id, id), eq(posts.status, "published"), isNull(posts.deletedAt), isNotNull(posts.channelSendAt), lte(posts.channelSendAt, now)))
     .returning();
   if (!claimed) return { state: "skipped" }; // boshqa tick/jarayon allaqachon oldi
 

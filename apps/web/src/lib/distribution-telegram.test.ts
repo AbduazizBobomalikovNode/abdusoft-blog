@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelPlan, ChannelStatus, ResolvedChannelChoice } from "@blog/shared";
-import { absoluteTimeError, formatChannelAt, isoToLocalInput, planTiming, planWithDelay, planWithSendAt, telegramDotTone, telegramStatusLine, createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
+import { absoluteTimeError, canEditSendAt, formatChannelAt, isoToLocalInput, planTiming, planWithDelay, planWithSendAt, telegramDotTone, telegramStatusLine, createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
 
 const choice = (over: Partial<ResolvedChannelChoice> = {}) =>
   ({ choice: { kind: "auto", mode: "media", variant: "m" }, label: "Rasmli · O'rtacha", mode: "media", visibleLength: 812, limit: 1024, passes: true, ...over }) as ResolvedChannelChoice;
@@ -125,5 +125,16 @@ describe("absolute channel time helpers", () => {
     expect(telegramDotTone(status())).toBeNull();
     expect(telegramDotTone(status({ state: "planned" }))).toBe("planned");
     expect(telegramDotTone(status({ state: "sent" }))).toBe("sent");
+  });
+  it("sent post: not editable, a lingering plan is reported but not offered", () => {
+    expect(canEditSendAt(null)).toBe(false);
+    expect(canEditSendAt(status())).toBe(true);
+    expect(canEditSendAt(status({ state: "planned", sendAt: AT }))).toBe(true);
+    expect(canEditSendAt(status({ state: "sent", sentAt: AT }))).toBe(false);
+    expect(canEditSendAt(status({ state: "sending" }))).toBe(false);
+    const lingering = status({ state: "planned", sendAt: AT, sentAt: AT });
+    expect(canEditSendAt(lingering)).toBe(false);
+    expect(telegramStatusLine(lingering, NOW)).toContain("kutayotgan reja qolgan");
+    expect(telegramDotTone(lingering)).toBe("sent");
   });
 });

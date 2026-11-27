@@ -188,6 +188,26 @@ describe("channel versions, the marked choice and the channel plan", () => {
     expect((await row()).channelPlan).toBeNull();
   });
 
+  it("set_channel_plan dry_run on a published post applies the same refusals as the real call (already sent, in flight)", async () => {
+    const post = await publishedPost("Quruq yurish");
+    await settle();
+    const token = async () => (await ok("get_post", { id: post.id })).post.updatedAt;
+    const args = async () => ({ id: post.id, expected_updated_at: await token(), send_at: new Date(Date.now() + 3_600_000).toISOString(), mode: "text", variant: "m" });
+    expect((await ok("set_channel_plan", { ...(await args()), dry_run: true })).canPlan).toBe(true);
+    // hozir yuborilmoqda (reja bor, channel_send_at claim qilingan)
+    await db.update(s.posts).set({ channelPlan: { useChoice: true, delayMinutes: 0 }, channelSendAt: null }).where(eq(s.posts.id, post.id));
+    const inFlight = await ok("set_channel_plan", { ...(await args()), dry_run: true });
+    expect(inFlight.canPlan).toBe(false);
+    expect((await call("set_channel_plan", await args())).isError).toBe(true);
+    // allaqachon yuborilgan
+    await db.update(s.posts).set({ channelPlan: null, channelSendAt: null }).where(eq(s.posts.id, post.id));
+    await db.insert(s.telegramRefs).values({ postId: post.id, channelSentAt: new Date() }).onConflictDoUpdate({ target: s.telegramRefs.postId, set: { channelSentAt: new Date() } });
+    const sent = await ok("set_channel_plan", { ...(await args()), dry_run: true });
+    expect(sent.canPlan).toBe(false);
+    expect(String(sent.refusedBecause)).toMatch(/yuborilgan/);
+    expect((await call("set_channel_plan", await args())).isError).toBe(true);
+  });
+
   it("resync_channel_caption does nothing for an unsent post; refresh_telegraph_mirror touches Telegraph only, never the channel", async () => {
     const post = await publishedPost("Ko'zgu yangilash");
     await settle();

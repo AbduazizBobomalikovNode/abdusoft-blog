@@ -11,7 +11,7 @@ import { publishDuePosts } from "../lib/scheduler.js";
 import { uploadsDir } from "../lib/media/store.js";
 import { invalidateSettingsCache, saveSettings } from "../lib/settings.js";
 import { reconfigureBot } from "../telegram/client.js";
-import { runDueChannelSends } from "../telegram/channel-plan.js";
+import { runChannelPlanFor, runDueChannelSends, sendMarkedChoiceNow } from "../telegram/channel-plan.js";
 import { sendPostToChannel } from "../telegram/channel-send.js";
 import { registerTelegramPublishing } from "../telegram/publish.js";
 import { createTestUser, type TestUser } from "../test/auth-test-helpers.js";
@@ -347,5 +347,26 @@ describe("absolute channel time: published posts (PUT/DELETE /channel/schedule)"
     const row = await loadPost(id);
     expect((row.channelPlan as { attempts?: number } | null)?.attempts).toBe(1);
     expect((row.channelPlan as { sendAt?: string } | null)?.sendAt).toBeTruthy();
+  });
+
+  it("claim race: a row selected as due but rescheduled to the future is NOT sent early; it sends at the new time", async () => {
+    const id = await publishedPost();
+    await putSchedule(id, { sendAt: inH(1), mode: "text", variant: "m" });
+    // Ishchi ro'yxatni "vaqti keldi" deb tanlagan paytga o'xshatamiz (now = +2h), so'ng admin kelajakka ko'chiradi.
+    const selectedAt = new Date(Date.now() + 2 * HOUR);
+    const later = inH(10);
+    expect((await putSchedule(id, { sendAt: later, mode: "text", variant: "m" })).status).toBe(200);
+    expect(await runChannelPlanFor(id, selectedAt)).toEqual({ state: "skipped" });
+    expect(await wasSent(id)).toBe(false);
+    const row = await loadPost(id);
+    expect(row.channelSendAt?.toISOString()).toBe(new Date(later).toISOString());
+    expect((await runChannelPlanFor(id, new Date(Date.now() + 11 * HOUR))).state).toBe("sent");
+    expect(await wasSent(id)).toBe(true);
+  });
+
+  it("sendMarkedChoiceNow still claims (channel_send_at = now)", async () => {
+    const id = await publishedPost();
+    expect((await sendMarkedChoiceNow(id)).state).toBe("sent");
+    expect(await wasSent(id)).toBe(true);
   });
 });
