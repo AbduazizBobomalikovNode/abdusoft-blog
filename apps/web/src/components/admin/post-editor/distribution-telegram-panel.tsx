@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { ExternalLink } from "lucide-react";
-import type { ChannelPlan, ChannelPreviewResponse, ResolvedChannelChoice } from "@blog/shared";
+import type { AdminPostStatus, ChannelPlan, ResolvedChannelChoice } from "@blog/shared";
 import { Button } from "@/components/ui/button";
-import { adminApi } from "@/lib/admin-client";
-import { previewSelectionOf, telegramTabSummary } from "@/lib/distribution-telegram";
+import { FLUSH_SAVED_HINT, sendGate, telegramPanelMode, telegramPlanEditable, telegramPlanStorageHint, telegramTabSummary } from "@/lib/distribution-telegram";
+import { ChannelPlanFields } from "./channel-plan-fields";
 import { TelegramPreviewCard } from "./channel-preview";
+import { toSelection, useChannelSend } from "./channel-send-controller";
+import { ChannelCheckStep, ChannelEditStep, ChannelSendAlerts, ChannelVersionStep } from "./channel-send-steps";
 
 export interface DistributionTelegramInfo {
   choice: ResolvedChannelChoice | null;
@@ -14,47 +16,107 @@ export interface DistributionTelegramInfo {
   sent: boolean;
   sentUrl: string | null;
   channelHandle: string | null;
+  /** Ixtiyoriy: post muharriridagi "rejalashtirish vaqti" (reja xulosasida kanal vaqtini ko'rsatish uchun). */
+  scheduledAtLocal?: string;
+  /** Ixtiyoriy: berilsa panelda "Saytga chiqqach" reja boshqaruvi chiqadi (post muharriri holatiga yoziladi). */
+  onPlanChange?: (plan: ChannelPlan | null) => void;
+  /** Ixtiyoriy: belgilangan versiya o'zgarganda (muharrir xulosasi yangilanadi). */
+  onChoiceChange?: (choice: ResolvedChannelChoice | null) => void;
 }
 
-/** "Tarqatish" dialogidagi Telegram yorlig'i: xulosa + belgilangan versiya ko'rinishi + Telegram oynasini ochish. Yuborish shu yerda emas. */
-export function DistributionTelegramPanel({ postId, info, onOpenTelegram }: { postId: string; info: DistributionTelegramInfo; onOpenTelegram: () => void }) {
-  const selection = previewSelectionOf(info.choice);
-  const selectionKey = selection ? JSON.stringify(selection) : "";
-  // Natija so'ralgan tanlov kaliti bilan saqlanadi: tanlov o'zgarsa eski ko'rinish ko'rsatilmaydi (effect ichida setState yo'q).
-  const [result, setResult] = useState<{ key: string; data: ChannelPreviewResponse | null } | null>(null);
+/**
+ * "Tarqatish" dialogidagi Telegram yorlig'i — boshqa kanal panellari bilan bir xil maket: chapda versiya tanlash, tahrirlagich,
+ * tekshiruv, yuborish va reja; o'ngda (sticky) jonli Telegram ko'rinishi. Mantiq `ChannelSendDialog` bilan bir xil (`useChannelSend`).
+ */
+export function DistributionTelegramPanel({ postId, postStatus, info }: { postId: string; postStatus: AdminPostStatus; info: DistributionTelegramInfo }) {
+  const mode = telegramPanelMode(postStatus);
+  const c = useChannelSend({ postId, active: true, mode, onChoiceChange: info.onChoiceChange });
+  const { preview, loading, runPreflight, choiceRef, flushOutcome, sendGuard, notice, setNotice, handleSend, setConfirmReplaceOpen, sendBlocked, sending, resyncing, handleResync } = c;
 
+  // Belgilanmagan bo'lsa ham `useChannelSend` standart ko'rinishni yuklaydi (rasm bo'lsa 🖼/m, aks holda 📝/m) — oldindan ko'rish bo'sh qolmaydi.
+  // Tekshiruv har yangi ko'rinishdan keyin (tanlov o'zgargani yoki tahrir saqlangani) avtomatik qayta ishga tushadi.
   useEffect(() => {
-    if (!selectionKey) return;
-    let alive = true;
-    adminApi
-      .channelPreview(postId, JSON.parse(selectionKey))
-      .then((data) => alive && setResult({ key: selectionKey, data }))
-      .catch(() => alive && setResult({ key: selectionKey, data: null }));
-    return () => {
-      alive = false;
-    };
-  }, [postId, selectionKey]);
+    if (preview) void runPreflight(toSelection(choiceRef.current));
+  }, [preview, runPreflight, choiceRef]);
 
-  const done = result?.key === selectionKey;
-  const preview = done ? result.data : null;
-  const loading = Boolean(selectionKey) && !done;
+  const summary = telegramTabSummary({ choice: info.choice, plan: info.plan, sent: info.sent });
+  const sendMode = mode === "send";
+  const planEditable = telegramPlanEditable(postStatus) && Boolean(info.onPlanChange);
 
-  const s = telegramTabSummary({ choice: info.choice, plan: info.plan, sent: info.sent });
+  // Saqlash (flush) + yuborish `handleSend` ichida, sinxron qo'riqchi bilan: ikki marta bosish ikki yuborish bermaydi.
+  async function sendNow() {
+    await handleSend(false);
+  }
+  async function askReplace() {
+    if (sending || !sendGuard.tryEnter()) return;
+    try {
+      const gate = sendGate(await flushOutcome());
+      if (gate === "send") setConfirmReplaceOpen(true);
+      else if (gate === "stop-saved") setNotice(FLUSH_SAVED_HINT);
+    } finally {
+      sendGuard.leave();
+    }
+  }
+
   return (
-    <div className="flex flex-col gap-3" data-testid="dist-telegram-panel">
-      <dl className="flex flex-col gap-1 rounded-lg border border-border px-3 py-2.5 text-xs">
-        <div><dt className="inline text-muted-foreground">Versiya: </dt><dd className="inline font-medium">{s.choice}</dd></div>
-        <div><dt className="inline text-muted-foreground">Reja: </dt><dd className="inline">{s.plan}</dd></div>
-        <div>
-          <dt className="inline text-muted-foreground">Holat: </dt>
-          <dd className="inline">{s.sent}</dd>
-          {info.sentUrl ? <a href={info.sentUrl} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 underline">Postni ochish <ExternalLink className="size-3" /></a> : null}
-        </div>
-      </dl>
-      {selection ? <TelegramPreviewCard channelName={info.channelHandle} preview={preview} loading={loading} /> : null}
-      <div>
-        <Button type="button" className="max-md:h-11 max-md:w-full" onClick={onOpenTelegram} data-testid="dist-open-telegram">Telegram oynasini ochish</Button>
+    <div className="grid shrink-0 gap-5 lg:grid-cols-2" data-testid="dist-telegram-panel">
+      <div className="flex min-w-0 flex-col gap-4">
+        <p className="text-xs text-muted-foreground">
+          {summary.sent}
+          {info.sentUrl ? (
+            <a href={info.sentUrl} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 underline">Postni ochish <ExternalLink className="size-3" /></a>
+          ) : null}
+        </p>
+
+        <ChannelVersionStep c={c} />
+
+        {c.selectedVersion ? (
+          <section className="flex flex-col gap-2" data-testid="dist-telegram-editor">
+            <h3 className="text-sm font-semibold">Tahrirlash</h3>
+            <ChannelEditStep c={c} />
+          </section>
+        ) : (
+          <p className="text-xs text-muted-foreground">Matnni tahrirlash uchun maxsus versiyani tanlang yoki «Shu ko&apos;rinishdan yangi versiya» yarating.</p>
+        )}
+
+        <ChannelCheckStep c={c} showSentNote={false} />
+
+        {sendMode && notice ? <p className="text-xs text-amber-700 dark:text-amber-300" data-testid="dist-telegram-notice">{notice}</p> : null}
+        {sendMode ? (
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3" data-testid="dist-telegram-send">
+            {preview?.alreadySent && !preview.alreadySent.versionId ? (
+              <Button type="button" variant="outline" size="sm" disabled={resyncing} onClick={() => void handleResync()}>
+                {resyncing ? "Yangilanmoqda…" : "Caption'ni yangilash"}
+              </Button>
+            ) : null}
+            {preview?.alreadySent ? (
+              <Button type="button" size="sm" variant="destructive" disabled={sendBlocked || loading} onClick={() => void askReplace()}>Qayta yuborish</Button>
+            ) : (
+              <Button type="button" size="sm" disabled={sendBlocked || loading} onClick={() => void sendNow()}>{sending ? "Yuborilmoqda…" : "Kanalga yuborish"}</Button>
+            )}
+          </div>
+        ) : null}
+
+        {planEditable && info.onPlanChange ? (
+          <section className="flex flex-col gap-2 border-t border-border pt-3" data-testid="dist-telegram-plan">
+            <h3 className="text-sm font-semibold">Telegram rejasi · saytga chiqqach</h3>
+            <ChannelPlanFields
+              postId={postId}
+              value={info.plan}
+              onChange={info.onPlanChange}
+              scheduledAtLocal={info.scheduledAtLocal ?? ""}
+              markedChoice={c.versions ? c.markedChoice : info.choice}
+            />
+            <p className="text-xs text-muted-foreground">
+              {telegramPlanStorageHint(postStatus)} Telegram uchun faqat «Saytga chiqqach» rejimi bor — aniq vaqt keyingi bosqichda.
+            </p>
+          </section>
+        ) : null}
       </div>
+      <aside className="min-w-0 lg:sticky lg:top-0 lg:self-start" aria-label="Oldindan ko'rish">
+        <TelegramPreviewCard channelName={c.channelHandle ?? info.channelHandle} preview={preview} loading={loading} />
+      </aside>
+      <ChannelSendAlerts c={c} />
     </div>
   );
 }

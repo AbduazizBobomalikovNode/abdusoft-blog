@@ -108,6 +108,18 @@ export function counterView(provider: DistributionProviderId, text: string, limi
   return { ...st, label, className };
 }
 
+/**
+ * Matn ostidagi hisoblagich izohi. Avval faqat birlik nomi ("belgi") chiqardi — yolg'iz so'z bo'lib qolardi.
+ * Endi "belgi" birligida qoldiq ("123 belgi qoldi" / "12 belgi ortiqcha"), boshqa birliklarda — hisoblash usuli tavsifi.
+ */
+export function counterDetail(unit: DistributionProviderCapabilitiesDto["textUnit"], counter: Pick<CounterState, "remaining">): string {
+  if (unit === "characters") {
+    if (counter.remaining === null) return "";
+    return counter.remaining >= 0 ? `${counter.remaining} belgi qoldi` : `${-counter.remaining} belgi ortiqcha`;
+  }
+  return own(UNIT_LABEL, unit, "");
+}
+
 export interface ThreadCounterView {
   label: string;
   className: string;

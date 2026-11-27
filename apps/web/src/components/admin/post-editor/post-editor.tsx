@@ -143,6 +143,12 @@ function PostEditorInner({
   // "Tarqatish" kirish nuqtasi: `/admin/me` (`distributionEnabled`) bo'yicha — alohida 404 so'rovi yo'q. Xodimga hech qachon.
   const distributionOn = useDistributionEnabled() && !isStaff;
   const [distributionOpen, setDistributionOpen] = useState(false);
+  // "Nashr" kartasidagi "Tarqatishda sozlash" dialogni Telegram yorlig'ida ochadi; boshqa kirish nuqtalari oxirgi yorliqni saqlaydi.
+  const [distributionTab, setDistributionTab] = useState<"telegram" | undefined>(undefined);
+  const openDistribution = (tab?: "telegram") => {
+    setDistributionTab(tab);
+    setDistributionOpen(true);
+  };
   // Dialog yopilganda "Nashr" kartasidagi reja xulosasi qayta yuklanadi.
   const [distributionRefresh, setDistributionRefresh] = useState(0);
   const [channelPlanBlocked, setChannelPlanBlocked] = useState(false);
@@ -698,7 +704,7 @@ function PostEditorInner({
     onRefreshTelegraph: () => void handleRefreshTelegraph(),
     refreshingTelegraph,
     onOpenChannelSend: () => setChannelSendOpen(true),
-    ...(distributionOn ? { distributionPlans: { onOpen: () => setDistributionOpen(true), refreshKey: distributionRefresh } } : {}),
+    ...(distributionOn ? { distributionPlans: { onOpen: () => openDistribution(), refreshKey: distributionRefresh }, onOpenTelegramPlan: () => openDistribution("telegram") } : {}),
     channelChoice,
   };
 
@@ -823,7 +829,7 @@ function PostEditorInner({
           onDelete={handleDelete}
           onRefreshTelegraph={() => void handleRefreshTelegraph()}
           onOpenChannelSend={() => setChannelSendOpen(true)}
-          onOpenDistribution={distributionOn ? () => setDistributionOpen(true) : undefined}
+          onOpenDistribution={distributionOn ? () => openDistribution() : undefined}
           onOpenHistory={() => setHistoryOpen(true)}
           journalHref={`/admin/jurnal?entityType=post&entityId=${post.id}`}
           channelChoice={channelChoice}
@@ -844,7 +850,7 @@ function PostEditorInner({
         onChoiceChange={setChannelChoice}
       />
 
-      {distributionOn ? <DistributionDialog postId={post.id} postStatus={status} open={distributionOpen} onOpenChange={(o) => { setDistributionOpen(o); if (!o) setDistributionRefresh((n) => n + 1); }} telegram={{ choice: channelChoice, plan: channelPlan, sent: Boolean(telegram?.channelMessageId), sentUrl: channelUrl, channelHandle: telegramChannel }} onOpenTelegram={() => setChannelSendOpen(true)} /> : null}
+      {distributionOn ? <DistributionDialog postId={post.id} postStatus={status} open={distributionOpen} onOpenChange={(o) => { setDistributionOpen(o); if (!o) setDistributionRefresh((n) => n + 1); }} openTab={distributionTab} telegram={{ choice: channelChoice, plan: channelPlan, sent: Boolean(telegram?.channelMessageId), sentUrl: channelUrl, channelHandle: telegramChannel, scheduledAtLocal, onPlanChange: settingsProps.onChannelPlanChange, onChoiceChange: setChannelChoice }} /> : null}
 
       {conflict ? (
         <ConflictBanner
