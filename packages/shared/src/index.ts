@@ -19,3 +19,4 @@ export * from "./doc-validate.js";
 export * from "./video.js";
 export * from "./social-links.js";
 export * from "./distribution.js";
+export * from "./x-thread.js";

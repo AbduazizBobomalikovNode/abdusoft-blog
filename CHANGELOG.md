@@ -6,6 +6,12 @@
 
 ### O'zbekcha
 
+**Tarqatish: X zanjiri (thread)**
+- X kanalida ixtiyoriy «Zanjir (thread)»: matn `---` satrlari bo'yicha va 280 dan oshsa gap/so'z chegarasida (URL va grafema bo'linmaydi) javob tvitlariga bo'linadi; ixtiyoriy « 1/n» raqamlash (vazni hisobga olinadi); ko'pi bilan 15 tvit. Standart — bitta tvit (xatti-harakat o'zgarmagan)
+- Yuborish: 1-tvit (rasm shunda), keyingilari oldingisiga javob; har tvitdan keyin id saqlanadi — xatodan keyin qayta urinish qolgan qismdan davom etadi va oldingilarini qayta yubormaydi; noaniq natija — «tekshirish kerak». «Platformadan olib tashlash» barcha tvitlarni teskari tartibda o'chiradi
+- Veb: zanjir va raqamlash tugmalari, jonli ko'rinishda bog'lovchi chiziqli tvitlar zanjiri va «3 ta tvit · 2-si 291/280» hisoblagichi. Claude: `x_thread` / `x_thread_numbering` (preview, save, send, schedule, set plan), javobda `threadParts`
+- Additiv migratsiya `0023`: `distributions.x_thread`, `x_thread_numbering`, `thread_ids`. Haqiqiy X akkauntida hali sinalmagan (testlar mock)
+
 **Tarqatish: Telegram yorlig'i endi foydali**
 - Dialogdagi Telegram yorlig'ida: tanlangan versiya (belgi, uzunlik, cheklov), kanal rejasi («saytga chiqqach 15 daq»), yuborilgan bo'lsa holat va havola, belgilangan versiyaning Telegram ko'rinishi va «Telegram oynasini ochish» tugmasi (Tarqatish yopiladi, Telegram oynasi ochiladi). Faqat veb: API, yuborish va Claude vositalari o'zgarmagan
 
@@ -36,6 +42,12 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Distribution: X threads**
+- Optional "Thread" for the X channel: the text is split on `---` lines and, if over 280, at sentence/word boundaries (never inside a URL or grapheme) into reply tweets; optional " 1/n" numbering (counted in the weight); at most 15 tweets. Default is one tweet (behaviour unchanged)
+- Sending: tweet 1 (with the image), the rest as replies to the previous one; each posted id is saved, so after a failure a retry resumes from the remaining part and never re-posts earlier tweets; an ambiguous result becomes "needs checking". "Remove from platform" deletes every tweet in reverse order
+- Web: thread and numbering toggles, a live chain of stacked tweets with a connector line and a "3 ta tvit · 2-si 291/280" counter. Claude: `x_thread` / `x_thread_numbering` (preview, save, send, schedule, set plan), `threadParts` in the output
+- Additive migration `0023`: `distributions.x_thread`, `x_thread_numbering`, `thread_ids`. Not yet tried on a real X account (tests mock the network)
 
 **Distribution: the Telegram tab is now useful**
 - The dialog's Telegram tab shows the chosen version (mark, length, limits), the channel plan ("after the site goes live 15 min"), sent status and link, the Telegram preview of the chosen version, and an "open Telegram window" button (closes Tarqatish, opens the Telegram dialog). Web only: API, sending and Claude tools unchanged

@@ -1,5 +1,5 @@
-import { and, eq, isNull, lte, lt, or, sql } from "drizzle-orm";
-import type { DistributionLinkMode } from "@blog/shared";
+import { and, eq, inArray, isNull, lte, lt, or, sql } from "drizzle-orm";
+import { splitXThread, type DistributionLinkMode } from "@blog/shared";
 import { config } from "../../../config.js";
 import { db } from "../../../db/index.js";
 import { distributionAccounts, distributions } from "../../../db/schema.js";
@@ -82,9 +82,9 @@ function secretsOf(account: Awaited<ReturnType<typeof getActiveAccount>>): strin
  */
 const claimed = (row: DistributionRow) => eq(distributions.updatedAt, row.updatedAt);
 
-async function finishSent(row: DistributionRow, result: { externalId: string; url: string | null }, text: string, titleForNotice: string): Promise<void> {
+async function finishSent(row: DistributionRow, result: { externalId: string; url: string | null; threadIds?: string[] }, text: string, titleForNotice: string): Promise<void> {
   const now = distNow();
-  const sentFields = { status: "sent" as const, sentText: text, externalId: result.externalId, externalUrl: result.url, sentAt: now, lastErrorKind: null, lastErrorMessage: null, step: null, partial: null, nextAttemptAt: null, updatedAt: now };
+  const sentFields = { status: "sent" as const, sentText: text, externalId: result.externalId, externalUrl: result.url, ...(result.threadIds ? { threadIds: result.threadIds } : {}), sentAt: now, lastErrorKind: null, lastErrorMessage: null, step: null, partial: null, nextAttemptAt: null, updatedAt: now };
   let [updated] = await db
     .update(distributions)
     .set(sentFields)
@@ -205,6 +205,27 @@ export async function runDistribution(id: string, now: Date = distNow()): Promis
     const img = plan.image && plan.image.ok ? plan.image : null;
     const image: ImageInput | undefined =
       img && (providerId === "linkedin" || providerId === "x") ? { bytes: img.buffer, mime: img.mime, width: img.width, height: img.height, sizeBytes: img.sizeBytes, alt: plan.post.title.slice(0, 400) } : undefined;
+    // X zanjiri: bo'laklar MUZLATILGAN matndan (plan.text = renderedText) qayta hisoblanadi — web ko'rinishi bilan bir xil `splitXThread`.
+    // `row.threadIds` — oldingi urinishlarda yuborilganlar: provider ularni qayta yubormaydi, keyingi bo'lakdan davom etadi.
+    let thread: PublishInput["thread"];
+    if (providerId === "x" && row.xThread) {
+      const split = splitXThread(plan.text, { numbering: row.xThreadNumbering });
+      const posted = row.threadIds ?? [];
+      if (posted.length > split.count) throw new DistributionError({ kind: "validation_rejected", message: "Zanjir bo'laklari soni yuborilganidan kam — matn o'zgargan; platformada tekshiring" });
+      thread = {
+        parts: split.parts.map((p) => p.text),
+        posted,
+        // Har bir tvitdan keyin darhol saqlanadi. `updatedAt` O'ZGARTIRILMAYDI: u shu urinishning claim belgisi (`claimed`).
+        onProgress: async (ids) => {
+          const saved = await db
+            .update(distributions)
+            .set({ threadIds: [...ids] })
+            .where(and(eq(distributions.id, row.id), inArray(distributions.status, ["sending", "needs_checking"]), claimed(row)))
+            .returning();
+          if (saved.length === 0) throw new Error("zanjir progressi saqlanmadi (qator boshqa urinishga o'tgan)");
+        },
+      };
+    }
     const input: PublishInput = {
       post: toDistributionPost(plan.post),
       text: plan.text,
@@ -213,6 +234,7 @@ export async function runDistribution(id: string, now: Date = distNow()): Promis
       ...(plan.linkMode ? { linkMode: plan.linkMode as DistributionLinkMode } : {}),
       ...(providerId === "github" ? { latestPosts: await latestPublishedPosts(config.DISTRIBUTION_GITHUB_README_POSTS) } : {}),
       ...(row.partial && Object.keys(row.partial).length > 0 ? { resume: row.partial as PartialRefs } : {}),
+      ...(thread ? { thread } : {}),
     };
     const result = await provider.publish({ deps: providerDeps(), account: toConnected(account) }, input);
     await finishSent(row, result, plan.text, title);

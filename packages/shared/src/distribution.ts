@@ -144,6 +144,11 @@ export interface DistributionItemDto {
   sentText: string | null;
   imageChoice: DistributionImageChoice;
   linkMode: DistributionLinkMode | null;
+  /** Faqat X: "zanjir" (thread) rejimi va " i/n" raqamlash. Boshqa kanallarda doim false. */
+  xThread: boolean;
+  xThreadNumbering: boolean;
+  /** Zanjirning platformaga allaqachon yuborilgan qismlari soni (qayta urinish shundan davom etadi). */
+  threadPosted: number;
   scheduledAt: string | null;
   nextAttemptAt: string | null;
   attempts: number;
@@ -179,6 +184,9 @@ export interface SetDistributionPlanBody {
   text?: string | null;
   imageChoice?: DistributionImageChoice;
   linkMode?: DistributionLinkMode | null;
+  /** Faqat X. */
+  xThread?: boolean;
+  xThreadNumbering?: boolean;
 }
 
 export interface DistributionVersionDto {
@@ -247,6 +255,11 @@ export interface DistributionPreviewResponse {
   image: DistributionImagePreview;
   imageChoice: DistributionImageChoice;
   linkMode: DistributionLinkMode | null;
+  /** Faqat X: zanjir rejimi, raqamlash va (yoqilgan bo'lsa) bo'laklar — web ko'rinishi va API yuborishi bir xil `splitXThread`dan. */
+  xThread: boolean;
+  xThreadNumbering: boolean;
+  threadParts: { text: string; weight: number; over: boolean }[] | null;
+  threadMaxParts: number | null;
   checks: ChannelCheck[];
   canSend: boolean;
   errorCount: number;
@@ -276,7 +289,7 @@ const URL_RE = /https?:\/\/[^\s<>"]+/giu;
 const URL_TRAILING_RE = /[.,;:!?)\]}'»”’]+$/u;
 const X_TCO_URL_WEIGHT = 23;
 
-function graphemes(text: string): string[] {
+export function graphemes(text: string): string[] {
   return Array.from(segmenter.segment(text), (s) => s.segment);
 }
 
@@ -293,7 +306,7 @@ function utf8Length(text: string): number {
   return n;
 }
 
-function findUrls(text: string): { start: number; end: number }[] {
+export function findUrls(text: string): { start: number; end: number }[] {
   const out: { start: number; end: number }[] = [];
   for (const m of text.matchAll(URL_RE)) {
     const trimmed = m[0].replace(URL_TRAILING_RE, "");

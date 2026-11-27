@@ -168,3 +168,39 @@ describe("X remove, rendering, preflight", () => {
     expect(p.tokenStatus(account, new Date("2026-11-25T13:00:00Z"))).toMatchObject({ state: "ok", canRefresh: true, refreshDue: true });
   });
 });
+
+describe("X thread (provider)", () => {
+  const threadAccount = account;
+  it("buildXTweetBody adds reply.in_reply_to_tweet_id only when given", () => {
+    expect(buildXTweetBody("a")).toEqual({ text: "a" });
+    expect(buildXTweetBody("a", "m1", "t0")).toEqual({ text: "a", media: { media_ids: ["m1"] }, reply: { in_reply_to_tweet_id: "t0" } });
+  });
+  it("publishes parts in order, resuming after already-posted ids and reporting progress after each tweet", async () => {
+    let n = 100;
+    const m = mockFetch(() => json({ data: { id: String(++n) } }, { status: 201 }));
+    const progress: string[][] = [];
+    const r = await p.publish(
+      { deps: makeDeps(m.fetch), account: threadAccount },
+      { post: POST_FIXTURE, text: "ignored", thread: { parts: ["a", "b", "c"], posted: ["77"], onProgress: async (ids) => void progress.push([...ids]) } },
+    );
+    expect(m.calls.map((c) => JSON.parse(c.body as string))).toEqual([
+      { text: "b", reply: { in_reply_to_tweet_id: "77" } },
+      { text: "c", reply: { in_reply_to_tweet_id: "101" } },
+    ]);
+    expect(progress).toEqual([["77", "101"], ["77", "101", "102"]]);
+    expect(r).toMatchObject({ externalId: "77", threadIds: ["77", "101", "102"], url: "https://x.com/owner/status/77" });
+  });
+  it("everything already posted: no request", async () => {
+    const m = mockFetch(() => json({}));
+    const r = await p.publish({ deps: makeDeps(m.fetch), account: threadAccount }, { post: POST_FIXTURE, text: "x", thread: { parts: ["a"], posted: ["5"] } });
+    expect(m.calls).toHaveLength(0);
+    expect(r.threadIds).toEqual(["5"]);
+  });
+  it("a failed progress save is reported as outcome_unknown with the ids (no blind retry)", async () => {
+    const m = mockFetch(() => json({ data: { id: "9" } }, { status: 201 }));
+    await expect(
+      p.publish({ deps: makeDeps(m.fetch), account: threadAccount }, { post: POST_FIXTURE, text: "x", thread: { parts: ["a", "b"], posted: [], onProgress: async () => { throw new Error("db down"); } } }),
+    ).rejects.toMatchObject({ kind: "outcome_unknown" });
+    expect(m.calls).toHaveLength(1);
+  });
+});

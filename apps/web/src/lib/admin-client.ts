@@ -194,6 +194,9 @@ export interface DistributionDraftBody {
   text?: string | null;
   imageChoice?: DistributionImageChoice;
   linkMode?: DistributionLinkMode | null;
+  /** Faqat X: zanjir (thread) rejimi va " i/n" raqamlash. */
+  xThread?: boolean;
+  xThreadNumbering?: boolean;
 }
 
 export type DistributionResolveBody =

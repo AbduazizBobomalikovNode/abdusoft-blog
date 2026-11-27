@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import type { AdminPostStatus, DistributionChannelDto, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId, DistributionVersionDto } from "@blog/shared";
+import { splitXThread, type AdminPostStatus, DistributionChannelDto, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId, DistributionVersionDto } from "@blog/shared";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
 import {
   ERROR_KIND_TEXT, IMAGE_CHOICE_LABEL, LINK_MODE_LABEL, NO_AUTO_POST_NOTICE, TONE_CLASS, UNIT_LABEL,
-  counterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, statusPill, textForSave, tokenLine,
+  counterView, threadCounterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, statusPill, textForSave, tokenLine,
 } from "@/lib/distribution-ui";
 import { DISTRIBUTION_PLAN_MAX_DELAY_MINUTES, DISTRIBUTION_PLAN_PRESETS, PLAN_STATE_LABEL, canPlanForPost, clampDelay, delayText, isPresetDelay, isWaitingPlan, planPhrase, planStateOf } from "@/lib/distribution-plan";
 import { initialVersionId, isVersionDirty, markPrimary, removeVersion, replaceVersion, versionsOf, type VersionSaveState } from "@/lib/distribution-versions";
@@ -79,6 +79,13 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
   const [touched, setTouched] = useState(Boolean(startVersion));
   const [imageChoice, setImageChoice] = useState<"auto" | "cover" | "og" | "none">(startVersion?.imageChoice ?? item?.imageChoice ?? "auto");
   const [linkMode, setLinkMode] = useState<"article" | "text">(startVersion?.linkMode ?? item?.linkMode ?? "article");
+  // X zanjiri (thread): faqat X, standart o'chiq (bitta tvit). Versiyaga EMAS, qatorga saqlanadi.
+  const isX = provider === "x";
+  const [xThread, setXThread] = useState(Boolean(item?.xThread));
+  const [xThreadNumbering, setXThreadNumbering] = useState(Boolean(item?.xThreadNumbering));
+  // Zanjirning bir qismi allaqachon platformada: matn va rejim muzlatilgan (qayta urinish qolgan qismlardan davom etadi).
+  const threadFrozen = isX && (item?.threadPosted ?? 0) > 0 && item?.status !== "sent";
+  const xModeBody = useMemo(() => (isX ? { xThread, xThreadNumbering } : {}), [isX, xThread, xThreadNumbering]);
   const [busy, setBusy] = useState(false);
   const [when, setWhen] = useState("");
   const [confirmSend, setConfirmSend] = useState(false);
@@ -89,7 +96,7 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
   const savingRef = useRef(false);
   const selected = versions.find((v) => v.id === selectedId) ?? null;
 
-  const body = useCallback(() => ({ text: isGithub ? undefined : textForSave(text, preview?.defaultText ?? ""), imageChoice, ...(provider === "linkedin" ? { linkMode } : {}) }), [text, preview?.defaultText, imageChoice, linkMode, provider, isGithub]);
+  const body = useCallback(() => ({ text: isGithub ? undefined : textForSave(text, preview?.defaultText ?? ""), imageChoice, ...(provider === "linkedin" ? { linkMode } : {}), ...xModeBody }), [text, preview?.defaultText, imageChoice, linkMode, provider, isGithub, xModeBody]);
 
   // Oldindan ko'rish: tahrirdan keyin biroz kutib (debounce) tekshiruvlar yangilanadi.
   useEffect(() => {
@@ -97,7 +104,7 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
     const t = setTimeout(
       async () => {
         try {
-          const overrides = touched ? { text: textForSave(text, preview?.defaultText ?? ""), imageChoice, ...(provider === "linkedin" ? { linkMode } : {}) } : { imageChoice, ...(provider === "linkedin" ? { linkMode } : {}) };
+          const overrides = touched ? { text: textForSave(text, preview?.defaultText ?? ""), imageChoice, ...(provider === "linkedin" ? { linkMode } : {}), ...xModeBody } : { imageChoice, ...(provider === "linkedin" ? { linkMode } : {}), ...xModeBody };
           const p = await adminApi.distributionPreview(postId, provider, isGithub ? { imageChoice } : overrides);
           if (mine !== seq.current) return;
           setPreview(p);
@@ -110,7 +117,7 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
     );
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- preview.defaultText atayin kuzatilmaydi (aylanma)
-  }, [postId, provider, text, touched, imageChoice, linkMode, item?.id, item?.status, item?.updatedAt, isGithub]);
+  }, [postId, provider, text, touched, imageChoice, linkMode, item?.id, item?.status, item?.updatedAt, isGithub, xModeBody]);
 
   // Tanlangan versiya: tahrirdan 800 ms keyin avtomatik saqlanadi (Telegram versiya tahrirlagichidagidek).
   useEffect(() => {
@@ -180,7 +187,9 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
       "Versiyani o'chirib bo'lmadi",
     );
 
-  const counter = counterView(provider, text, caps?.textMax ?? null);
+  // Zanjir: web ko'rinishi ham, API yuborishi ham BIR XIL `splitXThread` (packages/shared) dan; chegara har bir tvitga alohida.
+  const thread = useMemo(() => (isX && xThread ? splitXThread(text, { numbering: xThreadNumbering }) : null), [isX, xThread, xThreadNumbering, text]);
+  const counter = thread ? threadCounterView(thread) : counterView(provider, text, caps?.textMax ?? null);
   const blocked = !preview || preview.errorCount > 0 || (!isGithub && counter.level === "over");
   // Reja uchun "post chop etilgan" tekshiruvi kutilmagan emas (hali chop etilmagan) — yuborish paytida baribir qayta tekshiriladi.
   const shownChecks = preview ? (postPublished ? preview.checks : preview.checks.filter((c) => c.id !== "dist.published")) : [];
@@ -221,6 +230,7 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
     postTitle: preview?.postTitle ?? "",
     imageUrl: caps?.image && imageChoice !== "none" && preview?.image.previewUrl && !preview.image.error ? preview.image.previewUrl : null,
     linkMode: provider === "linkedin" ? linkMode : null,
+    thread,
   } as const;
 
   return (
@@ -280,7 +290,7 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
             <Label htmlFor={`dist-text-${provider}`}>Matn</Label>
             <span className={cn("text-xs tabular-nums", counter.className)} data-testid="dist-counter" title={caps ? own(UNIT_LABEL, caps.textUnit, "") : ""}>{counter.label}</span>
           </div>
-          <Textarea id={`dist-text-${provider}`} rows={7} value={text} disabled={!actions.edit || busy} onChange={(e) => { setText(e.target.value); setTouched(true); }} className="min-h-32 text-sm" />
+          <Textarea id={`dist-text-${provider}`} rows={7} value={text} disabled={!actions.edit || busy || threadFrozen} onChange={(e) => { setText(e.target.value); setTouched(true); }} className="min-h-32 text-sm" />
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>{caps ? own(UNIT_LABEL, caps.textUnit, "") : ""}</span>
             {preview && text !== preview.defaultText ? (
@@ -289,6 +299,26 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
           </div>
         </div>
       )}
+
+      {/* X zanjiri (thread) */}
+      {isX ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-border p-3" data-testid="dist-x-thread">
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-0.5" checked={xThread} disabled={!actions.edit || busy || threadFrozen} onChange={(e) => setXThread(e.target.checked)} data-testid="dist-x-thread-toggle" />
+            <span>
+              <span className="font-medium">Zanjir (thread)</span>
+              <span className="block text-xs text-muted-foreground">Matn ketma-ket javob tvitlariga bo&apos;linadi: «---» satri — yangi tvit; 280 dan uzun qism o&apos;zi bo&apos;linadi (ko&apos;pi bilan {thread?.maxParts ?? 15} ta). O&apos;chiq bo&apos;lsa — bitta tvit.</span>
+            </span>
+          </label>
+          {xThread ? (
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-0.5" checked={xThreadNumbering} disabled={!actions.edit || busy || threadFrozen} onChange={(e) => setXThreadNumbering(e.target.checked)} data-testid="dist-x-thread-numbering" />
+              <span>Raqamlash (« 1/n » har bir tvit oxiriga; hisobga olinadi)</span>
+            </label>
+          ) : null}
+          {threadFrozen ? <p className="text-xs text-amber-700 dark:text-amber-300" data-testid="dist-x-thread-frozen">Zanjirning {item?.threadPosted} ta tvitu allaqachon platformada — matn va rejim o&apos;zgarmaydi, qayta urinish qolgan qismdan davom etadi.</p> : null}
+        </div>
+      ) : null}
 
       {/* Rasm va rejim */}
       {caps?.image ? (

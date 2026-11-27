@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { splitXThread } from "@blog/shared";
 import { SocialPreview, type SocialPreviewModel } from ".";
 
 const base: SocialPreviewModel = {
@@ -80,5 +81,24 @@ describe("SocialPreview", () => {
 
   it("shows an empty-text placeholder", () => {
     expect(render({ text: "" })).toContain("Matn bo&#x27;sh");
+  });
+
+  it("X thread renders stacked tweets with connectors and per-part weights; no single-tweet over notice", () => {
+    const thread = splitXThread("Birinchi tvit\n---\nIkkinchi tvit\n---\nUchinchi", { numbering: true });
+    const html = render({ provider: "x", text: "Birinchi tvit\n---\nIkkinchi tvit\n---\nUchinchi", limit: 280, thread });
+    expect(html).toContain("social-x-thread");
+    expect(html.match(/social-x-thread-part/g)).toHaveLength(3);
+    expect(html.match(/social-x-thread-connector/g)).toHaveLength(2);
+    expect(html).toContain("Birinchi tvit 1/3");
+    expect(html).toContain("3/3 · ");
+    expect(html).not.toContain("social-over-notice");
+    // rasm faqat birinchi tvitda
+    expect(html.match(/social-x-image/g)).toHaveLength(1);
+  });
+
+  it("X without thread keeps the single-tweet card", () => {
+    const html = render({ provider: "x", text: "Oddiy", limit: 280, thread: null });
+    expect(html).not.toContain("social-x-thread");
+    expect(html).toContain("social-preview-x");
   });
 });

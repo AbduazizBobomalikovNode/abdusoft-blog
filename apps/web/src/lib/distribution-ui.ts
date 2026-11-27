@@ -1,6 +1,8 @@
 import {
   DISTRIBUTION_STATUS_LABELS,
   socialCounterState,
+  X_TWEET_LIMIT,
+  type XThreadSplit,
   type ChannelCheck,
   type CounterState,
   type DistributionAccountDto,
@@ -104,6 +106,29 @@ export function counterView(provider: DistributionProviderId, text: string, limi
   const label = limit === null ? `${st.length}` : `${st.length} / ${limit}`;
   const className = st.level === "over" ? "text-destructive" : st.level === "warn" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
   return { ...st, label, className };
+}
+
+export interface ThreadCounterView {
+  label: string;
+  className: string;
+  level: "ok" | "warn" | "over";
+  /** Qisqa tafsilot (ixtiyoriy): eng uzun/oshib ketgan bo'lak. */
+  detail: string;
+}
+
+/** Zanjir hisoblagichi: "3 ta tvit · 2-si 291/280" (oshgan bo'lak) yoki "3 ta tvit · eng uzuni 271/280". */
+export function threadCounterView(split: XThreadSplit): ThreadCounterView {
+  const limit = X_TWEET_LIMIT;
+  if (split.count === 0) return { label: "0 ta tvit", className: "text-muted-foreground", level: "ok", detail: "" };
+  const overIdx = split.parts.findIndex((p) => p.over);
+  const longest = split.parts.reduce((m, p) => Math.max(m, p.weight), 0);
+  const base = `${split.count} ta tvit`;
+  if (split.tooMany) return { label: `${base} (ko'pi bilan ${split.maxParts})`, className: "text-destructive", level: "over", detail: "" };
+  if (overIdx >= 0) {
+    const p = split.parts[overIdx]!;
+    return { label: `${base} · ${overIdx + 1}-si ${p.weight}/${limit}`, className: "text-destructive", level: "over", detail: `${overIdx + 1}-tvit ${p.weight - limit} birlikka oshgan` };
+  }
+  return { label: `${base} · eng uzuni ${longest}/${limit}`, className: longest > limit * 0.95 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground", level: longest > limit * 0.95 ? "warn" : "ok", detail: "" };
 }
 
 export const UNIT_LABEL: Record<DistributionProviderCapabilitiesDto["textUnit"], string> = {
