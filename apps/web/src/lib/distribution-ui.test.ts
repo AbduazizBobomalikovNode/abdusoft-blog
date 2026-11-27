@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DISTRIBUTION_STATUS_LABELS, splitXThread, type DistributionAccountDto, type DistributionItemDto } from "@blog/shared";
-import { counterView, threadCounterView, groupChecks, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, purgeDistributionWarning, statusPill, textForSave, tokenLine, trashedItemActions, trashedVisibleItems } from "./distribution-ui";
+import { counterDetail, counterView, threadCounterView, groupChecks, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, purgeDistributionWarning, statusPill, textForSave, tokenLine, trashedItemActions, trashedVisibleItems } from "./distribution-ui";
 
 const item = (over: Partial<DistributionItemDto> = {}): DistributionItemDto => ({
   id: "i", postId: "p", provider: "x", status: "draft", text: null, sentText: null, imageChoice: "auto", linkMode: null, xThread: false, xThreadNumbering: false, threadPosted: 0, scheduledAt: null, nextAttemptAt: null,
@@ -163,5 +163,19 @@ describe("threadCounterView", () => {
   });
   it("empty text -> 0 ta tvit", () => {
     expect(threadCounterView(splitXThread(""))).toMatchObject({ label: "0 ta tvit" });
+  });
+});
+
+describe("counterDetail (the label under the textarea)", () => {
+  it("never leaves a lone unit word: characters show the remaining count", () => {
+    expect(counterDetail("characters", counterView("linkedin", "a".repeat(2877), 3000))).toBe("123 belgi qoldi");
+    expect(counterDetail("characters", counterView("linkedin", "a".repeat(3005), 3000))).toBe("5 belgi ortiqcha");
+    expect(counterDetail("characters", counterView("instagram", "a".repeat(2200), 2200))).toBe("0 belgi qoldi");
+  });
+  it("other units keep their explanation; no limit -> empty", () => {
+    expect(counterDetail("weighted", { remaining: 10 })).toContain("X hisobida");
+    expect(counterDetail("utf8_bytes", { remaining: 10 })).toContain("Threads hisobida");
+    expect(counterDetail("none", { remaining: null })).toBe("");
+    expect(counterDetail("characters", { remaining: null })).toBe("");
   });
 });

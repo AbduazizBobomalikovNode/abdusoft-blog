@@ -30,8 +30,8 @@ export function PreviewFrame({ label, children, testId }: { label: string; child
 export function ActionRow({ items, className }: { items: { icon: LucideIcon; label: string }[]; className?: string }) {
   return (
     <div className={cn("flex items-center gap-4 text-neutral-500 dark:text-neutral-400", className)} aria-hidden>
-      {items.map(({ icon: Icon, label }) => (
-        <span key={label} className="flex items-center gap-1 text-xs">
+      {items.map(({ icon: Icon, label }, i) => (
+        <span key={`${i}-${label}`} className="flex items-center gap-1 text-xs">
           <Icon className="size-4" strokeWidth={1.75} />
           {label ? <span>{label}</span> : null}
         </span>

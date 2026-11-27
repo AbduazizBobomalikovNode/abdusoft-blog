@@ -1,6 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { MessageCircle, Repeat2 } from "lucide-react";
+import { ActionRow } from "./parts";
 import { splitXThread } from "@blog/shared";
 import { SocialPreview, type SocialPreviewModel } from ".";
 
@@ -100,5 +102,15 @@ describe("SocialPreview", () => {
     const html = render({ provider: "x", text: "Oddiy", limit: 280, thread: null });
     expect(html).not.toContain("social-x-thread");
     expect(html).toContain("social-preview-x");
+  });
+});
+
+describe("ActionRow keys", () => {
+  it("does not emit duplicate-key warnings when several actions have empty labels", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    renderToStaticMarkup(createElement(ActionRow, { items: [{ icon: MessageCircle, label: "" }, { icon: Repeat2, label: "" }, { icon: MessageCircle, label: "" }] }));
+    const duplicate = spy.mock.calls.some((call) => String(call[0]).includes("same key"));
+    spy.mockRestore();
+    expect(duplicate).toBe(false);
   });
 });
