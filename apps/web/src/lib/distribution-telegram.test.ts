@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ChannelPlan, ResolvedChannelChoice } from "@blog/shared";
-import { createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
+import type { ChannelPlan, ChannelStatus, ResolvedChannelChoice } from "@blog/shared";
+import { absoluteTimeError, formatChannelAt, isoToLocalInput, planTiming, planWithDelay, planWithSendAt, telegramDotTone, telegramStatusLine, createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
 
 const choice = (over: Partial<ResolvedChannelChoice> = {}) =>
   ({ choice: { kind: "auto", mode: "media", variant: "m" }, label: "Rasmli · O'rtacha", mode: "media", visibleLength: 812, limit: 1024, passes: true, ...over }) as ResolvedChannelChoice;
@@ -71,5 +71,59 @@ describe("in-flight guard", () => {
     expect(g.tryEnter()).toBe(false);
     g.leave();
     expect(g.tryEnter()).toBe(true);
+  });
+});
+
+const AT = new Date(2026, 10, 28, 14, 30).toISOString();
+const NOW = new Date(2026, 10, 20, 9, 0);
+const status = (over: Partial<ChannelStatus> = {}): ChannelStatus => ({ state: "none", plan: null, sendAt: null, sentAt: null, messageIds: [], attempts: 0, ...over });
+
+describe("absolute channel time helpers", () => {
+  it("formats local date and time (year only when different)", () => {
+    expect(formatChannelAt(AT, NOW)).toBe("28.11 14:30");
+    expect(formatChannelAt(new Date(2027, 0, 5, 8, 5).toISOString(), NOW)).toBe("05.01.2027 08:05");
+    expect(formatChannelAt("nope", NOW)).toBe("—");
+  });
+  it("round-trips ISO <-> datetime-local", () => {
+    expect(isoToLocalInput(AT)).toBe("2026-11-28T14:30");
+    expect(isoToLocalInput(null)).toBe("");
+    expect(isoToLocalInput("x")).toBe("");
+  });
+  it("plan summary and line show the absolute time", () => {
+    const plan = { mode: "text", variant: "m", delayMinutes: 0, sendAt: AT } as ChannelPlan;
+    expect(telegramPlanLine(plan)).toContain("kanalga 28.11 14:30 da yuboriladi");
+    expect(telegramTabSummary({ choice: null, plan, sent: false }).plan).toContain("kanalga 28.11 14:30 da");
+    expect(telegramPlanLine({ mode: "text", variant: "m", delayMinutes: 15 } as ChannelPlan)).toBe("Telegram · saytga chiqqach 15 daq");
+  });
+  it("delay and sendAt exclude each other", () => {
+    const base = { mode: "text", variant: "m", delayMinutes: 30 } as ChannelPlan;
+    const abs = planWithSendAt(base, AT);
+    expect(abs).toMatchObject({ delayMinutes: 0, sendAt: AT });
+    const back = planWithDelay(abs, 60);
+    expect(back.sendAt).toBeUndefined();
+    expect("sendAt" in back).toBe(false);
+    expect(back.delayMinutes).toBe(60);
+    expect(planTiming(abs)).toEqual({ delayMinutes: 0, sendAt: AT });
+    expect(planTiming(base)).toEqual({ delayMinutes: 30 });
+  });
+  it("validates the time on the client", () => {
+    const local = (d: Date) => isoToLocalInput(d.toISOString());
+    expect(absoluteTimeError("", { now: NOW })).toBe("Vaqtni tanlang");
+    expect(absoluteTimeError(local(new Date(2026, 10, 19)), { now: NOW })).toBe("Vaqt kelajakda bo'lishi kerak");
+    expect(absoluteTimeError(local(new Date(2026, 10, 25)), { now: NOW, notBeforeLocal: local(new Date(2026, 10, 26)) })).toContain("saytga chiqishidan oldin");
+    expect(absoluteTimeError(local(new Date(2028, 0, 1)), { now: NOW })).toContain("365");
+    expect(absoluteTimeError(local(new Date(2026, 10, 28)), { now: NOW, notBeforeLocal: local(new Date(2026, 10, 26)) })).toBeNull();
+  });
+  it("status line and tab dot follow the server status", () => {
+    expect(telegramStatusLine(null)).toBe("Holat yuklanmoqda…");
+    expect(telegramStatusLine(status(), NOW)).toBe("Kanalga hali yuborilmagan");
+    expect(telegramStatusLine(status({ state: "planned", sendAt: AT, plan: { kind: "at", delayMinutes: null, attempts: 0 } }), NOW)).toBe("Kanalga 28.11 14:30 da yuboriladi");
+    expect(telegramStatusLine(status({ state: "planned", plan: { kind: "delay", delayMinutes: 15, attempts: 0 } }), NOW)).toContain("saytga chiqqach 15 daq");
+    expect(telegramStatusLine(status({ state: "sending" }), NOW)).toContain("yuborilmoqda");
+    expect(telegramStatusLine(status({ state: "sent", sentAt: AT }), NOW)).toBe("Kanalga yuborilgan · 28.11 14:30");
+    expect(telegramDotTone(null)).toBeNull();
+    expect(telegramDotTone(status())).toBeNull();
+    expect(telegramDotTone(status({ state: "planned" }))).toBe("planned");
+    expect(telegramDotTone(status({ state: "sent" }))).toBe("sent");
   });
 });

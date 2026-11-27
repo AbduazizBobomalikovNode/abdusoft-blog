@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import { splitXThread, type AdminPostStatus, DistributionChannelDto, DistributionChannelId, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId, DistributionVersionDto } from "@blog/shared";
+import { splitXThread, type AdminPostStatus, type ChannelStatus, DistributionChannelDto, DistributionChannelId, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId, DistributionVersionDto } from "@blog/shared";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -17,6 +17,7 @@ import {
   counterDetail, counterView, threadCounterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, statusPill, textForSave, tokenLine,
 } from "@/lib/distribution-ui";
 import { PLAN_STATE_LABEL, canPlanForPost, isWaitingPlan, planPhrase, planStateOf } from "@/lib/distribution-plan";
+import { telegramDotTone } from "@/lib/distribution-telegram";
 import { DelayPlanPicker } from "./delay-plan-picker";
 import { initialVersionId, isVersionDirty, markPrimary, removeVersion, replaceVersion, versionsOf, type VersionSaveState } from "@/lib/distribution-versions";
 import { DistributionVersionStrip } from "./distribution-version-strip";
@@ -32,6 +33,9 @@ function errMsg(e: unknown, fallback: string): string {
 }
 
 const STATUS_DOT: Record<string, string> = { sent: "bg-emerald-500", failed: "bg-destructive", needs_checking: "bg-amber-500", scheduled: "bg-sky-500", sending: "bg-sky-500", draft: "bg-muted-foreground", cancelled: "bg-muted-foreground/40" };
+
+const TELEGRAM_DOT: Record<"planned" | "sending" | "sent", string> = { planned: "bg-violet-500", sending: "bg-sky-500", sent: "bg-emerald-500" };
+const TELEGRAM_DOT_TITLE: Record<"planned" | "sending" | "sent", string> = { planned: "Telegram: kanalga yuborish rejalashtirilgan", sending: "Telegram: yuborilmoqda", sent: "Telegram: kanalga yuborilgan" };
 
 const selectClass = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 
@@ -467,6 +471,26 @@ export function DistributionDialog({ postId, open, onOpenChange, postStatus = "p
     return () => clearInterval(t);
   }, [open, data, load]);
 
+  // Telegram holati (faqat o'qish; `posts` + `telegram_refs`) — tarqatish jadvallariga bog'liq emas. Faqat Telegram paneli berilganda.
+  const [tgStatus, setTgStatus] = useState<ChannelStatus | null | undefined>(telegram ? null : undefined);
+  const loadTgStatus = useCallback(async () => {
+    setTgStatus(await adminApi.channelStatus(postId));
+  }, [postId]);
+  const hasTelegram = Boolean(telegram);
+  useEffect(() => {
+    if (!open || !hasTelegram) return;
+    adminApi.channelStatus(postId).then(setTgStatus).catch(() => undefined);
+  }, [open, hasTelegram, postId]);
+  // Kutayotgan/yuborilayotgan reja fonda bajariladi — ochiq dialog holatni yangilab turadi.
+  const tgActive = tgStatus?.state === "planned" || tgStatus?.state === "sending";
+  useEffect(() => {
+    if (!open || !hasTelegram || !tgActive) return;
+    const t = setInterval(() => void loadTgStatus().catch(() => undefined), 15000);
+    return () => clearInterval(t);
+  }, [open, hasTelegram, tgActive, loadTgStatus]);
+  const telegramInfo = telegram ? { ...telegram, status: tgStatus, onStatusRefresh: () => void loadTgStatus().catch(() => undefined) } : undefined;
+  const tgTone = telegramDotTone(tgStatus ?? null);
+
   const channel = data?.channels.find((c) => c.id === active);
   const itemFor = (id: string) => data?.distributions.find((d) => d.provider === id && ["draft", "scheduled", "sending", "failed", "needs_checking"].includes(d.status)) ?? data?.distributions.find((d) => d.provider === id && d.status === "sent") ?? null;
 
@@ -488,13 +512,13 @@ export function DistributionDialog({ postId, open, onOpenChange, postStatus = "p
                   <button key={c.id} type="button" role="tab" aria-selected={active === c.id} onClick={() => setActive(c.id)}
                     className={cn("flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium", active === c.id ? "bg-background shadow-sm" : "text-muted-foreground")}>
                     {c.name.replace(/ \(.*\)/, "")}
-                    <span className={cn("size-1.5 rounded-full", isWaitingPlan(it) ? "bg-violet-500" : it ? own(STATUS_DOT, it.status, "bg-muted-foreground") : c.ready ? "bg-muted-foreground/30" : "bg-transparent")} title={isWaitingPlan(it) ? "Reja: post chop etilishini kutmoqda" : undefined} data-testid={isWaitingPlan(it) ? "dist-tab-plan-dot" : undefined} />
+                    <span className={cn("size-1.5 rounded-full", c.id === "telegram" && tgTone ? TELEGRAM_DOT[tgTone] : isWaitingPlan(it) ? "bg-violet-500" : it ? own(STATUS_DOT, it.status, "bg-muted-foreground") : c.ready ? "bg-muted-foreground/30" : "bg-transparent")} title={c.id === "telegram" && tgTone ? TELEGRAM_DOT_TITLE[tgTone] : isWaitingPlan(it) ? "Reja: post chop etilishini kutmoqda" : undefined} data-testid={c.id === "telegram" && tgTone ? "dist-tab-telegram-dot" : isWaitingPlan(it) ? "dist-tab-plan-dot" : undefined} />
                   </button>
                 );
               })}
             </div>
             {channel?.readOnly && channel.id === "telegram" && telegram ? (
-              <DistributionTelegramPanel postId={postId} postStatus={postStatus} info={telegram} />
+              <DistributionTelegramPanel postId={postId} postStatus={postStatus} info={telegramInfo ?? telegram} />
             ) : channel ? <ChannelPanel key={`${channel.id}-${itemFor(channel.id)?.id ?? "new"}-${itemFor(channel.id)?.status ?? ""}-${postStatus}`} postId={postId} postStatus={postStatus} channel={channel} item={itemFor(channel.id)} initialVersions={data.versions ?? []} onChanged={load} /> : null}
           </>
         )}

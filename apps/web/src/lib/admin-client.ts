@@ -15,6 +15,7 @@ import type {
   BansListResponse,
   ChannelMode,
   ChannelPlan,
+  ChannelStatus,
   ChannelPreflightResponse,
   ChannelPreviewResponse,
   ChannelSelection,
@@ -458,6 +459,15 @@ export const adminApi = {
       method: "POST",
       ...jsonBody({ ...selection, replaceExisting }),
     }),
+
+  /** Faqat o'qish: Telegram holati (reja kechikish/aniq vaqt, yuborilgan vaqt, xabar id'lari). */
+  channelStatus: (postId: string) => adminJson<ChannelStatus>(`/admin/posts/${postId}/channel/status`),
+
+  /** Chop etilgan postni kanalga ANIQ vaqtda yuborishga rejalashtiradi (`sendAt` ISO). Tanlov berilmasa — yuborish paytidagi belgilangan versiya. */
+  channelSchedule: (postId: string, sendAt: string, selection?: ChannelSelection) =>
+    adminJson<unknown>(`/admin/posts/${postId}/channel/schedule`, { method: "PUT", ...jsonBody({ sendAt, ...(selection ?? {}) }) }),
+
+  channelScheduleCancel: (postId: string) => adminJson<unknown>(`/admin/posts/${postId}/channel/schedule`, { method: "DELETE" }),
 
   listChannelVersions: (postId: string) =>
     adminJson<ChannelVersionsResponse>(`/admin/posts/${postId}/channel/versions`),

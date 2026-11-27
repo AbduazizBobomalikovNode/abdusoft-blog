@@ -1,4 +1,4 @@
-import type { ChannelPlan, ChannelSelection } from "@blog/shared";
+import { CHANNEL_SEND_AT_MAX_DAYS, isAbsoluteChannelPlan, type ChannelPlan, type ChannelSelection } from "@blog/shared";
 import { computeChannelPreflight, summarizePreflightErrors } from "../../telegram/channel-preflight.js";
 import { loadVersion } from "../../telegram/channel-versions.js";
 import { resolveChoiceForSend } from "../../telegram/channel-choice.js";
@@ -6,10 +6,29 @@ import { fail, ok, type ServiceResult } from "./types.js";
 
 /** Klientdan kelgan rejadan `attempts` (server hisoblagichi)ni olib tashlaydi. */
 function cleanPlan(plan: ChannelPlan): ChannelPlan {
-  if (plan.useChoice) return { useChoice: true, delayMinutes: plan.delayMinutes };
+  // Aniq vaqt: ISO normallashtiriladi, kechikish doim 0 (ikkalasi bir-birini inkor etadi).
+  const timing = isAbsoluteChannelPlan(plan)
+    ? { delayMinutes: 0, sendAt: new Date(plan.sendAt).toISOString() }
+    : { delayMinutes: plan.delayMinutes };
+  if (plan.useChoice) return { useChoice: true, ...timing };
   return plan.versionId
-    ? { mode: plan.mode, versionId: plan.versionId, delayMinutes: plan.delayMinutes }
-    : { mode: plan.mode, variant: plan.variant, delayMinutes: plan.delayMinutes };
+    ? { mode: plan.mode, versionId: plan.versionId, ...timing }
+    : { mode: plan.mode, variant: plan.variant, ...timing };
+}
+
+/**
+ * Aniq vaqtli rejaning vaqtini tekshiradi (kechikishli rejada hech narsa qilmaydi).
+ * `notBefore` — vaqt shundan oldin bo'lmasin (chop etilgan post: hozir; rejalashtirilgan post: chop etilish vaqti).
+ * Eng ko'pi `CHANNEL_SEND_AT_MAX_DAYS` kun keyin. Xato matni yoki `null`.
+ */
+export function checkAbsoluteTime(plan: ChannelPlan, notBefore: Date, now: Date = new Date()): string | null {
+  if (!isAbsoluteChannelPlan(plan)) return null;
+  const at = new Date(plan.sendAt).getTime();
+  if (Number.isNaN(at)) return "Noto'g'ri yuborish vaqti";
+  if (at <= now.getTime()) return "Yuborish vaqti kelajakda bo'lishi kerak";
+  if (at < notBefore.getTime()) return "Kanalga yuborish vaqti post saytga chiqish vaqtidan oldin bo'lmasin";
+  if (at > now.getTime() + CHANNEL_SEND_AT_MAX_DAYS * 86_400_000) return `Yuborish vaqti ${CHANNEL_SEND_AT_MAX_DAYS} kundan uzoq bo'lmasin`;
+  return null;
 }
 
 /**

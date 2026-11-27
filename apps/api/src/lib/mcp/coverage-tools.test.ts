@@ -140,6 +140,54 @@ describe("channel versions, the marked choice and the channel plan", () => {
     expect((await ok("cancel_channel_plan", { id: created.id, expected_updated_at: cancelled.post.updatedAt })).alreadyInState).toBe(true);
   });
 
+  it("set_channel_plan send_at: exactly one of delay/send_at, scheduled needs send_at >= publish time, published needs a future time; cancel clears", async () => {
+    const created = (await ok("create_post_draft", { title: "Aniq vaqt", content_markdown: "## Salom\n\nBu aniq vaqtli reja uchun yetarlicha uzun matn. ".repeat(6) })).post;
+    const publishAt = new Date(Date.now() + 2 * 3_600_000).toISOString();
+    const row = async () => (await db.select().from(s.posts).where(eq(s.posts.id, created.id)))[0]!;
+    // draft: rad etiladi
+    expect((await call("set_channel_plan", { id: created.id, expected_updated_at: created.updatedAt, send_at: new Date(Date.now() + 3 * 3_600_000).toISOString(), mode: "text", variant: "m" })).json.error.code).toBe("conflict");
+    const sched = (await ok("schedule_post", { id: created.id, expected_updated_at: created.updatedAt, scheduled_at: publishAt })).post;
+    // ikkalasi yoki hech biri
+    expect((await call("set_channel_plan", { id: created.id, expected_updated_at: sched.updatedAt, mode: "text", variant: "m" })).isError).toBe(true);
+    expect((await call("set_channel_plan", { id: created.id, expected_updated_at: sched.updatedAt, delay_minutes: 5, send_at: new Date(Date.now() + 3 * 3_600_000).toISOString(), mode: "text", variant: "m" })).isError).toBe(true);
+    // chop etilishdan oldingi vaqt
+    const early = await call("set_channel_plan", { id: created.id, expected_updated_at: sched.updatedAt, send_at: new Date(Date.now() + 3_600_000).toISOString(), mode: "text", variant: "m" });
+    expect(early.isError).toBe(true);
+    const dryEarly = await ok("set_channel_plan", { id: created.id, expected_updated_at: sched.updatedAt, send_at: new Date(Date.now() + 3_600_000).toISOString(), mode: "text", variant: "m", dry_run: true });
+    expect(dryEarly.canPlan).toBe(false);
+    expect((await row()).channelPlan).toBeNull();
+    const sendAt = new Date(Date.now() + 3 * 3_600_000).toISOString();
+    const set = await ok("set_channel_plan", { id: created.id, expected_updated_at: sched.updatedAt, send_at: sendAt, mode: "text", variant: "m" });
+    expect(set.summary).toContain(sendAt);
+    expect((await row()).channelPlan).toMatchObject({ mode: "text", variant: "m", delayMinutes: 0, sendAt });
+    const cancelled = await ok("cancel_channel_plan", { id: created.id, expected_updated_at: set.post.updatedAt });
+    expect(cancelled.summary).toMatch(/cancelled/);
+    expect((await row()).channelPlan).toBeNull();
+  });
+
+  it("set_channel_plan send_at on a PUBLISHED post sets channel_send_at; past/over-a-year refused; cancel clears; nothing is sent now", async () => {
+    const post = await publishedPost("Chop etilgan aniq vaqt");
+    await settle();
+    await fetch(`${mock.url}/__calls`, { method: "DELETE" });
+    const row = async () => (await db.select().from(s.posts).where(eq(s.posts.id, post.id)))[0]!;
+    const past = await call("set_channel_plan", { id: post.id, expected_updated_at: (await ok("get_post", { id: post.id })).post.updatedAt, send_at: new Date(Date.now() - 60_000).toISOString(), mode: "text", variant: "m" });
+    expect(past.isError).toBe(true);
+    const far = await call("set_channel_plan", { id: post.id, expected_updated_at: (await ok("get_post", { id: post.id })).post.updatedAt, send_at: new Date(Date.now() + 400 * 86_400_000).toISOString(), mode: "text", variant: "m" });
+    expect(far.isError).toBe(true);
+    const sendAt = new Date(Date.now() + 3_600_000).toISOString();
+    const set = await ok("set_channel_plan", { id: post.id, expected_updated_at: (await ok("get_post", { id: post.id })).post.updatedAt, send_at: sendAt, mode: "text", variant: "m" });
+    expect((await row()).channelSendAt?.toISOString()).toBe(sendAt);
+    expect((await row()).channelPlan).toMatchObject({ sendAt, delayMinutes: 0 });
+    const detail = (await ok("get_post", { id: post.id })).post;
+    expect(detail.channel.plan.sendAt).toBe(sendAt);
+    expect(detail.channel.sendAt).toBe(sendAt);
+    expect((await calls()).filter((m) => m === "sendMessage" || m === "sendPhoto")).toHaveLength(0);
+    const cancelled = await ok("cancel_channel_plan", { id: post.id, expected_updated_at: set.post.updatedAt });
+    expect(cancelled.summary).toMatch(/cancelled/);
+    expect((await row()).channelSendAt).toBeNull();
+    expect((await row()).channelPlan).toBeNull();
+  });
+
   it("resync_channel_caption does nothing for an unsent post; refresh_telegraph_mirror touches Telegraph only, never the channel", async () => {
     const post = await publishedPost("Ko'zgu yangilash");
     await settle();

@@ -6,6 +6,13 @@
 
 ### O'zbekcha
 
+**Telegram: aniq vaqtda yuborish («Aniq vaqt») va yagona holat**
+- Telegram rejasi endi boshqa tarmoqlar kabi «Saytga chiqqach | Aniq vaqt» tanlovi bilan: tanlangan vaqtda kanalga yuboriladi. Yuborishni mavjud ishchi (`runDueChannelSends`) bajaradi — yangi supurgi yo'q; yuborish paytida Telegram cheklovlari qayta tekshiriladi va ikki marta yuborilmaydi. Additiv: migratsiya yo'q (`channel_plan` jsonb'iga ixtiyoriy `sendAt`, `delayMinutes` bu holda 0)
+- Qoidalar: chop etilgan postda vaqt kelajakda va ko'pi bilan 1 yil; rejalashtirilgan postda vaqt post saytga chiqishidan oldin bo'lmasligi kerak (chop etilganda saqlanadi, kech qolsa darhol yuboriladi); qoralama/ko'rib chiqishda faqat «Rejalashtirish» bilan birga tekshiriladi. Qo'lda chop etish kelajakdagi aniq vaqtli rejani SAQLAYDI (kechikishli reja avvalgidek bekor), chop etishdan chiqarish rejani tozalaydi (o'zgarmagan). Allaqachon kanalga yuborilgan postga reja qo'yilmaydi (rad), hozir yuborilayotganida o'zgartirib bo'lmaydi
+- API: `PUT|DELETE /admin/posts/:id/channel/schedule` (chop etilgan post; `{ sendAt, mode?+variant? | versionId? | useChoice? }`), `GET /admin/posts/:id/channel/status` (faqat o'qish: reja turi, vaqt, yuborilgan vaqt, xabar id'lari; `DISTRIBUTION_ENABLED`ga bog'liq emas). `POST /schedule` va `PATCH` rejasi `sendAt`ni qabul qiladi
+- Veb: Telegram panelida «Aniq vaqt» (datetime-local, holat qatori «Kanalga 28.11 14:30 da yuboriladi», «Bekor qilish»); chop etilgan postda alohida «Kanalga yuborish · aniq vaqt» bloki; yorliq nuqtasi va holat qatori serverdagi holatdan. «Nashr» kartasidagi Telegram xulosasi aniq vaqtni ko'rsatadi
+- Claude: `set_channel_plan` endi `send_at` (yoki `delay_minutes`, bittasi) ham qabul qiladi va chop etilgan postda ishlaydi; `cancel_channel_plan` chop etilgan postda ham. Ruxsat o'zgarmagan (`channels:send`)
+
 **Hujjat: tarqatish holati**
 - LinkedIn, Threads, Instagram va GitHub README haqiqiy hisobda tekshirilgan (2026-11); X, X zanjiri va «saytga chiqqach» rejasi hali haqiqiy akkauntda sinalmagan
 
@@ -48,6 +55,13 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Telegram: exact-time send ("Aniq vaqt") and one status**
+- The Telegram plan now has the same "After the site goes live | Exact time" choice as the other networks: the post is sent to the channel at the chosen time. The existing worker (`runDueChannelSends`) does the sending - no new sweeper; Telegram limits are re-checked at send time and a post is never sent twice. Additive: no migration (optional `sendAt` inside the `channel_plan` jsonb, `delayMinutes` is 0 then)
+- Rules: on a published post the time must be in the future and at most 1 year ahead; on a scheduled post it must not be earlier than the publish time (kept on publish; if the scheduler was late it is sent right away); drafts / in-review posts are validated together with "Schedule". Manual publish KEEPS a future exact-time plan (delay plans are still dropped as before); unpublish clears the plan (unchanged). A post already sent to the channel is refused, and a plan cannot be changed while its send is running
+- API: `PUT|DELETE /admin/posts/:id/channel/schedule` (published post; `{ sendAt, mode?+variant? | versionId? | useChoice? }`), `GET /admin/posts/:id/channel/status` (read-only: plan kind, time, sent time, message ids; independent of `DISTRIBUTION_ENABLED`). The `POST /schedule` and `PATCH` plan accept `sendAt`
+- Web: "Aniq vaqt" in the Telegram panel (datetime-local, status line "Kanalga 28.11 14:30 da yuboriladi", cancel); a separate "exact time" block on published posts; the tab dot and status line come from the server status. The Telegram summary in the Publish card shows the exact time
+- Claude: `set_channel_plan` now also takes `send_at` (exactly one of it and `delay_minutes`) and works on published posts; `cancel_channel_plan` too. Permission unchanged (`channels:send`)
 
 **Docs: distribution status**
 - LinkedIn, Threads, Instagram and GitHub README are verified on real accounts (2026-11); X, X threads and the "after the site goes live" plan are not yet exercised against a real account

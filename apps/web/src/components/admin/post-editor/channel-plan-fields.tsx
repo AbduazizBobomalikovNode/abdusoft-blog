@@ -23,6 +23,8 @@ import { AdminApiError, adminApi } from "@/lib/admin-client";
 import { cn } from "cn";
 import { ChannelChecklistSummary } from "./channel-checklist";
 import { MODE_OPTIONS, TelegramPreviewCard, VARIANT_LABELS, VARIANTS_BY_MODE } from "./channel-preview";
+import { isAbsoluteChannelPlan } from "@blog/shared";
+import { formatChannelAt, planTiming, planWithDelay, planWithSendAt } from "@/lib/distribution-telegram";
 import { DelayPlanPicker } from "./delay-plan-picker";
 
 const MONTHS = ["yan", "fev", "mar", "apr", "may", "iyn", "iyl", "avg", "sen", "okt", "noy", "dek"];
@@ -44,7 +46,9 @@ export function channelPlanSummary(
   const valid = site && !Number.isNaN(site.getTime());
   const channelAt = valid ? new Date(site.getTime() + plan.delayMinutes * 60_000) : null;
   const pad = (n: number) => String(n).padStart(2, "0");
-  const channelText = channelAt
+  const channelText = isAbsoluteChannelPlan(plan)
+    ? formatChannelAt(plan.sendAt)
+    : channelAt
     ? channelAt.toDateString() === site!.toDateString()
       ? `${pad(channelAt.getHours())}:${pad(channelAt.getMinutes())}`
       : formatShort(channelAt)
@@ -162,6 +166,8 @@ export interface ChannelPlanFieldsProps {
   onBlockingChange?: (blocked: boolean) => void;
   /** Muharrirdagi JORIY belgilangan versiya (dialogda o'zgarsa yangilanadi); berilmasa serverdan olinadi. */
   markedChoice?: ResolvedChannelChoice | null;
+  /** Ixtiyoriy: `true` bo'lsa "Saytga chiqqach | Aniq vaqt" tanlovi chiqadi (Tarqatish dialogi). Aniq vaqtli reja bo'lsa — baribir ko'rsatiladi. */
+  allowAbsolute?: boolean;
 }
 
 /**
@@ -169,7 +175,7 @@ export interface ChannelPlanFieldsProps {
  * kechikish va faqat o'qish uchun Telegram ko'rinishi (dialogdagi preview
  * komponenti qayta ishlatiladi).
  */
-export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, onBlockingChange, markedChoice: markedProp }: ChannelPlanFieldsProps) {
+export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, onBlockingChange, markedChoice: markedProp, allowAbsolute = false }: ChannelPlanFieldsProps) {
   const [channelHandle, setChannelHandle] = useState<string | null>(null);
   /** `null` — hali tekshirilmagan. */
   const [telegramReady, setTelegramReady] = useState<boolean | null>(null);
@@ -211,20 +217,20 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
   function handleChoiceSelect(selected: string) {
     if (!value) return;
     if (selected === "choice") {
-      onChange({ useChoice: true, delayMinutes: value.delayMinutes });
+      onChange({ useChoice: true, ...planTiming(value) });
       return;
     }
     if (selected === "auto") {
       onChange({
         mode: value.mode ?? (canUseMedia === false ? "text" : "media"),
         variant: value.variant ?? "m",
-        delayMinutes: value.delayMinutes,
+        ...planTiming(value),
       });
       return;
     }
     const version = versions.find((v) => v.id === selected);
     if (!version) return;
-    onChange({ mode: version.mode, versionId: version.id, delayMinutes: value.delayMinutes });
+    onChange({ mode: version.mode, versionId: version.id, ...planTiming(value) });
   }
 
   async function handleToggle(on: boolean) {
@@ -390,7 +396,20 @@ export function ChannelPlanFields({ postId, value, onChange, scheduledAtLocal, o
           </>
           ) : null}
 
-          <DelayPlanPicker value={value.delayMinutes} onChange={(minutes) => patch({ delayMinutes: minutes })} testId="channel-plan-delay" />
+          <DelayPlanPicker
+            value={value.delayMinutes}
+            onChange={(minutes) => onChange(planWithDelay(value, minutes))}
+            testId="channel-plan-delay"
+            absolute={
+              allowAbsolute || isAbsoluteChannelPlan(value)
+                ? {
+                    sendAt: isAbsoluteChannelPlan(value) ? value.sendAt : null,
+                    onChange: (iso) => onChange(iso ? planWithSendAt(value, iso) : planWithDelay(value, 0)),
+                    minLocal: scheduledAtLocal || undefined,
+                  }
+                : undefined
+            }
+          />
 
           <p className="text-xs leading-relaxed break-words text-muted-foreground">
             {channelPlanSummary(value, scheduledAtLocal, versions.find((v) => v.id === value.versionId)?.name, markedChoice?.label ?? null)}

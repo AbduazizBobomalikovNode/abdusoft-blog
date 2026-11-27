@@ -16,7 +16,7 @@ import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { actorMayTouchChannel } from "./channel-guard.js";
 import { announceUpdated } from "./effects.js";
 import { resolveMainVideo } from "./main-video.js";
-import { preparePlan } from "./plan.js";
+import { checkAbsoluteTime, preparePlan } from "./plan.js";
 import { shouldSnapshotForUpdate, snapshotPost, type RevisionReason } from "./revisions.js";
 import { checkCanEdit, checkExpectedUpdatedAt, loadPost, postLabel, resolveSettings, type PostRow } from "./shared.js";
 import { fail, ok, type Actor, type ServiceResult } from "./types.js";
@@ -282,6 +282,12 @@ export async function updatePost(
     } else {
       if (post.status !== "scheduled") {
         return fail("conflict", "Kanal rejasi faqat rejalashtirilgan postga o'rnatiladi");
+      }
+      // Aniq vaqt: kanal vaqti (yangi yoki mavjud) rejalashtirilgan chop etish vaqtidan oldin bo'lmasin.
+      const effectiveScheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : post.scheduledAt;
+      if (effectiveScheduledAt) {
+        const timeError = checkAbsoluteTime(data.channelPlan, effectiveScheduledAt);
+        if (timeError) return fail("bad_request", timeError);
       }
       const prepared = await preparePlan(id, data.channelPlan);
       if (!prepared.ok) return prepared;

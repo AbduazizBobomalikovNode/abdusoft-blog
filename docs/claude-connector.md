@@ -173,7 +173,7 @@ Ruxsatlar guruhlangan (**O'qish / Yozish / Chop etish / Xavfli amallar**). `MCP_
 | `update_channel_version` | `channels:prepare` | D, I | Nom, matn (`text_html`), rasmlar, rejim. `expected_version_updated_at` majburiy. Versiyani kutilayotgan kanal rejasi yuboradigan bo'lsa (to'g'ridan-to'g'ri yoki belgilangan versiya sifatida) — `channels:send`siz `conflict` |
 | `delete_channel_version` | `channels:prepare` | D | Versiyani o'chirish (rejada to'g'ridan-to'g'ri ishlatilsa rad etiladi). Belgilangan versiyani o'chirish belgini bo'shatadi: kutilayotgan reja belgidan foydalansa (`use_marked`) — `channels:send`siz `conflict`. `expected_version_updated_at` majburiy |
 | `set_channel_choice` / `clear_channel_choice` | `channels:prepare` | I | Postda yuboriladigan versiyani belgilash/olib tashlash (yuborilmaydi; lekin rejada `use_marked` bo'lsa belgini o'zgartirish `channels:send`siz `conflict` bilan rad etiladi). `expected_updated_at` majburiy |
-| `set_channel_plan` / `cancel_channel_plan` | `channels:send` | D, I / I | Rejalashtirilgan postga "chop etilgandan N daqiqa keyin kanalga yubor" rejasi; `dry_run`. `expected_updated_at` majburiy |
+| `set_channel_plan` / `cancel_channel_plan` | `channels:send` | D, I / I | "Chop etilgandan N daqiqa keyin" (`delay_minutes`, rejalashtirilgan post) YOKI aniq vaqt (`send_at`, rejalashtirilgan yoki chop etilgan post) kanalga yuborish rejasi; `dry_run`. `expected_updated_at` majburiy |
 | `resync_channel_caption` | `channels:send` | D, I | Kanaldagi MAVJUD xabar matnini postdan qayta qurish; `dry_run` |
 | `refresh_telegraph_mirror` | `posts:publish` | I | Chop etilgan postning Telegraph sahifasini yangilash; kanal xabariga TEGMAYDI |
 | `lift_comment_ban` | `comments:moderate` | I | Blokni olib tashlash |
@@ -443,7 +443,7 @@ The **consent page** lets you tick each permission individually (grouped Reading
 | `update_channel_version` | `channels:prepare` | D, I | name, text (`text_html`), images, mode; (refused with `conflict` without `channels:send` when a scheduled channel plan will send this version, directly or as the marked version) `expected_version_updated_at` required |
 | `delete_channel_version` | `channels:prepare` | D | delete a version (refused while a plan uses it directly; deleting the MARKED version while a scheduled plan uses the mark needs `channels:send`, otherwise `conflict`, because the mark would be cleared and the public send would silently fall back to the default text); `expected_version_updated_at` required |
 | `set_channel_choice` / `clear_channel_choice` | `channels:prepare` | I | mark / unmark the version a post is sent (refused without `channels:send` when a scheduled plan uses the mark) with (nothing is sent); `expected_updated_at` required |
-| `set_channel_plan` / `cancel_channel_plan` | `channels:send` | D, I / I | "send N minutes after publishing" plan for a scheduled post; `dry_run`; `expected_updated_at` required |
+| `set_channel_plan` / `cancel_channel_plan` | `channels:send` | D, I / I | "send N minutes after publishing" (`delay_minutes`, scheduled post) OR an exact time (`send_at`, scheduled or published post) channel-send plan; `dry_run`; `expected_updated_at` required |
 | `resync_channel_caption` | `channels:send` | D, I | rebuild the text of the EXISTING channel message from the post; `dry_run` |
 | `refresh_telegraph_mirror` | `posts:publish` | I | refresh a published post's Telegraph page; never touches the channel message |
 | `lift_comment_ban` | `comments:moderate` | I | lift a ban |

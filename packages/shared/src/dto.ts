@@ -273,8 +273,18 @@ export const ChannelPlanSchema = z
     versionId: z.string().uuid().optional(),
     /** `true` — yuborish paytidagi JORIY belgilangan versiya (`posts.channel_choice`) ishlatiladi. */
     useChoice: z.boolean().optional(),
+    /** `sendAt` bo'lsa ahamiyatsiz va `0` bo'lishi shart (kechikish va aniq vaqt bir-birini inkor etadi). */
     delayMinutes: z.number().int().min(0).max(10080),
+    /**
+     * ABSOLUT yuborish vaqti (ISO, UTC): bo'lsa reja "saytga chiqqach N daqiqa" emas, aynan shu paytda yuboriladi.
+     * `delayMinutes` bu holda `0`. Eski mijozlar uchun qo'shimcha maydon (ixtiyoriy).
+     */
+    sendAt: z.string().datetime({ offset: true }).optional(),
     attempts: z.number().int().min(0).max(100).optional(),
+  })
+  .refine((plan) => plan.sendAt === undefined || plan.delayMinutes === 0, {
+    message: "Aniq vaqt bilan kechikish birga bo'lmaydi",
+    path: ["sendAt"],
   })
   .refine(
     (plan) =>
@@ -286,6 +296,15 @@ export const ChannelPlanSchema = z
     },
   );
 export type ChannelPlan = z.infer<typeof ChannelPlanSchema>;
+
+/** Aniq vaqtga (ABSOLUT) mo'ljallangan reja (`sendAt` bor) — `delayMinutes` bu holda ishlatilmaydi. */
+export function isAbsoluteChannelPlan(plan: Pick<ChannelPlan, "sendAt"> | null | undefined): plan is Pick<ChannelPlan, "sendAt"> & { sendAt: string } {
+  return typeof plan?.sendAt === "string";
+}
+
+/** Aniq vaqt eng ko'pi bilan shuncha kun keyinga qo'yiladi. */
+export const CHANNEL_SEND_AT_MAX_DAYS = 365;
+
 
 /** Yuborish/ko'rish tanlovi: avtomatik `{mode, variant}` yoki maxsus `{versionId}`. */
 export const ChannelAutoSelectionSchema = z
@@ -481,6 +500,33 @@ export const ExpectedUpdatedAtBodySchema = z.object({
   expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
 });
 export type ExpectedUpdatedAtBody = z.infer<typeof ExpectedUpdatedAtBodySchema>;
+
+/**
+ * `PUT /admin/posts/:id/channel/schedule` — CHOP ETILGAN postni kanalga aniq vaqtda yuborishga rejalashtirish.
+ * Tanlov berilmasa — yuborish paytidagi joriy belgi (`useChoice`).
+ */
+export const ChannelScheduleBodySchema = z.object({
+  sendAt: z.string().datetime({ offset: true }),
+  mode: ChannelModeSchema.optional(),
+  variant: ChannelVariantSchema.optional(),
+  versionId: z.string().uuid().optional(),
+  useChoice: z.boolean().optional(),
+  expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
+});
+export type ChannelScheduleBody = z.infer<typeof ChannelScheduleBodySchema>;
+
+/** `GET /admin/posts/:id/channel/status` — faqat o'qish uchun Telegram holati (posts + telegram_refs). */
+export const ChannelStatusSchema = z.object({
+  /** none — reja ham yuborish ham yo'q; planned — kutmoqda; sending — hozir yuborilmoqda; sent — yuborilgan. */
+  state: z.enum(["none", "planned", "sending", "sent"]),
+  plan: z.object({ kind: z.enum(["delay", "at"]), delayMinutes: z.number().int().nullable(), attempts: z.number().int() }).nullable(),
+  /** Rejalashtirilgan yuborish vaqti (ISO) — faqat kutayotgan reja uchun. */
+  sendAt: z.string().nullable(),
+  sentAt: z.string().nullable(),
+  messageIds: z.array(z.number()),
+  attempts: z.number().int(),
+});
+export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
 
 /** `409` javobi: post boshqa joyda o'zgargan — joriy `updatedAt`, kim va qaysi kanaldan oxirgi marta o'zgartirgani. */
 export const PostConflictResponseSchema = z.object({

@@ -8,10 +8,10 @@ import { createStaffInviteAudited, removeStaffMemberAudited, revokeStaffInviteAu
 import { saveSettingsAudited, updateSiteSettings } from "../../site-admin.js";
 import { SettingsValidationError, getSettings } from "../../settings.js";
 import { loadSiteSettings } from "../../site-settings.js";
-import { updatePost } from "../../posts/index.js";
+import { cancelChannelSend, scheduleChannelSend, updatePost } from "../../posts/index.js";
 import { postHasChannelMessage } from "../../posts/channel-guard.js";
 import { previewChannelPost } from "../../../telegram/channel-actions.js";
-import { preparePlan } from "../../posts/plan.js";
+import { checkAbsoluteTime, preparePlan } from "../../posts/plan.js";
 import { loadVersion } from "../../../telegram/channel-versions.js";
 import { telegramHtmlToDoc, validateRestrictedDoc } from "../../../telegram/channel-html.js";
 import { channelSendImpact, clearChannelChoiceAudited, createChannelVersionAudited, deleteChannelVersionAudited, resyncChannelCaptionAudited, setChannelChoiceAudited, updateChannelVersionAudited } from "../../../telegram/channel-admin.js";
@@ -221,15 +221,20 @@ export const clearChannelChoiceTool = defineTool({
 
 export const setChannelPlanTool = defineTool({
   name: "set_channel_plan",
-  title: "Plan the channel send of a scheduled post",
+  title: "Plan the channel send of a post",
   description:
-    U + "For a post that is SCHEDULED: plan that it is sent to the Telegram channel delay_minutes after it is published (use the marked version with use_marked=true, or mode+variant, or version_id). The Telegram preflight must pass. Nothing is sent now; the server sends it automatically after publishing, so this is a public action later. dry_run=true only reports the preflight. Cancel with cancel_channel_plan. expected_updated_at is REQUIRED.",
+    U + "Plan a Telegram channel send in ONE of two ways. (1) delay_minutes: for a SCHEDULED post, send delay_minutes after it is published. " +
+    "(2) send_at (ISO 8601 with timezone, e.g. 2026-12-01T14:30:00+05:00): send at that exact time. For a PUBLISHED post send_at must be in the future (max 1 year) and the post must not already be sent to the channel; " +
+    "for a SCHEDULED post send_at must not be earlier than its publish time (a manual publish keeps a future send_at). Drafts / in-review posts are refused: schedule them first with schedule_post. " +
+    "Give exactly one of delay_minutes / send_at. What is sent: the marked version (use_marked=true, default), or mode+variant, or version_id. The Telegram preflight must pass (it also runs again at send time). " +
+    "Nothing is sent now; the server sends it automatically at the due time, so this is a public action later. dry_run=true only reports the preflight. Cancel with cancel_channel_plan. expected_updated_at is REQUIRED.",
   scope: "channels:send",
   limit: "channel",
   inputSchema: {
     id: postId,
     expected_updated_at: expectedUpdatedAtField,
-    delay_minutes: z.number().int().min(0).max(10080).describe("Minutes after publishing (0-10080)."),
+    delay_minutes: z.number().int().min(0).max(10080).optional().describe("Minutes after publishing (0-10080) - scheduled posts only. Mutually exclusive with send_at."),
+    send_at: z.string().datetime({ offset: true }).optional().describe("Exact send time, ISO 8601 with timezone/offset. Mutually exclusive with delay_minutes."),
     use_marked: z.boolean().optional().describe("Use the version marked on the post at send time (default when no other choice is given)."),
     ...selection,
     dry_run: dryRunField,
@@ -239,27 +244,39 @@ export const setChannelPlanTool = defineTool({
   async handler(args, ctx) {
     const post = await livePost(args.id);
     await assertFreshToken(post, args.expected_updated_at);
-    if (post.status !== "scheduled") throw new ToolError("conflict", "A channel plan can only be set on a scheduled post.", "Schedule it first with schedule_post.");
+    const absolute = args.send_at !== undefined;
+    if (absolute === (args.delay_minutes !== undefined)) throw new ToolError("invalid_input", "Give exactly one of delay_minutes or send_at.");
+    const timing = absolute ? { delayMinutes: 0, sendAt: new Date(args.send_at!).toISOString() } : { delayMinutes: args.delay_minutes! };
+    if (absolute ? post.status !== "scheduled" && post.status !== "published" : post.status !== "scheduled") {
+      throw new ToolError("conflict", absolute ? "send_at works on a scheduled or published post." : "A delay plan can only be set on a scheduled post.", "Schedule it first with schedule_post.");
+    }
     let plan: ChannelPlan;
     if (args.version_id || args.mode || args.variant) {
       const c = choiceFrom(args);
-      plan = c.kind === "version" ? { versionId: c.versionId, delayMinutes: args.delay_minutes } : { mode: c.mode, variant: c.variant, delayMinutes: args.delay_minutes };
+      plan = c.kind === "version" ? { versionId: c.versionId, ...timing } : { mode: c.mode, variant: c.variant, ...timing };
     } else {
-      plan = { useChoice: true, delayMinutes: args.delay_minutes };
+      plan = { useChoice: true, ...timing };
     }
     if (args.dry_run) {
-      const prepared = await preparePlan(post.id, plan);
-      return { data: { ok: true, dryRun: true, summary: prepared.ok ? "Dry run: the plan passes the Telegram checks." : "Dry run: the plan would be refused.", canPlan: prepared.ok, ...(prepared.ok ? {} : { refusedBecause: prepared.error.message }), post: postBlock(post), ...untrusted(["post.title", "refusedBecause"]) } };
+      const timeError = absolute ? checkAbsoluteTime(plan, post.status === "scheduled" && post.scheduledAt ? post.scheduledAt : new Date()) : null;
+      const prepared = timeError ? null : await preparePlan(post.id, plan);
+      const refused = timeError ?? (prepared && !prepared.ok ? prepared.error.message : null);
+      return { data: { ok: true, dryRun: true, summary: refused ? "Dry run: the plan would be refused." : "Dry run: the plan passes the Telegram checks.", canPlan: !refused, ...(refused ? { refusedBecause: refused } : {}), post: postBlock(post), ...untrusted(["post.title", "refusedBecause"]) } };
     }
-    await unwrapPost(await updatePost(ctx.actor, post.id, { channelPlan: plan, expectedUpdatedAt: args.expected_updated_at }, { audit: { action: "post.channel_plan_set", summary: "Kanalga yuborish rejasi o'rnatildi", meta: { delayMinutes: args.delay_minutes } } }), post.id);
-    return { data: { ok: true, summary: `The post will be sent to the channel ${args.delay_minutes} minute(s) after it is published.`, post: postBlock((await loadPostAnyState(post.id)) ?? post), ...untrusted(["post.title"]) } };
+    if (post.status === "published") {
+      await unwrapPost(await scheduleChannelSend(ctx.actor, post.id, { plan, expectedUpdatedAt: args.expected_updated_at }), post.id);
+    } else {
+      await unwrapPost(await updatePost(ctx.actor, post.id, { channelPlan: plan, expectedUpdatedAt: args.expected_updated_at }, { audit: { action: "post.channel_plan_set", summary: "Kanalga yuborish rejasi o'rnatildi", meta: absolute ? { sendAt: timing.sendAt } : { delayMinutes: args.delay_minutes } } }), post.id);
+    }
+    const summary = absolute ? `The post will be sent to the channel at ${timing.sendAt}.` : `The post will be sent to the channel ${args.delay_minutes} minute(s) after it is published.`;
+    return { data: { ok: true, summary, post: postBlock((await loadPostAnyState(post.id)) ?? post), ...untrusted(["post.title"]) } };
   },
 });
 
 export const cancelChannelPlanTool = defineTool({
   name: "cancel_channel_plan",
   title: "Cancel a planned channel send",
-  description: "Remove the planned Telegram channel send of a scheduled post. The schedule itself stays. Nothing is sent or deleted. expected_updated_at is REQUIRED.",
+  description: "Remove the planned Telegram channel send of a post (a delay plan on a scheduled post, or an exact-time send_at plan on a scheduled or published post). A schedule itself stays. Nothing is sent or deleted; refused while the send is running right now. expected_updated_at is REQUIRED.",
   scope: "channels:send",
   limit: "channel",
   inputSchema: { id: postId, expected_updated_at: expectedUpdatedAtField },
@@ -269,7 +286,11 @@ export const cancelChannelPlanTool = defineTool({
     const post = await livePost(args.id);
     await assertFreshToken(post, args.expected_updated_at);
     if (post.channelPlan == null) return { data: { ok: true, alreadyInState: true, summary: "There was no channel plan; nothing was changed.", post: postBlock(post), ...untrusted(["post.title"]) } };
-    await unwrapPost(await updatePost(ctx.actor, post.id, { channelPlan: null, expectedUpdatedAt: args.expected_updated_at }, { audit: { action: "post.channel_plan_clear", summary: "Kanalga yuborish rejasi olib tashlandi" } }), post.id);
+    if (post.status === "published") {
+      await unwrapPost(await cancelChannelSend(ctx.actor, post.id, { expectedUpdatedAt: args.expected_updated_at }), post.id);
+    } else {
+      await unwrapPost(await updatePost(ctx.actor, post.id, { channelPlan: null, expectedUpdatedAt: args.expected_updated_at }, { audit: { action: "post.channel_plan_clear", summary: "Kanalga yuborish rejasi olib tashlandi" } }), post.id);
+    }
     return { data: { ok: true, summary: "The channel plan was cancelled.", post: postBlock((await loadPostAnyState(post.id)) ?? post), ...untrusted(["post.title"]) } };
   },
 });

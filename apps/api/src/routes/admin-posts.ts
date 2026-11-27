@@ -2,6 +2,8 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import {
   ChannelPreviewRequestSchema,
+  ChannelScheduleBodySchema,
+  ChannelPlanSchema,
   ChannelSelectionSchema,
   ChannelSendRequestSchema,
   CreateChannelVersionBodySchema,
@@ -22,6 +24,8 @@ import {
   approvePost,
   archivePost,
   authorizeEdit,
+  cancelChannelSend,
+  scheduleChannelSend,
   createPost,
   findPost,
   getPostDetail,
@@ -57,6 +61,7 @@ import {
   updateChannelVersionAudited,
 } from "../telegram/channel-admin.js";
 import { previewChannelPost, queueChannelSend, sendToChannelAudited } from "../telegram/channel-actions.js";
+import { getChannelStatus } from "../lib/posts/channel-status.js";
 import { listChannelVersions } from "../telegram/channel-version-service.js";
 import { getTelegramRefForPost, refreshTelegraphMirror } from "../telegram/publish.js";
 import { errorResponse } from "./service-response.js";
@@ -352,6 +357,38 @@ export const adminPostsRoute = new Hono()
       return c.json({ error: "Bu uzunlik ushbu rejim uchun mos emas" }, 400);
     }
     return c.json(result.preflight);
+  })
+  .get("/:id/channel/status", async (c) => {
+    const post = await loadPostOr404(c.req.param("id"));
+    if (!post) return c.json({ error: "Topilmadi" }, 404);
+    const forbidden = guardChannelPrep(c, post, "read");
+    if (forbidden) return forbidden;
+    return c.json(await getChannelStatus(post));
+  })
+  .put("/:id/channel/schedule", async (c) => {
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const body = await c.req.json().catch(() => null);
+    const parsed = ChannelScheduleBodySchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi", issues: parsed.error.issues }, 400);
+    const { expectedUpdatedAt, ...selection } = parsed.data;
+    const hasSelection = selection.useChoice !== undefined || selection.mode !== undefined || selection.variant !== undefined || selection.versionId !== undefined;
+    const plan = ChannelPlanSchema.safeParse({ ...(hasSelection ? selection : { sendAt: selection.sendAt, useChoice: true }), delayMinutes: 0 });
+    if (!plan.success) return c.json({ error: "Noto'g'ri kanal rejasi", issues: plan.error.issues }, 400);
+    const result = await scheduleChannelSend(actor, c.req.param("id"), { plan: plan.data, expectedUpdatedAt });
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
+  })
+  .delete("/:id/channel/schedule", async (c) => {
+    const actor = actorOf(c);
+    const denied = requireAdminActor(actor);
+    if (denied) return errorResponse(c, denied.error);
+    const expected = await readExpectedUpdatedAt(c);
+    if ("response" in expected) return expected.response;
+    const result = await cancelChannelSend(actor, c.req.param("id"), expected);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.data);
   })
   .get("/:id/channel/versions", async (c) => {
     const post = await loadPostOr404(c.req.param("id"));
