@@ -525,6 +525,8 @@ export const ChannelStatusSchema = z.object({
   sentAt: z.string().nullable(),
   messageIds: z.array(z.number()),
   attempts: z.number().int(),
+  /** Oxirgi muvaffaqiyatsiz yuborish urinishi (qisqa, tozalangan matn); muvaffaqiyatli yuborishda `null`. */
+  lastError: z.object({ message: z.string(), at: z.string().nullable() }).nullable().default(null),
 });
 export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
 

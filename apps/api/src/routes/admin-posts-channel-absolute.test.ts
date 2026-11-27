@@ -200,7 +200,7 @@ describe("absolute channel time: scheduled posts", () => {
     expect(((await loadPost(id)).channelPlan as { sendAt?: string }).sendAt).toBeTruthy();
   });
 
-  it("manual publish keeps a FUTURE absolute plan (queued for sendAt) but still wipes a delay plan", async () => {
+  it("manual publish keeps a FUTURE absolute plan (queued for sendAt) and now materialises a delay plan from the publish time", async () => {
     const abs = await createPost({ withMedia: false });
     const sendAt = inH(5);
     await schedule(abs, { mode: "text", variant: "m", delayMinutes: 0, sendAt }, inH(1));
@@ -212,10 +212,15 @@ describe("absolute channel time: scheduled posts", () => {
 
     const delayed = await createPost({ withMedia: false });
     await schedule(delayed, { mode: "text", variant: "m", delayMinutes: 30 }, inH(1));
+    const before = Date.now();
     await send("POST", `/admin/posts/${delayed}/publish`, admin.cookie);
-    const wiped = await loadPost(delayed);
-    expect(wiped.channelPlan).toBeNull();
-    expect(wiped.channelSendAt).toBeNull();
+    const armed = await loadPost(delayed);
+    expect(armed.channelPlan).toMatchObject({ delayMinutes: 30 });
+    expect(armed.channelSendAt!.getTime()).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(armed.channelSendAt!.getTime()).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
+    // Keyingi testlarga ta'sir qilmasligi uchun navbatni tozalaymiz.
+    await db.update(posts).set({ channelPlan: null, channelSendAt: null }).where(eq(posts.id, delayed));
+    await db.update(posts).set({ channelPlan: null, channelSendAt: null }).where(eq(posts.id, abs));
 
     // O'tib ketgan aniq vaqt (masalan rejalashtirish uzoq kutgan) — darhol yuborilmaydi, reja bekor.
     const stale = await createPost({ withMedia: false });
@@ -225,13 +230,13 @@ describe("absolute channel time: scheduled posts", () => {
     expect((await loadPost(stale)).channelPlan).toBeNull();
   });
 
-  it("unpublish clears an absolute plan", async () => {
+  it("unpublish KEEPS an absolute plan (send_at removed from the queue)", async () => {
     const id = await createPost({ withMedia: false });
     await schedule(id, { mode: "text", variant: "m", delayMinutes: 0, sendAt: inH(5) }, inH(1));
     await send("POST", `/admin/posts/${id}/publish`, admin.cookie);
     expect((await send("POST", `/admin/posts/${id}/unpublish`, admin.cookie)).status).toBe(200);
     const row = await loadPost(id);
-    expect(row.channelPlan).toBeNull();
+    expect((row.channelPlan as { sendAt?: string }).sendAt).toBeTruthy();
     expect(row.channelSendAt).toBeNull();
   });
 });
@@ -326,12 +331,12 @@ describe("absolute channel time: published posts (PUT/DELETE /channel/schedule)"
     expect((await send("DELETE", `/admin/posts/${id}/channel/schedule`, admin.cookie)).status).toBe(200);
   });
 
-  it("unpublish clears the plan and a sweep afterwards sends nothing", async () => {
+  it("unpublish keeps the plan (no queued time) and a sweep afterwards sends nothing", async () => {
     const id = await publishedPost();
     await putSchedule(id, { sendAt: inH(2), mode: "text", variant: "m" });
     expect((await send("POST", `/admin/posts/${id}/unpublish`, admin.cookie)).status).toBe(200);
     const row = await loadPost(id);
-    expect(row.channelPlan).toBeNull();
+    expect(row.channelPlan).not.toBeNull();
     expect(row.channelSendAt).toBeNull();
     await runDueChannelSends(new Date(Date.now() + 5 * HOUR));
     expect(await wasSent(id)).toBe(false);

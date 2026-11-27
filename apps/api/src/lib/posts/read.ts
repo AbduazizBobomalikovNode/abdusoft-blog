@@ -227,6 +227,7 @@ async function buildDetail(post: PostRow) {
     scheduledAt: post.scheduledAt?.toISOString() ?? null,
     channelPlan: parseStoredPlan(post.channelPlan),
     channelSendAt: post.channelSendAt?.toISOString() ?? null,
+    channelLastError: post.channelLastError ? { message: post.channelLastError, at: post.channelLastErrorAt?.toISOString() ?? null } : null,
     channelChoice: await resolveChannelChoice(post),
     pinned: post.pinned,
     settings,

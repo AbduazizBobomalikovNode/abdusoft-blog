@@ -8,6 +8,7 @@ import { recordAudit, type AuditEntry } from "../audit.js";
 import { actorMayTouchChannel, CHANNEL_REMOVAL_REFUSED, postHasChannelMessage } from "./channel-guard.js";
 import { announcePublished, announceUnpublished } from "./effects.js";
 import { checkAbsoluteTime, preparePlan } from "./plan.js";
+import { planPatchOnPublish } from "./publish-plan.js";
 import { snapshotPost, type RevisionReason } from "./revisions.js";
 import {
   loadPost,
@@ -134,6 +135,8 @@ async function executePublish(
   args: PublishArgs,
   guard?: TransitionSpec["guard"],
 ): Promise<ServiceResult<PostRow>> {
+  // Kanalga allaqachon yuborilganmi — chop etish yangilanishidan OLDIN aniqlanadi (reja `status` bilan bir yangilanishda hisoblanadi).
+  const alreadySent = await channelAlreadySent(id);
   const result = await transition(actor, id, {
     guard,
     revision: "publish",
@@ -142,6 +145,8 @@ async function executePublish(
       args.kind === "approve" ? "tasdiqlandi va chop etildi" : "chop etildi",
     ),
     buildPatch: (post, now) => {
+      // Telegram rejasi (har qanday chop etish yo'li): `planPatchOnPublish` — kechikish chop etilgan vaqtdan, aniq vaqt saqlanadi.
+      const planPatch = planPatchOnPublish({ stored: post.channelPlan, kind: args.kind, wasPublished: post.status === "published", alreadySent, now });
       switch (args.kind) {
         case "approve":
           return {
@@ -150,33 +155,12 @@ async function executePublish(
             reviewedBy: args.reviewerId ?? null,
             reviewedAt: now,
             reviewNote: null,
+            ...planPatch,
           };
-        case "scheduled": {
-          const plan = ChannelPlanSchema.safeParse(post.channelPlan);
-          return {
-            status: "published",
-            publishedAt: now,
-            scheduledAt: null,
-            // Kanal rejasi bor bo'lsa — chop etilgan vaqt + kechikish.
-            // Aniq vaqtli reja o'z vaqtini saqlaydi (kech chop etilgan bo'lsa — darhol yuboriladi); kechikishli — chop etilgan vaqt + kechikish.
-            ...(plan.success
-              ? {
-                  channelPlan: { ...plan.data, attempts: 0 },
-                  channelSendAt: isAbsoluteChannelPlan(plan.data)
-                    ? new Date(Math.max(new Date(plan.data.sendAt).getTime(), now.getTime()))
-                    : new Date(now.getTime() + plan.data.delayMinutes * 60_000),
-                }
-              : { channelPlan: null, channelSendAt: null }),
-          };
-        }
+        case "scheduled":
+          return { status: "published", publishedAt: now, scheduledAt: null, ...planPatch };
         default:
-          return {
-            status: "published",
-            publishedAt: post.publishedAt ?? now,
-            // Qo'lda chop etilsa — "saytga chiqqach N daqiqa" rejasi bekor (kanalga yuborish qo'lda). Hali kelajakdagi ANIQ VAQTLI reja
-            // saqlanadi va shu vaqtga navbatga qo'yiladi; o'tib ketgan aniq vaqtli reja bekor (kutilmagan darhol yuborishdan saqlanish uchun).
-            ...(post.status === "scheduled" ? manualPublishPlanPatch(post.channelPlan, now) : {}),
-          };
+          return { status: "published", publishedAt: post.publishedAt ?? now, ...planPatch };
       }
     },
   }, { expectedUpdatedAt: args.expectedUpdatedAt });
@@ -184,14 +168,6 @@ async function executePublish(
 
   await announcePublished(result.data.after, { skipChannel: !actorMayTouchChannel(actor) });
   return ok(result.data.after);
-}
-
-function manualPublishPlanPatch(stored: unknown, now: Date): PostPatch {
-  const plan = ChannelPlanSchema.safeParse(stored);
-  if (plan.success && isAbsoluteChannelPlan(plan.data) && new Date(plan.data.sendAt).getTime() > now.getTime()) {
-    return { channelPlan: { ...plan.data, attempts: 0 }, channelSendAt: new Date(plan.data.sendAt) };
-  }
-  return { channelPlan: null, channelSendAt: null };
 }
 
 /** `POST /admin/posts/:id/publish` — holatidan qat'i nazar chop etadi (eski xatti-harakat saqlangan). */
@@ -277,7 +253,9 @@ export function unpublishPost(actor: Actor, id: string, opts: ConcurrencyOptions
   return leavePublished(
     actor,
     id,
-    () => ({ status: "draft", channelPlan: null, channelSendAt: null }),
+    // Telegram rejasi SAQLANADI (boshqa kanallar kabi), faqat navbat vaqti olinadi: qayta chop etilganda qayta hisoblanadi.
+    // Yuborilayotgan (claim qilingan) yuborishga tegilmaydi — ishchi o'zi tugatadi yoki `not_published` bilan to'xtaydi.
+    () => ({ status: "draft", channelSendAt: null }),
     statusChange("post.unpublish", "qoralamaga qaytarildi"),
     "unpublish",
     opts,
@@ -288,11 +266,17 @@ export function archivePost(actor: Actor, id: string, opts: ConcurrencyOptions =
   return leavePublished(
     actor,
     id,
+    // Arxiv — deyarli yakuniy holat: Telegram rejasi tozalanadi (qoralamaga qaytarilsa reja qayta qo'yiladi).
     () => ({ status: "archived", channelPlan: null, channelSendAt: null }),
     statusChange("post.archive", "arxivlandi"),
     "archive",
     opts,
   );
+}
+
+/** Saqlangan (qayta rejalashtirishda) aniq vaqtli reja yangi chop etish vaqtidan oldin bo'lsa `true` (kechikishli rejada doim `false`). */
+function keptAbsoluteTooEarly(plan: ChannelPlan, scheduledAt: Date): boolean {
+  return isAbsoluteChannelPlan(plan) && new Date(plan.sendAt).getTime() < scheduledAt.getTime();
 }
 
 export interface ScheduleInput extends ConcurrencyOptions {
@@ -314,7 +298,12 @@ export async function schedulePost(
   if (Number.isNaN(scheduledAt.getTime())) return fail("bad_request", "Noto'g'ri sana");
 
   let storedPlan: ChannelPlan | null = null;
-  if (input.channelPlan) {
+  if (input.channelPlan === undefined) {
+    // Reja berilmagan (masalan MCP `schedule_post`) — qoralamaga qaytarilganda saqlangan Telegram rejasi YO'QOLMAYDI.
+    // Saqlangan aniq vaqt yangi chop etish vaqtidan oldin bo'lsa (yoki yaroqsiz bo'lsa) — olib tashlanadi.
+    const kept = ChannelPlanSchema.safeParse(post.channelPlan);
+    if (kept.success && !keptAbsoluteTooEarly(kept.data, scheduledAt)) storedPlan = kept.data;
+  } else if (input.channelPlan) {
     // Aniq vaqt: kanal vaqti post saytga chiqishidan oldin bo'lmasin (qoralamada ham shu yerda — rejalashtirishda — tekshiriladi).
     const timeError = checkAbsoluteTime(input.channelPlan, scheduledAt);
     if (timeError) return fail("bad_request", timeError);
@@ -436,7 +425,8 @@ export async function cancelChannelSend(actor: Actor, id: string, opts: Concurre
       entityId: after.id,
       summary: `Kanalga yuborish rejasi bekor qilindi: ${postLabel(after)}`,
     }),
-    buildPatch: () => ({ channelPlan: null, channelSendAt: null }),
+    // Reja bekor qilinishi = oxirgi (muvaffaqiyatsiz) urinish xatosini ham ko'rib chiqilgan deb hisoblaymiz.
+    buildPatch: () => ({ channelPlan: null, channelSendAt: null, channelLastError: null, channelLastErrorAt: null }),
   }, opts);
   return result.ok ? ok(toLifecycleSummary(result.data.after)) : result;
 }

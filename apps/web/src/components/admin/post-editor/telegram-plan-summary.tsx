@@ -2,7 +2,7 @@
 
 import type { ChannelPlan, ResolvedChannelChoice } from "@blog/shared";
 import { Button } from "@/components/ui/button";
-import { telegramPlanLine } from "@/lib/distribution-telegram";
+import { TELEGRAM_PLAN_NOTE, telegramPlanLine } from "@/lib/distribution-telegram";
 import { ChannelChecklistSummary } from "./channel-checklist";
 import { channelPlanSummary, useChannelPlanMedia, useChannelPlanPreflight } from "./channel-plan-fields";
 
@@ -19,6 +19,7 @@ export function TelegramPlanSummary({ postId, plan, scheduledAtLocal, markedChoi
       <p className="text-xs font-medium">Telegram kanal rejasi</p>
       <p className="text-xs text-muted-foreground">{telegramPlanLine(plan)}</p>
       {plan ? <p className="text-xs leading-relaxed break-words text-muted-foreground">{channelPlanSummary(plan, scheduledAtLocal, null, markedChoice?.label ?? null)}</p> : null}
+      {plan ? <p className="text-xs leading-relaxed text-muted-foreground" data-testid="telegram-plan-note">{TELEGRAM_PLAN_NOTE}</p> : null}
       {plan && checking && !planPreflight ? <p className="text-xs text-muted-foreground">Telegram cheklovlari tekshirilmoqda…</p> : null}
       {plan && planPreflight ? <ChannelChecklistSummary preflight={planPreflight} /> : null}
       <div>

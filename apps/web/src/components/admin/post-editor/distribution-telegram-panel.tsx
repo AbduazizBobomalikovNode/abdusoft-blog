@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { ExternalLink } from "lucide-react";
 import type { AdminPostStatus, ChannelPlan, ChannelStatus, ResolvedChannelChoice } from "@blog/shared";
 import { Button } from "@/components/ui/button";
-import { FLUSH_SAVED_HINT, sendGate, telegramStatusLine, telegramPanelMode, telegramPlanEditable, telegramPlanStorageHint, telegramTabSummary } from "@/lib/distribution-telegram";
+import { FLUSH_SAVED_HINT, sendGate, telegramErrorLine, telegramStatusLine, telegramPanelMode, telegramPlanEditable, telegramPlanStorageHint, telegramTabSummary } from "@/lib/distribution-telegram";
 import { ChannelPlanFields } from "./channel-plan-fields";
 import { TelegramPreviewCard } from "./channel-preview";
 import { toSelection, useChannelSend } from "./channel-send-controller";
@@ -46,6 +46,7 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
 
   const summary = telegramTabSummary({ choice: info.choice, plan: info.plan, sent: info.sent });
   const sendMode = mode === "send";
+  const errorLine = info.status ? telegramErrorLine(info.status) : null;
   const planEditable = telegramPlanEditable(postStatus) && Boolean(info.onPlanChange);
 
   // Saqlash (flush) + yuborish `handleSend` ichida, sinxron qo'riqchi bilan: ikki marta bosish ikki yuborish bermaydi.
@@ -72,6 +73,7 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
             <a href={info.sentUrl} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 underline">Postni ochish <ExternalLink className="size-3" /></a>
           ) : null}
         </p>
+        {errorLine ? <p className="text-xs break-words text-red-700 dark:text-red-400" data-testid="dist-telegram-last-error">{errorLine}</p> : null}
 
         <ChannelVersionStep c={c} />
 

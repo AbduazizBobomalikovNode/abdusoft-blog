@@ -8,6 +8,8 @@ import { parseStoredPlan, type PostRow } from "./shared.js";
  * Faqat o'qish uchun Telegram holati (`posts` + `telegram_refs`dan; tarqatish jadvallariga tegmaydi, `DISTRIBUTION_ENABLED`ga bog'liq emas).
  * Holat: reja bor + `channel_send_at` bor = planned; reja bor, `channel_send_at` yo'q (chop etilgan) = ishchi hozir yuboryapti;
  * yuborilgan (`channel_sent_at`) = sent (kutayotgan reja bo'lsa ham planned ustun — masalan "qayta yuborish" rejasi).
+ * Chop etilmagan postda (qoralama, ko'rib chiqishda, rejalashtirilgan — shu jumladan qoralamaga qaytarilgan) saqlangan reja = planned
+ * (post chiqqach vaqti hisoblanadi). `lastError` — oxirgi muvaffaqiyatsiz urinish (muvaffaqiyatli yuborishda tozalanadi).
  */
 export async function getChannelStatus(post: PostRow): Promise<ChannelStatus> {
   const [ref] = await db
@@ -21,13 +23,15 @@ export async function getChannelStatus(post: PostRow): Promise<ChannelStatus> {
   const hasPlan = plan !== null || post.channelPlan != null;
   const queued = hasPlan && post.channelSendAt != null;
   const inFlight = hasPlan && post.channelSendAt == null && post.status === "published";
-  const state: ChannelStatus["state"] = queued ? "planned" : inFlight ? "sending" : sentAt ? "sent" : post.status === "scheduled" && hasPlan ? "planned" : "none";
+  const unpublishedPlan = hasPlan && post.status !== "published" && post.status !== "archived";
+  const state: ChannelStatus["state"] = queued ? "planned" : inFlight ? "sending" : sentAt ? "sent" : unpublishedPlan ? "planned" : "none";
   return {
     state,
     plan: plan ? { kind: isAbsoluteChannelPlan(plan) ? "at" : "delay", delayMinutes: isAbsoluteChannelPlan(plan) ? null : plan.delayMinutes, attempts: plan.attempts ?? 0 } : null,
-    sendAt: queued ? post.channelSendAt!.toISOString() : plan && isAbsoluteChannelPlan(plan) && post.status === "scheduled" ? plan.sendAt : null,
+    sendAt: queued ? post.channelSendAt!.toISOString() : plan && isAbsoluteChannelPlan(plan) && unpublishedPlan ? plan.sendAt : null,
     sentAt,
     messageIds,
     attempts: plan?.attempts ?? 0,
+    lastError: post.channelLastError ? { message: post.channelLastError, at: post.channelLastErrorAt?.toISOString() ?? null } : null,
   };
 }

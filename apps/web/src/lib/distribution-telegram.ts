@@ -38,10 +38,16 @@ export function telegramPlanEditable(postStatus: AdminPostStatus | string): bool
   return canPlanForPost(postStatus);
 }
 
-/** Reja qayerda saqlanishi haqida bir qatorli izoh: rejalashtirilgan postda avtosaqlash, aks holda "Rejalashtirish" bosilganda. */
+/**
+ * Reja qayerda saqlanishi haqida bir qatorli izoh: chop etilmagan postda (qoralama / ko'rib chiqishda / rejalashtirilgan) reja avtomatik
+ * saqlanadi va post HAR SAFAR chop etilganda (qo'lda ham) o'sha paytdan hisoblanadi; qoralamaga qaytarilsa reja saqlanib qoladi.
+ */
 export function telegramPlanStorageHint(postStatus: AdminPostStatus | string): string {
-  return postStatus === "scheduled" ? "Reja avtomatik saqlanadi." : "Reja post rejalashtirilganda («Nashr» kartasi) saqlanadi.";
+  return canPlanForPost(postStatus) ? `Reja avtomatik saqlanadi. ${TELEGRAM_PLAN_NOTE}` : "";
 }
+
+/** Reja qachon bajarilishi haqida qisqa tushuntirish (Telegram paneli va "Nashr" kartasi). */
+export const TELEGRAM_PLAN_NOTE = "Post har safar chop etilganda (qo'lda ham, rejalashtirilgan ham) kechikish o'sha paytdan hisoblanadi; qoralamaga qaytarilsa reja saqlanib qoladi. Arxivlansa reja o'chadi.";
 
 /** Oldindan ko'rish hech qachon bo'sh qolmasligi uchun: belgi bo'lmasa — standart ko'rinish (rasm bo'lsa 🖼/m, aks holda 📝/m). */
 export function telegramDefaultSelection(canUseMedia: boolean | null): ChannelSelection {
@@ -127,9 +133,19 @@ export function canEditSendAt(status: ChannelStatus | null): boolean {
   return status !== null && status.state !== "sending" && status.state !== "sent" && status.sentAt === null;
 }
 
-/** Yorliq nuqtasi uchun Telegram holati: `null` — reja ham, yuborish ham yo'q (nuqta avvalgidek). */
-export function telegramDotTone(status: ChannelStatus | null): "planned" | "sending" | "sent" | null {
-  if (!status || status.state === "none") return null;
+/** Oxirgi muvaffaqiyatsiz urinish qatori (xato yo'q — `null`). Xato matni serverda tozalangan; qayta urinish kutilsa shu haqida ham aytiladi. */
+export function telegramErrorLine(status: ChannelStatus | null, now: Date = new Date()): string | null {
+  const err = status?.lastError;
+  if (!status || !err) return null;
+  const when = err.at ? ` (${formatChannelAt(err.at, now)})` : "";
+  const retry = status.state === "planned" || status.state === "sending" ? " — qayta uriniladi" : "";
+  return `Oxirgi urinish muvaffaqiyatsiz${when}: ${err.message}${retry}`;
+}
+
+/** Yorliq nuqtasi uchun Telegram holati: `null` — reja ham, yuborish ham yo'q (nuqta avvalgidek). `failed` — oxirgi urinish xato va kutayotgan narsa yo'q. */
+export function telegramDotTone(status: ChannelStatus | null): "planned" | "sending" | "sent" | "failed" | null {
+  if (!status) return null;
+  if (status.state === "none") return status.lastError ? "failed" : null;
   if (status.sentAt && status.state === "planned") return "sent";
   return status.state;
 }

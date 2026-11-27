@@ -124,11 +124,15 @@ describe("channel versions, the marked choice and the channel plan", () => {
     await ok("clear_channel_choice", { id: post.id, expected_updated_at: (await ok("get_post", { id: post.id })).post.updatedAt });
   });
 
-  it("plans and cancels a channel send for a scheduled post; dry run changes nothing; a draft is refused", async () => {
+  it("plans and cancels a channel send for a scheduled post; dry run changes nothing; a draft keeps a plan too", async () => {
     const created = (await ok("create_post_draft", { title: "Rejali", content_markdown: "## Salom\n\nBu rejalashtirilgan post uchun yetarlicha uzun matn. ".repeat(6) })).post;
     const when = new Date(Date.now() + 3_600_000).toISOString();
-    expect((await call("set_channel_plan", { id: created.id, expected_updated_at: created.updatedAt, delay_minutes: 5, mode: "text", variant: "m" })).json.error.code).toBe("conflict");
-    const sched = (await ok("schedule_post", { id: created.id, expected_updated_at: created.updatedAt, scheduled_at: when })).post;
+    // Qoralamaga ham reja qo'yiladi (post chiqqach hisoblanadi); schedule_post reja bermasa uni YO'QOTMAYDI.
+    const onDraft = await ok("set_channel_plan", { id: created.id, expected_updated_at: created.updatedAt, delay_minutes: 5, mode: "text", variant: "m" });
+    expect((await db.select().from(s.posts).where(eq(s.posts.id, created.id)))[0]!.channelPlan).toMatchObject({ delayMinutes: 5 });
+    const sched = (await ok("schedule_post", { id: created.id, expected_updated_at: onDraft.post.updatedAt, scheduled_at: when })).post;
+    expect((await db.select().from(s.posts).where(eq(s.posts.id, created.id)))[0]!.channelPlan).toMatchObject({ delayMinutes: 5 });
+    await db.update(s.posts).set({ channelPlan: null }).where(eq(s.posts.id, created.id));
     const dry = await ok("set_channel_plan", { id: created.id, expected_updated_at: sched.updatedAt, delay_minutes: 5, mode: "text", variant: "m", dry_run: true });
     expect(dry.canPlan).toBe(true);
     expect((await db.select().from(s.posts).where(eq(s.posts.id, created.id)))[0]!.channelPlan).toBeNull();
@@ -144,8 +148,8 @@ describe("channel versions, the marked choice and the channel plan", () => {
     const created = (await ok("create_post_draft", { title: "Aniq vaqt", content_markdown: "## Salom\n\nBu aniq vaqtli reja uchun yetarlicha uzun matn. ".repeat(6) })).post;
     const publishAt = new Date(Date.now() + 2 * 3_600_000).toISOString();
     const row = async () => (await db.select().from(s.posts).where(eq(s.posts.id, created.id)))[0]!;
-    // draft: rad etiladi
-    expect((await call("set_channel_plan", { id: created.id, expected_updated_at: created.updatedAt, send_at: new Date(Date.now() + 3 * 3_600_000).toISOString(), mode: "text", variant: "m" })).json.error.code).toBe("conflict");
+    // draft: kelajakdagi vaqt qabul qilinadi, o'tgan vaqt rad etiladi
+    expect((await call("set_channel_plan", { id: created.id, expected_updated_at: created.updatedAt, send_at: new Date(Date.now() - 3_600_000).toISOString(), mode: "text", variant: "m" })).isError).toBe(true);
     const sched = (await ok("schedule_post", { id: created.id, expected_updated_at: created.updatedAt, scheduled_at: publishAt })).post;
     // ikkalasi yoki hech biri
     expect((await call("set_channel_plan", { id: created.id, expected_updated_at: sched.updatedAt, mode: "text", variant: "m" })).isError).toBe(true);
@@ -186,6 +190,23 @@ describe("channel versions, the marked choice and the channel plan", () => {
     expect(cancelled.summary).toMatch(/cancelled/);
     expect((await row()).channelSendAt).toBeNull();
     expect((await row()).channelPlan).toBeNull();
+  });
+
+  it("get_post exposes the last channel send error (and null when there is none); the plan survives unpublish_post", async () => {
+    const post = await publishedPost("Oxirgi xato");
+    await settle();
+    expect((await ok("get_post", { id: post.id })).post.channel.lastError).toBeNull();
+    const at = new Date();
+    await db.update(s.posts).set({ channelLastError: "Telegram cheklovlari: matn juda uzun", channelLastErrorAt: at }).where(eq(s.posts.id, post.id));
+    expect((await ok("get_post", { id: post.id })).post.channel.lastError).toEqual({ message: "Telegram cheklovlari: matn juda uzun", at: at.toISOString() });
+
+    const sendAt = new Date(Date.now() + 3_600_000).toISOString();
+    const set = await ok("set_channel_plan", { id: post.id, expected_updated_at: (await ok("get_post", { id: post.id })).post.updatedAt, send_at: sendAt, mode: "text", variant: "m" });
+    const off = await ok("unpublish_post", { id: post.id, expected_updated_at: set.post.updatedAt });
+    expect(off.post.status ?? "draft").toBe("draft");
+    const detail = (await ok("get_post", { id: post.id })).post;
+    expect(detail.channel.plan.sendAt).toBe(sendAt);
+    expect(detail.channel.sendAt).toBeNull();
   });
 
   it("set_channel_plan dry_run on a published post applies the same refusals as the real call (already sent, in flight)", async () => {

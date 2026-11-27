@@ -169,6 +169,13 @@
       "when": 1795792176845,
       "tag": "0023_distribution_x_thread",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795809600104,
+      "tag": "0024_telegram_last_error",
+      "breakpoints": true
     }
   ]
 }

@@ -531,6 +531,7 @@ export const publishPostTool = defineTool({
     "It refuses when the pre-publish checks BLOCK (default title or empty body) and returns the warnings (missing cover, tags, alt text, slug) with the result. " +
     "The Telegraph mirror page (if enabled for the post) is created or refreshed on publishing with or without the channels:send permission. Optional send_to_channel=true also sends the post's marked Telegram version to the channel after publishing; this needs the channels:send permission and a version marked in the web panel. " +
     "dry_run=true reports exactly what would happen (checks, channel preflight) and changes nothing. Posts in review must be approved with approve_post instead. " +
+    "A saved Telegram channel plan is armed when the post goes live: a delay plan sends delay_minutes after THIS publish (also on a first manual publish and after an unpublish/re-publish); a future exact send_at is kept, a send_at already in the past is dropped (no surprise send). If the post was already sent to the channel, the plan is cleared instead (no second send). " +
     "expected_updated_at is REQUIRED. Already published is reported as such, nothing is repeated. Reversible with unpublish_post.",
   scope: "posts:publish",
   limit: "publish",
@@ -688,6 +689,7 @@ export const unpublishPostTool = defineTool({
   title: "Take a post offline",
   description:
     "Take a post off the public site and return it to DRAFT (also cancels a schedule and brings an archived post back as a draft). Its content, tags and history are kept. A published post that was sent to the Telegram channel also loses that channel message (it is DELETED, as in the web panel): this needs the channels:send permission, without it the call is refused. The Telegraph mirror page is not removed. " +
+    "A saved Telegram channel plan is KEPT (only its queued send time is removed) and is recalculated when the post is published again; a send already running right now is not interrupted (it finishes, or stops because the post is no longer published). Archiving, in contrast, clears the plan. " +
     "Already a draft is reported as such. Undo by publishing again. expected_updated_at is REQUIRED.",
   scope: "posts:publish",
   limit: "edit",
@@ -708,7 +710,7 @@ export const archivePostTool = defineTool({
   title: "Archive a post",
   description:
     "Archive a post: it leaves the public site (status archived) but is kept with all content and history, and can be brought back with unpublish_post (as draft). If a published post was sent to the Telegram channel, that channel message is DELETED (as in the web panel): this needs the channels:send permission, without it the call is refused. The Telegraph mirror page is not removed. " +
-    "Already archived is reported as such. expected_updated_at is REQUIRED.",
+    "Archive also CLEARS any saved Telegram channel plan (unpublish keeps it). Already archived is reported as such. expected_updated_at is REQUIRED.",
   scope: "posts:publish",
   limit: "edit",
   inputSchema: { id: postId, expected_updated_at: expectedUpdatedAtField },
