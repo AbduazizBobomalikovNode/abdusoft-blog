@@ -1,0 +1,1 @@
+ALTER TABLE "posts" ADD COLUMN "main_video" jsonb;

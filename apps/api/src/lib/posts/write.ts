@@ -15,6 +15,7 @@ import { validatePanelDocument } from "../content/validate.js";
 import { recordAudit, recordAuditCoalesced } from "../audit.js";
 import { actorMayTouchChannel } from "./channel-guard.js";
 import { announceUpdated } from "./effects.js";
+import { resolveMainVideo } from "./main-video.js";
 import { preparePlan } from "./plan.js";
 import { shouldSnapshotForUpdate, snapshotPost, type RevisionReason } from "./revisions.js";
 import { checkCanEdit, checkExpectedUpdatedAt, loadPost, postLabel, resolveSettings, type PostRow } from "./shared.js";
@@ -256,6 +257,15 @@ export async function updatePost(
   }
 
   if (data.coverUrl !== undefined) update.coverUrl = data.coverUrl;
+  if (data.mainVideoJobId !== undefined) {
+    if (data.mainVideoJobId === null) {
+      update.mainVideo = null;
+    } else {
+      const video = await resolveMainVideo(data.mainVideoJobId, id);
+      if (!video.ok) return video;
+      update.mainVideo = video.data;
+    }
+  }
   if (data.pinned !== undefined) update.pinned = data.pinned;
   if (data.scheduledAt !== undefined) {
     update.scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;

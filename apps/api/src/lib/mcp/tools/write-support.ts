@@ -7,6 +7,7 @@ import { postRevisions, posts } from "../../../db/schema.js";
 import { tagsForPostIds } from "../../../routes/posts.js";
 import { authorNamesForIds, type PostRow } from "../../posts/shared.js";
 import type { ServiceFailure, ServiceResult } from "../../posts/types.js";
+import { parseStoredMainVideo } from "../../posts/main-video.js";
 import { ToolError, type ToolErrorCode } from "./types.js";
 import type { ServiceErrorKind } from "../../posts/types.js";
 
@@ -36,8 +37,9 @@ export function publicUrlFor(slug: string): string {
 }
 
 /** Barqaror, ixcham natija bloki — yangi `updatedAt` (keyingi chaqiruv tokeni), holat va havolalar. Kontent HECH QACHON qaytarilmaydi. */
-export function postBlock(post: Pick<PostRow, "id" | "slug" | "title" | "status" | "updatedAt" | "scheduledAt" | "deletedAt">): Record<string, unknown> {
+export function postBlock(post: Pick<PostRow, "id" | "slug" | "title" | "status" | "updatedAt" | "scheduledAt" | "deletedAt"> & { mainVideo?: unknown }): Record<string, unknown> {
   const trashed = post.deletedAt !== null && post.deletedAt !== undefined;
+  const mainVideo = parseStoredMainVideo(post.mainVideo);
   return {
     id: post.id,
     slug: post.slug,
@@ -47,6 +49,7 @@ export function postBlock(post: Pick<PostRow, "id" | "slug" | "title" | "status"
     ...(post.scheduledAt ? { scheduledAt: post.scheduledAt.toISOString() } : {}),
     adminUrl: adminUrlFor(post.id),
     publicUrl: !trashed && post.status === "published" ? publicUrlFor(post.slug) : null,
+    ...(mainVideo ? { mainVideo } : {}),
   };
 }
 

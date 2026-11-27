@@ -49,8 +49,8 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     id: "posts:write",
     group: "write",
     label: "Qoralama yozish va tahrirlash",
-    description: "Yangi qoralama yaratish, postlarni tahrirlash va teglarni boshqarish (chop etmasdan), chiqindi qutisidan qaytarish.",
-    english: "Create drafts, edit posts, manage tags (create, rename) and restore posts from the trash, without publishing anything.",
+    description: "Yangi qoralama yaratish, postlarni tahrirlash (asosiy videoni tanlash ham) va teglarni boshqarish (chop etmasdan), chiqindi qutisidan qaytarish.",
+    english: "Create drafts, edit posts (including choosing the post main video from its finished renders), manage tags (create, rename) and restore posts from the trash, without publishing anything.",
   },
   {
     id: "media:upload",
