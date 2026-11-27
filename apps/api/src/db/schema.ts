@@ -613,6 +613,8 @@ export const distributions = pgTable(
     /** Ko'p bosqichli yuborishda to'xtagan bosqich va tayyor narsalar (qayta urinishda `resume`). */
     step: text("step"),
     partial: jsonb("partial").$type<Record<string, string>>(),
+    /** Yuborish/rejalashtirishda tanlangan nomli versiya (`distribution_versions`); versiya o'chirilsa `null`. Matn baribir `rendered_text`da. */
+    versionId: uuid("version_id").references((): AnyPgColumn => distributionVersions.id, { onDelete: "set null" }),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     /** `web` | `mcp` | `scheduler`. */
     createdVia: text("created_via").notNull().default("web"),
@@ -627,6 +629,36 @@ export const distributions = pgTable(
       .where(sql`${table.status} in ('draft', 'scheduled', 'sending', 'failed', 'needs_checking')`),
     index("distributions_due_idx").on(table.status, table.scheduledAt),
     index("distributions_post_idx").on(table.postId),
+  ],
+);
+
+/**
+ * Bitta post + kanal uchun nomli matn versiyalari (Telegram `channel_post_versions`ga o'xshash). Ko'pi bilan bittasi "asosiy"
+ * (qisman unique indeks). Yuborish yo'li o'zgarmagan: yuboriladigan matn tahrirlagichdagi matn; versiya faqat uni saqlaydi.
+ */
+export const distributionVersions = pgTable(
+  "distribution_versions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    name: text("name").notNull(),
+    text: text("text").notNull().default(""),
+    imageChoice: text("image_choice").notNull().default("auto"),
+    /** Faqat LinkedIn: `article` | `text`. */
+    linkMode: text("link_mode"),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    /** `web` | `mcp`. */
+    createdVia: text("created_via").notNull().default("web"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("distribution_versions_post_provider_idx").on(table.postId, table.provider),
+    uniqueIndex("distribution_versions_primary_idx").on(table.postId, table.provider).where(sql`${table.isPrimary}`),
   ],
 );
 

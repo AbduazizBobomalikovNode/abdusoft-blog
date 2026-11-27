@@ -28,8 +28,8 @@ let runner: typeof import("../distribution/service/runner.js");
 let mock: ReturnType<typeof import("../distribution/service/test-support.js").createPlatformMock>;
 const NOW = new Date("2026-11-26T10:00:00Z");
 
-const WRITE_NAMES = ["save_distribution_text", "send_distribution", "schedule_distribution", "cancel_distribution", "retry_distribution", "remove_distribution_from_platform"];
-const READ_NAMES = ["list_distribution_channels", "preview_distribution", "list_post_distributions", "get_distribution_status"];
+const WRITE_NAMES = ["save_distribution_text", "send_distribution", "schedule_distribution", "cancel_distribution", "retry_distribution", "remove_distribution_from_platform", "create_distribution_version", "update_distribution_version", "delete_distribution_version", "set_distribution_primary"];
+const READ_NAMES = ["list_distribution_channels", "preview_distribution", "list_post_distributions", "get_distribution_status", "list_distribution_versions"];
 
 const call = (name: string, args: Record<string, unknown> = {}, t = full) => callTool(app, t, name, args);
 const ok = async (name: string, args: Record<string, unknown> = {}) => {
@@ -87,7 +87,7 @@ beforeEach(async () => {
 });
 
 describe("registry", () => {
-  it("lists the 4 read and 6 write distribution tools; nothing about connecting accounts, credentials or tokens", async () => {
+  it("lists the 5 read and 10 write distribution tools; nothing about connecting accounts, credentials or tokens", async () => {
     const tools = (await mcpCall(app, full, "tools/list")).body.result.tools as Json[];
     const names = tools.map((t) => t.name);
     for (const n of [...READ_NAMES, ...WRITE_NAMES]) expect(names).toContain(n);
@@ -328,6 +328,10 @@ describe("separate social-posting permission (social:post)", () => {
     cancel_distribution: { distribution_id: distId },
     retry_distribution: { distribution_id: distId },
     remove_distribution_from_platform: { distribution_id: distId },
+    create_distribution_version: { post_id: postId, channel: "x", text: "a" },
+    update_distribution_version: { version_id: distId, text: "a" },
+    delete_distribution_version: { version_id: distId },
+    set_distribution_primary: { version_id: distId },
   });
 
   it("a connection approved only for the Telegram channel (channels:send) cannot use ANY social write tool; nothing is created or contacted", async () => {
@@ -432,5 +436,60 @@ describe("untrusted-field labelling covers every platform-/third-party-originate
     expect(j.checks.some((c: Json) => c.value === "https://x.com/o/status/t9")).toBe(true); // "Avval yuborilgan" tekshiruvi qiymati
     expect(j.untrusted).toBe(true);
     expect(j.untrustedFields).toEqual(expect.arrayContaining(["post.title", "text", "defaultText", "checks[].value", "previouslySent.url", "distribution.text", "distribution.lastErrorMessage"]));
+  });
+});
+
+describe("named distribution versions (social:post)", () => {
+  it("create / list / update / set primary / delete round-trip; read needs only blog:read, writes need social:post", async () => {
+    const post = await fx.insertPost();
+    const created = await ok("create_distribution_version", { post_id: post.id, channel: "x", name: "Qisqa", text: "Salom dunyo" });
+    expect(created.version).toMatchObject({ name: "Qisqa", text: "Salom dunyo", isPrimary: false, provider: "x", createdVia: "mcp" });
+    expect(created.untrusted).toBe(true);
+    const defaulted = await ok("create_distribution_version", { post_id: post.id, channel: "x", make_primary: true });
+    expect(defaulted.version.name).toBe("2-versiya");
+    expect(defaulted.version.isPrimary).toBe(true);
+    expect(defaulted.version.text.length).toBeGreaterThan(0); // standart shablon
+    const cloned = await ok("create_distribution_version", { post_id: post.id, channel: "x", from_version_id: created.version.id });
+    expect(cloned.version.text).toBe("Salom dunyo");
+
+    const listed = await ok("list_distribution_versions", { post_id: post.id, channel: "x" });
+    expect(listed.versions).toHaveLength(3);
+    expect(listed.primaryId).toBe(defaulted.version.id);
+    expect((await call("list_distribution_versions", { post_id: post.id, channel: "x" }, readOnly)).isError).toBe(false);
+
+    const upd = await ok("update_distribution_version", { version_id: created.version.id, text: "Yangi", name: "Qisqa 2", expected_version_updated_at: created.version.updatedAt });
+    expect(upd.version).toMatchObject({ text: "Yangi", name: "Qisqa 2" });
+    await fails("update_distribution_version", { version_id: created.version.id, text: "Eski", expected_version_updated_at: "2020-01-01T00:00:00.000Z" }, "conflict");
+
+    const prim = await ok("set_distribution_primary", { version_id: created.version.id });
+    expect(prim.version.isPrimary).toBe(true);
+    expect((await ok("list_distribution_versions", { post_id: post.id, channel: "x" })).primaryId).toBe(created.version.id);
+    const cleared = await ok("set_distribution_primary", { clear: true, post_id: post.id, channel: "x" });
+    expect(cleared.cleared).toBe(1);
+    await fails("set_distribution_primary", {}, "invalid_input");
+
+    expect((await ok("delete_distribution_version", { version_id: cloned.version.id })).ok).toBe(true);
+    await fails("delete_distribution_version", { version_id: cloned.version.id }, "not_found");
+    expect((await ok("list_distribution_versions", { post_id: post.id, channel: "x" })).versions).toHaveLength(2);
+  });
+
+  it("dry_run changes nothing; github is not a valid channel; write tools are refused without social:post", async () => {
+    const post = await fx.insertPost();
+    const dry = await ok("create_distribution_version", { post_id: post.id, channel: "linkedin", dry_run: true });
+    expect(dry.dryRun).toBe(true);
+    expect(await db.select().from(s.distributionVersions)).toHaveLength(0);
+    await rejected("create_distribution_version", { post_id: post.id, channel: "github" });
+    const denied = await call("create_distribution_version", { post_id: post.id, channel: "x", text: "a" }, telegramOnly);
+    expect(denied.isError).toBe(true);
+    expect(await db.select().from(s.distributionVersions)).toHaveLength(0);
+  });
+
+  it("send_distribution records version_id (text still comes from the call)", async () => {
+    const post = await fx.insertPost();
+    await fx.insertAccount("x", NOW);
+    const v = await ok("create_distribution_version", { post_id: post.id, channel: "x", text: "Versiya matni" });
+    const sent = await ok("send_distribution", { post_id: post.id, channel: "x", expected_updated_at: post.updatedAt.toISOString(), text: "Versiya matni", version_id: v.version.id, idempotency_key: "ver-key-1" });
+    expect(sent.distribution.versionId).toBe(v.version.id);
+    expect(sent.distribution.text).toBe("Versiya matni");
   });
 });

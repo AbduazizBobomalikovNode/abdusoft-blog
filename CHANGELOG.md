@@ -6,6 +6,11 @@
 
 ### O'zbekcha
 
+**Tarqatish: nomli versiyalar (har bir tarmoq uchun, "asosiy" belgisi bilan)**
+- LinkedIn, X, Threads, Instagram: har bir post+kanal uchun 10 tagacha nomli matn versiyasi, bittasi «Asosiy»; dialog asosiy versiyada ochiladi. Matn ustida versiyalar qatori («Standart» + versiyalar + «Yangi versiya»), nomini o'zgartirish, «Asosiy qilish», o'chirish; tahrir 800 ms dan keyin o'zi saqlanadi; oldindan ko'rish tahrirlagichni kuzatadi
+- Claude konnektori: `list_distribution_versions`, `create_distribution_version`, `update_distribution_version`, `delete_distribution_version`, `set_distribution_primary` (`social:post`); `send_distribution`/`schedule_distribution` ixtiyoriy `version_id` qabul qiladi
+- Yuborish yo'li o'zgarmagan (matn va tekshiruvlar avvalgidek); yangi `distribution_versions` jadvali va nullable `distributions.version_id` (additiv migratsiya `0021`, mavjud faol qo'lda matnlar «1-versiya» (asosiy) qilib ko'chiriladi)
+
 **Tarqatish: har bir tarmoq uchun real vaqtli oldindan ko'rish**
 - Dialogda LinkedIn, X, Threads, Instagram va GitHub README ko'rinishi (tahrirlagich yonida); matn har bir tugma bosilishida yangilanadi, URL/#hashtag/@mention bo'yaladi, "ko'proq" qisqartirish, chegaradan oshgan qism qizil bilan belgilanadi, Instagram'da rasm yo'qligi ogohlantiriladi
 - Faqat veb: API, ma'lumotlar bazasi va yuborish xatti-harakati o'zgarmagan
@@ -22,6 +27,11 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Distribution: named versions per network, with a "primary" mark**
+- LinkedIn, X, Threads, Instagram: up to 10 named text versions per post + channel, one of them "Asosiy" (primary); the dialog opens on the primary one. A strip above the text ("Standart" + versions + "Yangi versiya"), rename, "Asosiy qilish", delete; edits autosave after 800 ms; the live preview keeps following the editor
+- Claude connector: `list_distribution_versions`, `create_distribution_version`, `update_distribution_version`, `delete_distribution_version`, `set_distribution_primary` (`social:post`); `send_distribution`/`schedule_distribution` accept an optional `version_id`
+- The send path is unchanged (text and checks as before); new `distribution_versions` table and nullable `distributions.version_id` (additive migration `0021`; existing active hand-edited texts are copied into a primary "1-versiya")
 
 **Distribution: real-time per-network preview**
 - The dialog shows LinkedIn, X, Threads, Instagram and GitHub README layouts next to the editor; text updates on every keystroke, URLs/#hashtags/@mentions are styled, "see more" collapse, text past the limit is highlighted in red, Instagram warns when no image is chosen

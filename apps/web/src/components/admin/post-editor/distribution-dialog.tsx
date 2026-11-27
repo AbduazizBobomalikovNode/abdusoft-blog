@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import type { DistributionChannelDto, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId } from "@blog/shared";
+import type { DistributionChannelDto, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId, DistributionVersionDto } from "@blog/shared";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,6 +16,8 @@ import {
   ERROR_KIND_TEXT, IMAGE_CHOICE_LABEL, LINK_MODE_LABEL, NO_AUTO_POST_NOTICE, TONE_CLASS, UNIT_LABEL,
   counterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, statusPill, textForSave, tokenLine,
 } from "@/lib/distribution-ui";
+import { initialVersionId, isVersionDirty, markPrimary, removeVersion, replaceVersion, versionsOf, type VersionSaveState } from "@/lib/distribution-versions";
+import { DistributionVersionStrip } from "./distribution-version-strip";
 import { TrashedPanel } from "./distribution-trashed-panel";
 import { SocialPreview } from "./social-preview";
 import { domainOf } from "./social-preview/text";
@@ -51,16 +53,21 @@ function Checklist({ checks }: { checks: DistributionPreviewResponse["checks"] }
   );
 }
 
-function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; channel: DistributionChannelDto; item: DistributionItemDto | null; onChanged: () => Promise<void> }) {
+function ChannelPanel({ postId, channel, item, initialVersions, onChanged }: { postId: string; channel: DistributionChannelDto; item: DistributionItemDto | null; initialVersions: DistributionVersionDto[]; onChanged: () => Promise<void> }) {
   const provider = channel.id as DistributionProviderId;
   const caps = channel.capabilities;
   const isGithub = provider === "github";
   const actions = itemActions(item, channel.ready, caps);
+  const [versions, setVersions] = useState<DistributionVersionDto[]>(() => (isGithub ? [] : versionsOf(initialVersions, provider)));
+  // Dialog asosiy versiyada ochiladi (bo'lsa va qator tahrirlanadigan bo'lsa); aks holda avvalgidek "Standart".
+  const [selectedId, setSelectedId] = useState<string | null>(() => (isGithub ? null : initialVersionId(versions, item, actions.edit)));
+  const startVersion = versions.find((v) => v.id === selectedId) ?? null;
+  const [saveState, setSaveState] = useState<VersionSaveState>("idle");
   const [preview, setPreview] = useState<DistributionPreviewResponse | null>(null);
-  const [text, setText] = useState("");
-  const [touched, setTouched] = useState(false);
-  const [imageChoice, setImageChoice] = useState<"auto" | "cover" | "og" | "none">(item?.imageChoice ?? "auto");
-  const [linkMode, setLinkMode] = useState<"article" | "text">(item?.linkMode ?? "article");
+  const [text, setText] = useState(startVersion?.text ?? "");
+  const [touched, setTouched] = useState(Boolean(startVersion));
+  const [imageChoice, setImageChoice] = useState<"auto" | "cover" | "og" | "none">(startVersion?.imageChoice ?? item?.imageChoice ?? "auto");
+  const [linkMode, setLinkMode] = useState<"article" | "text">(startVersion?.linkMode ?? item?.linkMode ?? "article");
   const [busy, setBusy] = useState(false);
   const [when, setWhen] = useState("");
   const [confirmSend, setConfirmSend] = useState(false);
@@ -68,6 +75,8 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
   const [resolveUrl, setResolveUrl] = useState("");
   const [riskOk, setRiskOk] = useState(false);
   const seq = useRef(0);
+  const savingRef = useRef(false);
+  const selected = versions.find((v) => v.id === selectedId) ?? null;
 
   const body = useCallback(() => ({ text: isGithub ? undefined : textForSave(text, preview?.defaultText ?? ""), imageChoice, ...(provider === "linkedin" ? { linkMode } : {}) }), [text, preview?.defaultText, imageChoice, linkMode, provider, isGithub]);
 
@@ -92,6 +101,74 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
     // eslint-disable-next-line react-hooks/exhaustive-deps -- preview.defaultText atayin kuzatilmaydi (aylanma)
   }, [postId, provider, text, touched, imageChoice, linkMode, item?.id, item?.status, item?.updatedAt, isGithub]);
 
+  // Tanlangan versiya: tahrirdan 800 ms keyin avtomatik saqlanadi (Telegram versiya tahrirlagichidagidek).
+  useEffect(() => {
+    if (!selected || !actions.edit) return;
+    const editor = { text, imageChoice, linkMode: provider === "linkedin" ? linkMode : null };
+    if (!isVersionDirty(selected, editor)) return;
+    const t = setTimeout(async () => {
+      if (savingRef.current) return;
+      savingRef.current = true;
+      setSaveState("saving");
+      try {
+        const updated = await adminApi.distributionVersionUpdate(selected.id, { text: editor.text, imageChoice: editor.imageChoice, ...(provider === "linkedin" ? { linkMode: editor.linkMode } : {}), expectedUpdatedAt: selected.updatedAt });
+        setVersions((list) => replaceVersion(list, updated));
+        setSaveState("saved");
+      } catch (e) {
+        setSaveState("error");
+        toast.error(errMsg(e, "Versiyani saqlab bo'lmadi"));
+        if (e instanceof AdminApiError && e.status === 409) {
+          const fresh = await adminApi.distributionVersions(postId, provider).catch(() => null);
+          if (fresh) setVersions(fresh.versions);
+        }
+      } finally {
+        savingRef.current = false;
+      }
+    }, 800);
+    return () => clearTimeout(t);
+  }, [selected, actions.edit, text, imageChoice, linkMode, provider, postId]);
+
+  function chooseVersion(id: string | null) {
+    setSelectedId(id);
+    setSaveState("idle");
+    setTouched(true);
+    const v = versions.find((x) => x.id === id);
+    if (v) {
+      setText(v.text);
+      setImageChoice(v.imageChoice);
+      if (provider === "linkedin") setLinkMode(v.linkMode ?? "article");
+    } else if (preview) {
+      setText(preview.defaultText);
+    }
+  }
+
+  async function versionOp<T>(fn: () => Promise<T>, apply: (r: T) => void, fallback: string) {
+    try {
+      apply(await fn());
+    } catch (e) {
+      toast.error(errMsg(e, fallback));
+    }
+  }
+
+  const createVersion = () =>
+    versionOp(
+      () => adminApi.distributionVersionCreate(postId, provider, { text, imageChoice, ...(provider === "linkedin" ? { linkMode } : {}) }),
+      (created) => { setVersions((l) => [...l, created]); setSelectedId(created.id); setSaveState("idle"); },
+      "Versiya yaratib bo'lmadi",
+    );
+  const renameVersion = (id: string, name: string) =>
+    versionOp(() => adminApi.distributionVersionUpdate(id, { name }), (u) => setVersions((l) => replaceVersion(l, u)), "Nomini o'zgartirib bo'lmadi");
+  const primaryVersion = (id: string) =>
+    versionOp(() => adminApi.distributionVersionPrimary(id), (u) => setVersions((l) => markPrimary(l, u.id)), "Asosiy qilib bo'lmadi");
+  const clearPrimary = () =>
+    versionOp(() => adminApi.distributionPrimaryClear(postId, provider), () => setVersions((l) => markPrimary(l, null)), "Asosiylikni olib tashlab bo'lmadi");
+  const deleteVersion = (id: string) =>
+    versionOp(
+      () => adminApi.distributionVersionDelete(id),
+      () => { setVersions((l) => removeVersion(l, id)); chooseVersion(null); },
+      "Versiyani o'chirib bo'lmadi",
+    );
+
   const counter = counterView(provider, text, caps?.textMax ?? null);
   const blocked = !preview || preview.errorCount > 0 || (!isGithub && counter.level === "over");
 
@@ -110,6 +187,8 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
     }
   }
 
+  /** Yuborish/rejalashtirish tanasi: tanlangan versiya id'si faqat qayd uchun (matn baribir tahrirlagichdagi matn). */
+  const queueBody = () => ({ ...body(), ...(selectedId ? { versionId: selectedId } : {}) });
   const again = item?.status === "sent" || preview?.previouslySent ? { again: true } : {};
   const sentAlready = Boolean(preview?.previouslySent) && !isGithub;
 
@@ -175,6 +254,9 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
+          <DistributionVersionStrip versions={versions} selectedId={selectedId} disabled={!actions.edit || busy} saveState={saveState}
+            onSelect={chooseVersion} onCreate={() => void createVersion()} onRename={(id, name) => void renameVersion(id, name)}
+            onSetPrimary={(id) => void primaryVersion(id)} onClearPrimary={() => void clearPrimary()} onDelete={(id) => void deleteVersion(id)} />
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor={`dist-text-${provider}`}>Matn</Label>
             <span className={cn("text-xs tabular-nums", counter.className)} data-testid="dist-counter" title={caps ? own(UNIT_LABEL, caps.textUnit, "") : ""}>{counter.label}</span>
@@ -247,7 +329,7 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
               <Label htmlFor={`dist-when-${provider}`} className="text-xs">Rejalashtirish vaqti</Label>
               <Input id={`dist-when-${provider}`} type="datetime-local" min={minScheduleInput()} value={when} onChange={(e) => setWhen(e.target.value)} className="w-auto" />
             </div>
-            <Button size="sm" variant="outline" disabled={busy || blocked || !isFutureEnough(localInputToIso(when))} onClick={() => void run(() => adminApi.distributionSchedule(postId, provider, localInputToIso(when)!, { ...body(), ...again }), "Rejalashtirildi")}>Rejalashtirish</Button>
+            <Button size="sm" variant="outline" disabled={busy || blocked || !isFutureEnough(localInputToIso(when))} onClick={() => void run(() => adminApi.distributionSchedule(postId, provider, localInputToIso(when)!, { ...queueBody(), ...again }), "Rejalashtirildi")}>Rejalashtirish</Button>
           </div>
         ) : null}
         <div className="flex flex-wrap items-center gap-2">
@@ -269,7 +351,7 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Bekor qilish</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void run(() => adminApi.distributionSend(postId, provider, { ...body(), ...again }), "Yuborish navbatga qo'yildi")}>Yuborish</AlertDialogAction>
+            <AlertDialogAction onClick={() => void run(() => adminApi.distributionSend(postId, provider, { ...queueBody(), ...again }), "Yuborish navbatga qo'yildi")}>Yuborish</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -343,7 +425,7 @@ export function DistributionDialog({ postId, open, onOpenChange }: { postId: str
                 );
               })}
             </div>
-            {channel ? <ChannelPanel key={`${channel.id}-${itemFor(channel.id)?.id ?? "new"}-${itemFor(channel.id)?.status ?? ""}`} postId={postId} channel={channel} item={itemFor(channel.id)} onChanged={load} /> : null}
+            {channel ? <ChannelPanel key={`${channel.id}-${itemFor(channel.id)?.id ?? "new"}-${itemFor(channel.id)?.status ?? ""}`} postId={postId} channel={channel} item={itemFor(channel.id)} initialVersions={data.versions ?? []} onChanged={load} /> : null}
           </>
         )}
       </DialogContent>

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { DISTRIBUTION_PROVIDERS, type DistributionItemDto } from "@blog/shared";
+import { DISTRIBUTION_PROVIDERS, type DistributionItemDto, type DistributionVersionDto } from "@blog/shared";
+import { clearPrimary, createVersion, deleteVersion, getVersion, listVersions, setPrimary, toVersionDto, updateVersion } from "../../distribution/service/versions.js";
 import { cancel, getDistributionDto, listPostDistributions, removeFromPlatform, retry, saveDraft, schedule, sendNow, type DraftInput, type QueueInput } from "../../distribution/service/actions.js";
 import { listChannels } from "../../distribution/service/channels.js";
 import { buildPreview } from "../../distribution/service/prepare.js";
@@ -191,6 +192,7 @@ async function sendOrSchedule(args: {
   link_mode?: "article" | "text" | undefined;
   again?: boolean | undefined;
   scheduled_at?: string | undefined;
+  version_id?: string | undefined;
   dry_run?: boolean | undefined;
 }, ctx: Parameters<McpToolDef["handler"]>[1]): Promise<ToolOutput> {
   const post = await requirePostFresh(args.post_id, args.expected_updated_at);
@@ -221,7 +223,7 @@ async function sendOrSchedule(args: {
       },
     };
   }
-  const input: QueueInput = { ...draft, ...(args.again ? { again: true } : {}) };
+  const input: QueueInput = { ...draft, ...(args.again ? { again: true } : {}), ...(args.version_id ? { versionId: args.version_id } : {}) };
   const result = when ? await schedule(ctx.actor, args.post_id, channel, when, input) : await sendNow(ctx.actor, args.post_id, channel, input);
   if (!result.ok) {
     const checks = (result.error.extra as { checks?: Array<{ status: string; message: string }> } | undefined)?.checks;
@@ -251,6 +253,7 @@ const sendFields = {
   text: textField,
   image: imageField,
   link_mode: linkModeField,
+  version_id: z.string().uuid().optional().describe("Optional: the named version (list_distribution_versions) this text came from. It is only recorded on the distribution; what is posted is still exactly `text` (pass the version's text yourself) or the default template."),
   again: z.boolean().optional().describe("Allow sending even though this post was already sent to this channel (creates a duplicate on purpose). Default false."),
   idempotency_key: idempotencyKeyField,
   dry_run: dryRunField,
@@ -349,5 +352,156 @@ export const removeDistributionTool = defineTool({
   },
 });
 
-export const DISTRIBUTION_READ_TOOLS: McpToolDef[] = [listDistributionChannelsTool, previewDistributionTool, listPostDistributionsTool, getDistributionStatusTool] as unknown as McpToolDef[];
-export const DISTRIBUTION_WRITE_TOOLS: McpToolDef[] = [saveDistributionTextTool, sendDistributionTool, scheduleDistributionTool, cancelDistributionTool, retryDistributionTool, removeDistributionTool] as unknown as McpToolDef[];
+const versionChannelField = z.enum(["linkedin", "x", "threads", "instagram"]).describe("Channel: linkedin | x | threads | instagram (GitHub has no editable text, so no versions).");
+const versionIdField = uuidField("distribution version id (from list_distribution_versions)");
+const versionNameField = z.string().max(80).optional().describe("Version name, up to 80 characters (default: '<N>-versiya').");
+
+function versionOut(v: DistributionVersionDto): Record<string, unknown> {
+  const { createdBy: _c, ...rest } = v;
+  void _c;
+  return rest;
+}
+
+const VERSION_UNTRUSTED = ["version.name", "version.text"];
+
+export const listDistributionVersionsTool = defineTool({
+  name: "list_distribution_versions",
+  title: "List a post's named distribution versions",
+  description:
+    U + "List the named text versions saved for one post + social channel (up to 10; one may be marked primary - the one the web dialog opens on). Each has name, the exact text, image choice, LinkedIn link mode, isPrimary. The Telegram channel versions are separate (list_channel_versions). Read-only.",
+  scope: "blog:read",
+  inputSchema: { post_id: uuidField("post id"), channel: versionChannelField },
+  annotations: READ_ONLY,
+  kind: "read",
+  async handler(args) {
+    const versions = unwrap(await listVersions(args.post_id, args.channel as ProviderId), { notFound: "Use list_posts to find the post." });
+    return { data: { versions: versions.map(versionOut), primaryId: versions.find((v) => v.isPrimary)?.id ?? null, ...untrusted(["versions[].name", "versions[].text"]) }, listKey: "versions" };
+  },
+});
+
+export const createDistributionVersionTool = defineTool({
+  name: "create_distribution_version",
+  title: "Create a named distribution version",
+  description:
+    U + "Create a named text version for one post + social channel (max 10 per channel). Text comes from `text`, or is copied from `from_version_id`, or (neither given) from the channel's default template. Saved only; nothing is sent. make_primary=true also marks it primary. Requires the social-posting permission (social:post).",
+  scope: "social:post",
+  limit: "edit",
+  inputSchema: {
+    post_id: uuidField("post id"),
+    channel: versionChannelField,
+    name: versionNameField,
+    text: textField,
+    from_version_id: z.string().uuid().optional().describe("Copy text, image and link mode from this existing version instead of passing text."),
+    image: imageField,
+    link_mode: linkModeField,
+    make_primary: z.boolean().optional().describe("Also mark the new version primary."),
+    dry_run: dryRunField,
+  },
+  annotations: LOCAL_WRITE,
+  kind: "write",
+  async handler(args, ctx) {
+    if (args.dry_run) {
+      const existing = unwrap(await listVersions(args.post_id, args.channel as ProviderId), { notFound: "Use list_posts to find the post." });
+      return { data: { ok: true, dryRun: true, summary: existing.length >= 10 ? "Dry run: refused, the channel already has 10 versions." : "Dry run: the version would be created; nothing was sent.", versionsNow: existing.length, canCreate: existing.length < 10 } };
+    }
+    const created = unwrap(
+      await createVersion(ctx.actor, args.post_id, args.channel as ProviderId, {
+        ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.text !== undefined ? { text: args.text } : {}),
+        ...(args.from_version_id ? { fromVersionId: args.from_version_id } : {}),
+        ...(args.image !== undefined ? { imageChoice: args.image } : {}),
+        ...(args.link_mode !== undefined ? { linkMode: args.link_mode } : {}),
+        ...(args.make_primary ? { makePrimary: true } : {}),
+      }),
+      { notFound: "Use list_posts / list_distribution_versions." },
+    );
+    return { data: { ok: true, summary: "Version created. Nothing was sent.", version: versionOut(created), ...untrusted(VERSION_UNTRUSTED) } };
+  },
+});
+
+export const updateDistributionVersionTool = defineTool({
+  name: "update_distribution_version",
+  title: "Edit a named distribution version",
+  description:
+    U + "Rename a version or change its text, image choice or LinkedIn link mode. Pass expected_version_updated_at (the version's updatedAt from your last read) to avoid overwriting a concurrent edit. Saved only; nothing is sent. Requires the social-posting permission (social:post).",
+  scope: "social:post",
+  limit: "edit",
+  inputSchema: {
+    version_id: versionIdField,
+    name: versionNameField,
+    text: textField,
+    image: imageField,
+    link_mode: linkModeField,
+    expected_version_updated_at: z.string().min(10).max(40).optional().describe("The version.updatedAt you last saw; the call conflicts if it changed since."),
+    dry_run: dryRunField,
+  },
+  annotations: LOCAL_WRITE,
+  kind: "write",
+  async handler(args, ctx) {
+    const row = await getVersion(args.version_id);
+    if (!row) throw new ToolError("not_found", "No version with this id.", "Use list_distribution_versions.");
+    if (args.dry_run) return { data: { ok: true, dryRun: true, summary: "Dry run: the version would be updated.", version: versionOut(toVersionDto(row)), ...untrusted(VERSION_UNTRUSTED) } };
+    const updated = unwrap(
+      await updateVersion(ctx.actor, args.version_id, {
+        ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.text !== undefined ? { text: args.text } : {}),
+        ...(args.image !== undefined ? { imageChoice: args.image } : {}),
+        ...(args.link_mode !== undefined ? { linkMode: args.link_mode } : {}),
+        ...(args.expected_version_updated_at ? { expectedUpdatedAt: args.expected_version_updated_at } : {}),
+      }),
+    );
+    return { data: { ok: true, summary: "Version saved. Nothing was sent.", version: versionOut(updated), ...untrusted(VERSION_UNTRUSTED) } };
+  },
+});
+
+export const deleteDistributionVersionTool = defineTool({
+  name: "delete_distribution_version",
+  title: "Delete a named distribution version",
+  description:
+    U + "Delete one saved version (past sends keep their text; only the link to the version is dropped). If it was primary, the channel has no primary afterwards. Requires the social-posting permission (social:post).",
+  scope: "social:post",
+  limit: "edit",
+  inputSchema: { version_id: versionIdField, dry_run: dryRunField },
+  annotations: LOCAL_WRITE,
+  kind: "write",
+  async handler(args, ctx) {
+    const row = await getVersion(args.version_id);
+    if (!row) throw new ToolError("not_found", "No version with this id.", "Use list_distribution_versions.");
+    if (args.dry_run) return { data: { ok: true, dryRun: true, summary: "Dry run: the version would be deleted.", wasPrimary: row.isPrimary, name: row.name, ...untrusted(["name"]) } };
+    const res = unwrap(await deleteVersion(ctx.actor, args.version_id));
+    return { data: { ok: true, summary: "Version deleted.", ...res } };
+  },
+});
+
+export const setDistributionPrimaryTool = defineTool({
+  name: "set_distribution_primary",
+  title: "Mark a distribution version primary",
+  description:
+    U + "Mark one version primary (the web dialog opens on it; it replaces the previous primary of that post + channel). Or pass clear=true with post_id and channel to leave the channel without a primary. Nothing is sent. Requires the social-posting permission (social:post).",
+  scope: "social:post",
+  limit: "edit",
+  inputSchema: {
+    version_id: z.string().uuid().optional().describe("The version to mark primary."),
+    clear: z.boolean().optional().describe("true: remove the primary mark from the channel (needs post_id and channel, no version_id)."),
+    post_id: z.string().uuid().optional().describe("With clear=true."),
+    channel: versionChannelField.optional().describe("With clear=true."),
+    dry_run: dryRunField,
+  },
+  annotations: LOCAL_WRITE,
+  kind: "write",
+  async handler(args, ctx) {
+    if (args.clear) {
+      if (args.version_id || !args.post_id || !args.channel) throw new ToolError("invalid_input", "clear=true needs post_id and channel and no version_id.");
+      if (args.dry_run) return { data: { ok: true, dryRun: true, summary: "Dry run: the primary mark would be removed." } };
+      return { data: { ok: true, summary: "Primary mark removed.", ...unwrap(await clearPrimary(ctx.actor, args.post_id, args.channel as ProviderId), { notFound: "Use list_posts to find the post." }) } };
+    }
+    if (!args.version_id) throw new ToolError("invalid_input", "Pass version_id (or clear=true with post_id and channel).");
+    const row = await getVersion(args.version_id);
+    if (!row) throw new ToolError("not_found", "No version with this id.", "Use list_distribution_versions.");
+    if (args.dry_run) return { data: { ok: true, dryRun: true, summary: row.isPrimary ? "Dry run: it is already primary." : "Dry run: it would become primary." } };
+    return { data: { ok: true, summary: "Marked primary.", version: versionOut(unwrap(await setPrimary(ctx.actor, args.version_id))), ...untrusted(VERSION_UNTRUSTED) } };
+  },
+});
+
+export const DISTRIBUTION_READ_TOOLS: McpToolDef[] = [listDistributionChannelsTool, previewDistributionTool, listPostDistributionsTool, getDistributionStatusTool, listDistributionVersionsTool] as unknown as McpToolDef[];
+export const DISTRIBUTION_WRITE_TOOLS: McpToolDef[] = [saveDistributionTextTool, sendDistributionTool, scheduleDistributionTool, cancelDistributionTool, retryDistributionTool, removeDistributionTool, createDistributionVersionTool, updateDistributionVersionTool, deleteDistributionVersionTool, setDistributionPrimaryTool] as unknown as McpToolDef[];

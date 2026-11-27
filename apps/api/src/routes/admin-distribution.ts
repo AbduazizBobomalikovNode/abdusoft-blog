@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { DISTRIBUTION_IMAGE_CHOICES, DISTRIBUTION_PROVIDERS } from "@blog/shared";
+import { DISTRIBUTION_IMAGE_CHOICES, DISTRIBUTION_PROVIDERS, type CreateDistributionVersionBody, type UpdateDistributionVersionBody } from "@blog/shared";
 import { config } from "../config.js";
 import { auth } from "../lib/auth.js";
 import { requireAdmin } from "../lib/require-admin.js";
@@ -10,6 +10,7 @@ import { completeConnect, connectWithPastedToken, disconnectAccount, startConnec
 import { cancel, getDistributionDto, listPostDistributions, removeFromPlatform, resolveNeedsChecking, retry, saveDraft, schedule, sendNow, type DraftInput, type QueueInput } from "../lib/distribution/service/actions.js";
 import { listChannels } from "../lib/distribution/service/channels.js";
 import { CredentialsValidationError, saveCredentials } from "../lib/distribution/service/credentials.js";
+import { clearPrimary, createVersion, deleteVersion, listVersions, setPrimary, updateVersion } from "../lib/distribution/service/versions.js";
 import { isProviderId } from "../lib/distribution/service/env.js";
 import { buildPreview } from "../lib/distribution/service/prepare.js";
 import { buildSettingsView } from "../lib/distribution/service/settings-view.js";
@@ -26,7 +27,27 @@ const DraftBody = z
     linkMode: z.enum(["article", "text"]).nullable().optional(),
   })
   .strict();
-const SendBody = DraftBody.extend({ again: z.boolean().optional() }).strict();
+const SendBody = DraftBody.extend({ again: z.boolean().optional(), versionId: z.string().regex(UUID_RE).optional() }).strict();
+const VersionName = z.string().max(80);
+const CreateVersionBody = z
+  .object({
+    name: VersionName.optional(),
+    text: z.string().max(20_000).optional(),
+    fromVersionId: z.string().regex(UUID_RE).optional(),
+    imageChoice: ImageChoice.optional(),
+    linkMode: z.enum(["article", "text"]).nullable().optional(),
+    makePrimary: z.boolean().optional(),
+  })
+  .strict();
+const UpdateVersionBody = z
+  .object({
+    name: VersionName.optional(),
+    text: z.string().max(20_000).optional(),
+    imageChoice: ImageChoice.optional(),
+    linkMode: z.enum(["article", "text"]).nullable().optional(),
+    expectedUpdatedAt: z.string().min(10).max(40).optional(),
+  })
+  .strict();
 const ScheduleBody = SendBody.extend({ scheduledAt: z.string().min(10).max(40) }).strict();
 const ResolveBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("mark_sent"), url: z.string().min(8).max(2000), externalId: z.string().max(200).optional() }).strict(),
@@ -162,6 +183,45 @@ export const adminDistributionRoute = new Hono()
     if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi (scheduledAt majburiy)" }, 400);
     const { scheduledAt, ...rest } = parsed.data;
     return respond(c, await schedule(actorOf(c), postId, provider, new Date(scheduledAt), rest as QueueInput));
+  })
+  // --- Nomli matn versiyalari (kanal bo'yicha; GitHub'da yo'q) ---
+  .get("/posts/:postId/:provider/versions", async (c) => {
+    const postId = c.req.param("postId");
+    const provider = providerParam(c);
+    if (!provider || !UUID_RE.test(postId)) return c.json({ error: "Topilmadi" }, 404);
+    const res = await listVersions(postId, provider);
+    return respond(c, res.ok ? { ok: true as const, data: { versions: res.data } } : res);
+  })
+  .post("/posts/:postId/:provider/versions", async (c) => {
+    const postId = c.req.param("postId");
+    const provider = providerParam(c);
+    if (!provider || !UUID_RE.test(postId)) return c.json({ error: "Topilmadi" }, 404);
+    const parsed = CreateVersionBody.safeParse((await c.req.json().catch(() => ({}))) ?? {});
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
+    return respond(c, await createVersion(actorOf(c), postId, provider, parsed.data as CreateDistributionVersionBody), 201);
+  })
+  .delete("/posts/:postId/:provider/primary", async (c) => {
+    const postId = c.req.param("postId");
+    const provider = providerParam(c);
+    if (!provider || !UUID_RE.test(postId)) return c.json({ error: "Topilmadi" }, 404);
+    return respond(c, await clearPrimary(actorOf(c), postId, provider));
+  })
+  .patch("/versions/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    const parsed = UpdateVersionBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "Noto'g'ri so'rov tanasi" }, 400);
+    return respond(c, await updateVersion(actorOf(c), id, parsed.data as UpdateDistributionVersionBody));
+  })
+  .delete("/versions/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    return respond(c, await deleteVersion(actorOf(c), id));
+  })
+  .post("/versions/:id/primary", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) return c.json({ error: "Topilmadi" }, 404);
+    return respond(c, await setPrimary(actorOf(c), id));
   })
   // --- Bitta tarqatish ---
   .get("/items/:id", async (c) => {
