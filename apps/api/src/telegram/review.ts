@@ -425,7 +425,14 @@ export function registerReviewHandlers(): void {
       await ctx.answerCallbackQuery({ text: "✅ Chop etildi" });
       if (message) {
         const url = `${config.WEB_ORIGIN}/${result.data.slug}`;
-        const statusLine = `✅ Chop etildi: <a href="${escapeHtmlAttr(url)}">${escapeHtml(result.data.title)}</a>`;
+        const ch = result.data.channel;
+        const channelLine =
+          ch.state === "armed"
+            ? `\n📅 Telegram rejasi: kanalga ${escapeHtml(ch.at)} da yuboriladi`
+            : ch.state === "dropped"
+              ? `\n⚠️ Telegram rejasi bekor qilindi (${ch.reason === "past_time" ? "vaqti o'tgan" : ch.reason === "already_sent" ? "allaqachon yuborilgan" : ch.reason === "no_permission" ? "ruxsat yo'q" : "yaroqsiz"})`
+              : "";
+        const statusLine = `✅ Chop etildi: <a href="${escapeHtmlAttr(url)}">${escapeHtml(result.data.title)}</a>${channelLine}`;
         await editOriginalMessage(message.chat.id, message.message_id, originalText, statusLine);
 
         // Kanalga yuborish ENDI avtomatik EMAS — shu yerda rejim+uzunlik so'raymiz.

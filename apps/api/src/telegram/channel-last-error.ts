@@ -10,7 +10,7 @@ const SECRET_LIKE = "[A-Za-z0-9._~+/=-]{16,}";
 
 /**
  * Xato matnini saqlash/ko'rsatish uchun tozalaydi: bot tokenlari (`123456:ABC...`, `bot<token>` URL'lari), maxfiyga o'xshash
- * `Bearer`/`Basic` qiymatlari va `token: <uzun qiymat>` yashiriladi (oddiy so'zlar — masalan "Basic auth failed", "token: expired" —
+ * `Bearer`/`Basic` qiymatlari va `token: <uzun qiymat>` yashiriladi; `password|secret|api_key|authorization` dan keyingi qiymat (`:` yoki `=`) uzunligidan qat'i nazar yashiriladi (oddiy so'zlar — masalan "Basic auth failed", "token: expired" —
  * tegilmaydi); `kalit=qiymat` ko'rinishi (so'rov parametri) har doim yashiriladi. Bo'shliqlar siqiladi, uzunligi Unicode belgilar
  * bo'yicha cheklanadi. Bo'sh qolsa — umumiy matn.
  */
@@ -20,7 +20,8 @@ export function sanitizeChannelError(raw: unknown): string {
     .replace(/\d{6,}:[A-Za-z0-9_-]{20,}/g, "[token]")
     .replace(new RegExp(`\\b(Bearer|Basic)\\s+${SECRET_LIKE}`, "gi"), "$1 [token]")
     .replace(/\b(token|secret|api[_-]?key|authorization|password)\s*=\s*\S+/gi, "$1=[yashirildi]")
-    .replace(new RegExp(`\\b(token|secret|api[_-]?key|authorization|password)\\s*:\\s*${SECRET_LIKE}`, "gi"), "$1: [yashirildi]")
+    .replace(/\b(password|secret|api[_-]?key|authorization)\s*:\s*\S+/gi, "$1: [yashirildi]")
+    .replace(new RegExp(`\\btoken\\s*:\\s*${SECRET_LIKE}`, "gi"), "token: [yashirildi]")
     .replace(/\s+/g, " ")
     .trim();
   const safe = cleaned || "Noma'lum xato";

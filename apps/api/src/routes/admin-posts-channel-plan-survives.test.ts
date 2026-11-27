@@ -390,6 +390,8 @@ describe("last send error", () => {
     expect(emoji.length).toBe(CHANNEL_LAST_ERROR_MAX); // Unicode belgi bo'yicha, juft surrogat bo'linmaydi
     expect(emoji.slice(0, -1).every((c) => c === "😀")).toBe(true);
     expect(sanitizeChannelError("   ")).toBe("Noma'lum xato");
+    expect(sanitizeChannelError("password: hunter2 secret: abc123 api_key: k authorization: x")).toBe("password: [yashirildi] secret: [yashirildi] api_key: [yashirildi] authorization: [yashirildi]");
+    expect(sanitizeChannelError("password=hunter2")).toBe("password=[yashirildi]");
   });
 });
 
