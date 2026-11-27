@@ -17,6 +17,8 @@ import {
   counterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, statusPill, textForSave, tokenLine,
 } from "@/lib/distribution-ui";
 import { TrashedPanel } from "./distribution-trashed-panel";
+import { SocialPreview } from "./social-preview";
+import { domainOf } from "./social-preview/text";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "cn";
 
@@ -115,8 +117,22 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
     return <p className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">{channel.notReadyReason}</p>;
   }
 
+  const siteName = domainOf(preview?.postUrl ?? "") || "Blog";
+  const previewModel = {
+    provider,
+    text: isGithub ? (preview?.text ?? "") : text,
+    limit: isGithub ? null : (caps?.textMax ?? null),
+    authorName: channel.account?.displayName ?? siteName,
+    authorHandle: channel.account?.username ? `@${channel.account.username.replace(/^@/, "")}` : null,
+    postUrl: preview?.postUrl ?? "",
+    postTitle: preview?.postTitle ?? "",
+    imageUrl: caps?.image && imageChoice !== "none" && preview?.image.previewUrl && !preview.image.error ? preview.image.previewUrl : null,
+    linkMode: provider === "linkedin" ? linkMode : null,
+  } as const;
+
   return (
-    <div className="flex shrink-0 flex-col gap-4" data-testid={`dist-panel-${provider}`}>
+    <div className="grid shrink-0 gap-5 lg:grid-cols-2" data-testid={`dist-panel-${provider}`}>
+    <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill item={item} />
         {channel.account ? <span className="text-xs text-muted-foreground">{channel.account.displayName} · {tokenLine(channel.account).text}</span> : null}
@@ -155,7 +171,6 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
       {isGithub ? (
         <div className="flex flex-col gap-1.5">
           <Label>README&apos;ga yoziladigan blok (so&apos;nggi maqolalar)</Label>
-          <pre className="max-h-48 overflow-auto rounded-md bg-muted px-3 py-2 text-xs break-words whitespace-pre-wrap">{preview?.text ?? "…"}</pre>
           <p className="text-xs text-muted-foreground">«Yuborish» README ichidagi markerlar orasini shu ro&apos;yxat bilan almashtiradi (qolgan qism o&apos;zgarmaydi).</p>
         </div>
       ) : (
@@ -176,21 +191,14 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
 
       {/* Rasm va rejim */}
       {caps?.image ? (
-        <div className="grid grid-cols-[6rem_1fr] gap-3 sm:grid-cols-[8rem_1fr]">
-          <div className="flex aspect-[1.91/1] items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-xs text-muted-foreground">
-            {preview?.image.previewUrl && !preview.image.error ? (
-              // eslint-disable-next-line @next/next/no-img-element -- tashqi (OG/muqova) rasm: oldindan ko'rish
-              <img src={preview.image.previewUrl} alt="" className="size-full object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-            ) : (
-              <span className="px-2 text-center">{preview?.image.error ? "Rasm yo'q" : "Rasmsiz"}</span>
-            )}
-          </div>
+        <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-2">
             <Label className="text-xs">Rasm</Label>
             <select className={selectClass} value={imageChoice} disabled={!actions.edit || busy} onChange={(e) => setImageChoice(e.target.value as typeof imageChoice)} aria-label="Rasm tanlovi">
               {(Object.keys(IMAGE_CHOICE_LABEL) as Array<keyof typeof IMAGE_CHOICE_LABEL>).map((k) => <option key={k} value={k}>{IMAGE_CHOICE_LABEL[k]}</option>)}
             </select>
             {preview?.image.width ? <p className="text-xs text-muted-foreground">{preview.image.source === "og" ? "Sayt OG rasmi" : "Muqova"} · {preview.image.width}×{preview.image.height}</p> : null}
+            {preview?.image.error ? <p className="text-xs text-amber-700 dark:text-amber-300">{preview.image.error}</p> : preview && !preview.image.previewUrl ? <p className="text-xs text-muted-foreground">Rasmsiz</p> : null}
             {provider === "linkedin" ? (
               <>
                 <Label className="text-xs">LinkedIn post turi</Label>
@@ -278,6 +286,10 @@ function ChannelPanel({ postId, channel, item, onChanged }: { postId: string; ch
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    <aside className="min-w-0 lg:sticky lg:top-0 lg:self-start" aria-label="Oldindan ko'rish">
+      {preview ? <SocialPreview model={previewModel} /> : <div className="h-40 animate-pulse rounded-md bg-muted" aria-busy />}
+    </aside>
+    </div>
   );
 }
 
@@ -310,7 +322,7 @@ export function DistributionDialog({ postId, open, onOpenChange }: { postId: str
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-4 overflow-y-auto sm:max-w-3xl max-sm:fixed max-sm:inset-0 max-sm:h-dvh max-sm:max-h-none max-sm:max-w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none">
+      <DialogContent showCloseButton className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-4 overflow-y-auto sm:max-w-3xl lg:max-w-5xl max-sm:fixed max-sm:inset-0 max-sm:h-dvh max-sm:max-h-none max-sm:max-w-full max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none">
         <DialogHeader>
           <DialogTitle>Tarqatish</DialogTitle>
         </DialogHeader>

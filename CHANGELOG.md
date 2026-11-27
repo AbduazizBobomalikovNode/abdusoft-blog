@@ -6,6 +6,10 @@
 
 ### O'zbekcha
 
+**Tarqatish: har bir tarmoq uchun real vaqtli oldindan ko'rish**
+- Dialogda LinkedIn, X, Threads, Instagram va GitHub README ko'rinishi (tahrirlagich yonida); matn har bir tugma bosilishida yangilanadi, URL/#hashtag/@mention bo'yaladi, "ko'proq" qisqartirish, chegaradan oshgan qism qizil bilan belgilanadi, Instagram'da rasm yo'qligi ogohlantiriladi
+- Faqat veb: API, ma'lumotlar bazasi va yuborish xatti-harakati o'zgarmagan
+
 **Claude konnektori — 1a bosqich (faqat o'qish), `MCP_ENABLED` orqasida**
 - Masofaviy MCP server (`/mcp`) va OAuth 2.1 avtorizatsiya serveri (PKCE, dinamik ro'yxatdan o'tish, Client ID Metadata Document, refresh rotatsiyasi); server tomonda AI modeli yo'q
 - 12 ta o'qish vositasi: postlar, post kontenti, teglar, izohlar, statistika, tarix, chiqindi qutisi, amallar jurnali, media, `whoami`
@@ -18,6 +22,10 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Distribution: real-time per-network preview**
+- The dialog shows LinkedIn, X, Threads, Instagram and GitHub README layouts next to the editor; text updates on every keystroke, URLs/#hashtags/@mentions are styled, "see more" collapse, text past the limit is highlighted in red, Instagram warns when no image is chosen
+- Web only: API, database and sending behaviour unchanged
 
 **Claude connector — stage 1a (read-only), behind `MCP_ENABLED`**
 - Remote MCP server (`/mcp`) and OAuth 2.1 authorization server (PKCE, dynamic registration, Client ID Metadata Documents, refresh rotation); no AI model on the server
