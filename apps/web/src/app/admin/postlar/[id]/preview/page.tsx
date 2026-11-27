@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { ArticleBody } from "@/components/article-body";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
+import { PostMainVideo } from "@/components/post-main-video";
 import { PostTags } from "@/components/post-tags";
 import { PrevNextNav } from "@/components/prev-next-nav";
 import { RelatedPosts } from "@/components/related-posts";
@@ -23,6 +24,9 @@ export default async function PostPreviewPage({
   if (!post) {
     notFound();
   }
+
+  const mainVideo = post.mainVideo ?? null;
+  const videoPoster = mainVideo ? (mainVideo.posterUrl ?? post.coverUrl) : null;
 
   const showToc = post.settings.showToc && (post.readingTime ?? 0) >= TOC_MIN_READING_TIME;
 
@@ -48,7 +52,9 @@ export default async function PostPreviewPage({
           </div>
         </header>
 
-        {post.coverUrl ? (
+        {mainVideo ? (
+          <PostMainVideo video={mainVideo} poster={videoPoster} title={post.title} />
+        ) : post.coverUrl ? (
           <figure>
             {/* eslint-disable-next-line @next/next/no-img-element -- CMS kontenti */}
             <img src={post.coverUrl} alt={post.title} className="w-full rounded-lg" />
