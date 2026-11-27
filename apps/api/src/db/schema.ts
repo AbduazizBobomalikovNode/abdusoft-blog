@@ -61,6 +61,8 @@ export const posts = pgTable(
     toc: jsonb("toc").notNull(),
     readingTime: integer("reading_time"),
     coverUrl: text("cover_url"),
+    /** Postning asosiy videosi: tayyor render ishining surati (`PostMainVideoSchema`). Bo'sh — video yo'q. Revision'larga kirmaydi. */
+    mainVideo: jsonb("main_video"),
     status: postStatusEnum("status").notNull().default("draft"),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }),

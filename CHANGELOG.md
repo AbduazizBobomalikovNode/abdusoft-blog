@@ -13,6 +13,10 @@
 - `better-auth` 1.7.7 → 1.7.28; yangi `jwks` va `oauth_*` jadvallari (additiv migratsiya `0015`)
 - Qo'llanma: `docs/claude-connector.md`
 
+**Postning asosiy videosi**
+- Tayyor render ishini post sahifasida muqova o'rnida ko'rsatish: panelda "Asosiy video qilish", konnektorda `update_post` `main_video_job_id` (`posts:write`, `VIDEO_ENABLED`dan mustaqil); `VideoObject` JSON-LD
+- Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
+
 ### English
 
 **Claude connector — stage 1a (read-only), behind `MCP_ENABLED`**
@@ -21,6 +25,10 @@
 - Permissions (read / write / publish / dangerous) and a web consent page (admin only); Admin → Connected apps (full revocation)
 - `better-auth` 1.7.7 → 1.7.28; new `jwks` and `oauth_*` tables (additive migration `0015`)
 - Guide: `docs/claude-connector.md`
+
+**Post main video**
+- A finished render job can be shown instead of the cover on the post page: "Asosiy video qilish" in the panel, `update_post` `main_video_job_id` in the connector (`posts:write`, independent of `VIDEO_ENABLED`); `VideoObject` JSON-LD
+- New nullable column `posts.main_video` (additive migration `0020`); a job used as the main video cannot be deleted
 
 ## v1.0.0 — 2026-10-01
 

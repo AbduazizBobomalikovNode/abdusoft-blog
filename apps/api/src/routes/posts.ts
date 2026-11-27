@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { publicMainVideo } from "../lib/posts/main-video.js";
 import { and, asc, desc, eq, gt, ilike, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { isbot } from "isbot";
 import { z } from "zod";
@@ -369,6 +370,7 @@ export const postsRoute = new Hono()
       html: post.contentHtml,
       toc: post.toc,
       coverUrl: post.coverUrl,
+      mainVideo: publicMainVideo(post.mainVideo),
       publishedAt: post.publishedAt?.toISOString() ?? null,
       readingTime: post.readingTime,
       pinned: post.pinned,

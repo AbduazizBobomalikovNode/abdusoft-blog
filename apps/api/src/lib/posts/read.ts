@@ -15,6 +15,7 @@ import {
   type PostRow,
   toAuthorRef,
 } from "./shared.js";
+import { parseStoredMainVideo, publicMainVideo } from "./main-video.js";
 import { fail, ok, type Actor, type ServiceResult } from "./types.js";
 
 const SHORT_QUERY_LENGTH = 3;
@@ -220,6 +221,7 @@ async function buildDetail(post: PostRow) {
     excerpt: post.excerpt,
     contentJson: post.contentJson,
     coverUrl: post.coverUrl,
+    mainVideo: parseStoredMainVideo(post.mainVideo),
     status: post.status,
     publishedAt: post.publishedAt?.toISOString() ?? null,
     scheduledAt: post.scheduledAt?.toISOString() ?? null,
@@ -333,6 +335,7 @@ export async function previewPost(actor: Actor, id: string) {
     html: post.contentHtml,
     toc: post.toc,
     coverUrl: post.coverUrl,
+    mainVideo: publicMainVideo(post.mainVideo),
     status: post.status,
     publishedAt: post.publishedAt?.toISOString() ?? null,
     readingTime: post.readingTime,

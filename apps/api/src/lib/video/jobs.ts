@@ -767,12 +767,12 @@ export async function cancelJob(actor: Actor, id: string): Promise<ServiceResult
   return ok(toJobDetail(after!.row, after!.assets, await queuePositionOf(after!.row)));
 }
 
-/** Postlar (qoralamalar ham): shu URL post tanasida yoki muqovada ishlatilganmi. */
+/** Postlar (qoralamalar ham): shu URL post tanasida, muqovada yoki asosiy videoda (`main_video.url`) ishlatilganmi. */
 export async function postsUsingUrls(urls: string[]): Promise<Array<{ id: string; title: string }>> {
   if (urls.length === 0) return [];
   const conds = urls.flatMap((url) => {
     const escaped = url.replace(/[%_\\]/g, (c) => `\\${c}`);
-    return [eq(posts.coverUrl, url), sql`${posts.contentJson}::text like ${`%${escaped.replace(/"/g, '\\"')}%`}`];
+    return [eq(posts.coverUrl, url), sql`${posts.mainVideo}->>'url' = ${url}`, sql`${posts.mainVideo}->>'posterUrl' = ${url}`, sql`${posts.contentJson}::text like ${`%${escaped.replace(/"/g, '\\"')}%`}`];
   });
   return db.select({ id: posts.id, title: posts.title }).from(posts).where(or(...conds)).limit(10);
 }
@@ -798,7 +798,7 @@ export async function deleteJob(actor: Actor, id: string): Promise<ServiceResult
   if (!found) return fail("not_found", "Video ishi topilmadi", { code: "job_not_found" });
   if (found.row.status === "running") return fail("conflict", "Ish hozir bajarilmoqda — avval bekor qiling", { code: "job_running", hint: "Cancel it first (cancel_video_job), then delete." });
   const res = await deleteJobRow(id);
-  if (!res.deleted) return fail("conflict", "Video post ichida ishlatilgan — o'chirilmadi", { code: "job_referenced", usedBy: res.usedBy, hint: "Remove the video link from those posts first." });
+  if (!res.deleted) return fail("conflict", "Video post ichida ishlatilgan — o'chirilmadi", { code: "job_referenced", usedBy: res.usedBy, hint: "Remove the video link from those posts first (for a post main video: update_post with main_video_job_id=null)." });
   await recordAuditSafe(actor, { action: "video.delete", entityType: "video", entityId: id, summary: "Video ishi o'chirildi", meta: { kind: found.row.kind, assets: found.assets.length } });
   return ok({ id });
 }

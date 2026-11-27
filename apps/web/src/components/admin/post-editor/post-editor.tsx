@@ -29,7 +29,7 @@ import { useDistributionEnabled } from "../distribution-context";
 import { DistributionDialog } from "./distribution-dialog";
 import { ConflictBanner } from "./conflict-banner";
 import { HistoryDialog } from "./history-dialog";
-import { VideoPanel } from "./video-panel";
+import { VideoPanel, type MainVideoControl } from "./video-panel";
 import { PostEditorHeader, StaffEditorHeader, type EditorMenuActions, type SaveState } from "./post-editor-header";
 import { PostEditorSettings } from "./post-editor-settings";
 import { PostEditorBubbleMenu } from "./post-editor-toolbar";
@@ -523,6 +523,23 @@ function PostEditorInner({
     }
   }
 
+  const [mainVideoJobId, setMainVideoJobId] = useState<string | null>(post.mainVideo?.jobId ?? null);
+
+  /** Asosiy videoni o'rnatish/olib tashlash: avtosaqlash bilan bir xil token zanjiri (`runTransition`) — keyingi avtosaqlash konfliktga tushmaydi. */
+  const mainVideoControl: MainVideoControl = {
+    jobId: mainVideoJobId,
+    set: async (jobId) => {
+      try {
+        await engine.runTransition((token) => adminApi.updatePost(post.id, token ? { mainVideoJobId: jobId, expectedUpdatedAt: token } : { mainVideoJobId: jobId }));
+        setMainVideoJobId(jobId);
+        return true;
+      } catch (error) {
+        if (handledAsConflict(error)) return false;
+        throw error;
+      }
+    },
+  };
+
   async function handleExcerptAuto() {
     try {
       await engine.runTransition((token) => adminApi.updatePost(post.id, token ? { excerpt: null, expectedUpdatedAt: token } : { excerpt: null }));
@@ -835,7 +852,7 @@ function PostEditorInner({
         onRestore={handleRestoreRevision}
       />
 
-      {!isStaff ? <VideoPanel postId={post.id} /> : null}
+      {!isStaff ? <VideoPanel postId={post.id} mainVideo={mainVideoControl} /> : null}
 
       {isStaff ? <StaffReviewBanner status={status} reviewNote={reviewNote} /> : null}
       {!isStaff && status === "in_review" ? (

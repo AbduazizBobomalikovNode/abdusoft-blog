@@ -59,6 +59,16 @@ Render repozitoriysiga qo'yiladigan fayllar blog klonida: `packages/motion/rende
 2. Konnektor orqali `preview_storyboard` (yoki `get_storyboard_guide` misolini ishlating). Birinchi javob odatda "still rendering": `get_video_job` bilan 10–20 s'dan keyin kadrlar tayyor bo'ladi.
 3. Render repozitoriysida *Actions → Render video* da run ko'rinadi; logda faqat bosqich nomlari, vaqtlar va hajmlar bor.
 
+## Postning asosiy videosi
+
+Tayyor `render` ishini postning **asosiy videosi** qilish mumkin: panelda *Video* bo'limidagi tayyor render kartasida "Asosiy video qilish" (yoki konnektorda `update_post` `main_video_job_id`, [claude-connector.md](claude-connector.md) 18-bo'lim). Post sahifasida video **muqova o'rnida** ko'rsatiladi (`<video controls preload="metadata">`, avtoplay yo'q, poster — muqova); muqova ro'yxatlar, OG rasm va BlogPosting JSON-LD uchun o'zgarmaydi, qo'shimcha `VideoObject` JSON-LD chiqadi (`og:video` yo'q).
+
+- **Saqlash:** `posts.main_video` (jsonb, migratsiya `0020_post_main_video`, additiv) — ish suratidan: `jobId`, `url`, `posterUrl`, `width`, `height`, `seconds`, `mime`. Tahrir tarixiga kirmaydi.
+- **`VIDEO_ENABLED=false` bo'lsa ham ishlaydi:** o'rnatish/ko'rsatish faqat bazani o'qiydi; render kodi yuklanmaydi. Panelda tugma esa Video bo'limida turadi, u faqat `VIDEO_ENABLED=true` bo'lganda ko'rinadi — o'chiq xizmatda o'rnatish konnektor (`update_post`) orqali.
+- **Himoya:** asosiy video qilingan ishni o'chirib bo'lmaydi (`job_referenced`) va "oxirgi N render" tozalashi uni saqlaydi. Avval olib tashlang (panelda "Asosiy videodan olib tashlash" yoki `main_video_job_id=null`).
+- **Orqaga qaytarish:** avval kodni eski versiyaga qaytaring (eski kod ustunni bilmaydi va unga tegmaydi), so'ng istasangiz `ALTER TABLE "posts" DROP COLUMN "main_video";`.
+- **Media manzili va CSP:** repozitoriyda web uchun umumiy `Content-Security-Policy`/`media-src` yo'q (faqat `/login` va `/consent`da `frame-ancestors 'none'`), shuning uchun `r2.dev`/R2 domenidagi video bloklanmaydi. Mahalliy rejimda API `/uploads/*` ni `Cross-Origin-Resource-Policy: cross-origin` bilan beradi (video web origin'idan yuklanadi). Reverse proxy yoki Cloudflare'da o'zingiz CSP qo'ysangiz, `media-src` ga media manzilini qo'shing.
+
 ## Narx, chegaralar, maxfiylik
 
 - **Narx.** Ommaviy repozitoriyda standart hosted runner daqiqalari bepul. Odatiy ish: ishga tushish ~1 daqiqa (runner + `pnpm install` + keshlar) + render. O'lchangan (mahalliy M1, 8 yadro, 4 parallel kadr, sovuq bundle): 56.6 s showcase video **60 s**da (~1.06 s/video soniya), 9 kadrli ko'rik **6.8 s**da, MP4 **6.5 MB**. Hosted 4 vCPU sekinroq bo'lishi mumkin: taxminlar ~2 s/video soniya (`dry_run` tugagan ishlar o'lchovidan o'zi aniqlashtiradi) + ~1 daqiqa ishga tushish. Repozitoriy yopiq bo'lsa daqiqalar tarif bo'yicha hisoblanadi — shu hujjat ommaviy repozitoriyga mo'ljallangan.

@@ -57,6 +57,18 @@ export const AdjacentPostSchema = z
   .nullable();
 export type AdjacentPost = z.infer<typeof AdjacentPostSchema>;
 
+/** Postning asosiy videosi (tayyor render ishining surati). `jobId` faqat admin/MCP javobida; ommaviy javobda bo'lmasligi mumkin. */
+export const PostMainVideoSchema = z.object({
+  jobId: z.string().optional(),
+  url: z.string(),
+  posterUrl: z.string().nullable().default(null),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  seconds: z.number().nonnegative(),
+  mime: z.literal("video/mp4").default("video/mp4"),
+});
+export type PostMainVideo = z.infer<typeof PostMainVideoSchema>;
+
 export const PostDetailSchema = z.object({
   slug: z.string(),
   title: z.string(),
@@ -64,6 +76,8 @@ export const PostDetailSchema = z.object({
   html: z.string(),
   toc: z.array(TocItemSchema),
   coverUrl: z.string().nullable(),
+  /** Asosiy video (bo'lsa post sahifasida muqova o'rnida ko'rsatiladi); eski javoblarda yo'q. */
+  mainVideo: PostMainVideoSchema.nullable().default(null),
   publishedAt: z.string().nullable(),
   readingTime: z.number().nullable(),
   pinned: z.boolean(),
@@ -561,6 +575,8 @@ export const AdminPostDetailSchema = z.object({
   excerpt: z.string().nullable(),
   contentJson: z.unknown(),
   coverUrl: z.string().nullable(),
+  /** Asosiy video (`jobId` bilan); yo'q bo'lsa `null`. */
+  mainVideo: PostMainVideoSchema.nullable().default(null),
   status: AdminPostStatusSchema,
   publishedAt: z.string().nullable(),
   scheduledAt: z.string().nullable(),
@@ -595,6 +611,8 @@ export const UpdatePostBodySchema = z.object({
   excerpt: z.string().nullable().optional(),
   contentJson: z.unknown().optional(),
   coverUrl: z.string().nullable().optional(),
+  /** Faqat admin: shu postning tayyor render ishi — asosiy video qilib o'rnatiladi; `null` — olib tashlaydi. */
+  mainVideoJobId: z.string().uuid().nullable().optional(),
   tagSlugs: z.array(z.string()).optional(),
   settings: PostSettingsSchema.partial().optional(),
   pinned: z.boolean().optional(),

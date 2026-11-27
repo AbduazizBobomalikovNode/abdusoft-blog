@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArticleBody } from "@/components/article-body";
 import { JsonLd } from "@/components/json-ld";
 import { PostComments } from "@/components/post-comments";
+import { PostMainVideo } from "@/components/post-main-video";
 import { PostMetaStats } from "@/components/post-meta-stats";
 import { PostReactions } from "@/components/post-reactions";
 import { PostTags } from "@/components/post-tags";
@@ -14,7 +15,7 @@ import { TableOfContents } from "@/components/table-of-contents";
 import { ViewBeacon } from "@/components/view-beacon";
 import { getPost, getSite } from "@/lib/api";
 import { formatDate, formatReadingTime } from "@/lib/format";
-import { buildBlogPostingJsonLd } from "@/lib/json-ld";
+import { buildBlogPostingJsonLd, buildVideoObjectJsonLd, ogImageUrl } from "@/lib/json-ld";
 import { site } from "@/lib/site";
 
 export const revalidate = 300;
@@ -71,9 +72,17 @@ export default async function PostPage({
   const includeTelegramCount = telegramDisplay !== "admin_only";
   const showToc = post.settings.showToc && (post.readingTime ?? 0) >= TOC_MIN_READING_TIME;
 
+  // Asosiy video bo'lsa post sahifasida muqova O'RNIDA ko'rsatiladi; muqova ro'yxatlar, OG rasm va BlogPosting uchun o'zgarmaydi.
+  const mainVideo = post.mainVideo ?? null;
+  const videoPoster = mainVideo ? (mainVideo.posterUrl ?? post.coverUrl) : null;
+  const videoThumbnail = videoPoster
+    ? videoPoster.startsWith("/") ? `${site.url}${videoPoster}` : videoPoster
+    : ogImageUrl(site, post.slug);
+
   return (
     <>
       <JsonLd data={buildBlogPostingJsonLd(post, site)} />
+      {mainVideo ? <JsonLd data={buildVideoObjectJsonLd(post, mainVideo, videoThumbnail, site)} /> : null}
       <ReadingProgress />
       <ViewBeacon slug={post.slug} />
       <article className="relative flex flex-col gap-6">
@@ -105,7 +114,9 @@ export default async function PostPage({
           </address>
         </header>
 
-        {post.coverUrl ? (
+        {mainVideo ? (
+          <PostMainVideo video={mainVideo} poster={videoPoster} title={post.title} />
+        ) : post.coverUrl ? (
           <figure>
             {/* eslint-disable-next-line @next/next/no-img-element -- CMS kontenti, domeni oldindan noma'lum */}
             <img src={post.coverUrl} alt={post.title} className="w-full rounded-lg" />
