@@ -5,6 +5,7 @@ import { distributions } from "../../../db/schema.js";
 import { recordAuditSafe } from "../../audit.js";
 import { fail, ok, type Actor, type ServiceResult } from "../../posts/types.js";
 import { parsePublicHttpsUrl } from "../checks.js";
+import { isDistributionError } from "../errors.js";
 import type { ProviderId } from "../types.js";
 import { PROVIDER_LABEL, ensureFreshAccount, getActiveAccount, safeErrorMessage, toConnected } from "./accounts.js";
 import { listChannels } from "./channels.js";
@@ -24,6 +25,9 @@ export interface DraftInput {
   text?: string | null | undefined;
   imageChoice?: DistributionImageChoice | undefined;
   linkMode?: DistributionLinkMode | null | undefined;
+  /** Faqat X: zanjir (thread) rejimi va " i/n" raqamlash. `undefined` — o'zgarmaydi. */
+  xThread?: boolean | undefined;
+  xThreadNumbering?: boolean | undefined;
 }
 
 function pgCode(error: unknown): string | undefined {
@@ -31,11 +35,19 @@ function pgCode(error: unknown): string | undefined {
   return e?.code ?? e?.cause?.code;
 }
 
+export const THREAD_FROZEN_MESSAGE = "Zanjirning bir qismi allaqachon yuborilgan — matn va zanjir rejimi o'zgartirilmaydi (qayta urinish qolgan qismlardan davom etadi)";
+
+/** Zanjirning kamida bitta tvitu platformada: matn/rejim MUZLATILGAN, qayta urinish keyingi bo'lakdan davom etadi. */
+export function hasPostedThreadParts(row: Pick<DistributionRow, "threadIds"> | null | undefined): boolean {
+  return (row?.threadIds?.length ?? 0) > 0;
+}
+
 export function validateDraft(provider: ProviderId, input: DraftInput): string | null {
   if (typeof input.text === "string" && input.text.length > MAX_TEXT_CHARS) return `Matn juda uzun (${MAX_TEXT_CHARS} belgidan oshmasin)`;
   if (typeof input.text === "string" && provider === "github") return "GitHub README bloki avtomatik yig'iladi — matn tahrirlanmaydi";
   if (input.imageChoice !== undefined && !DISTRIBUTION_IMAGE_CHOICES.includes(input.imageChoice)) return "Noto'g'ri rasm tanlovi";
   if (input.linkMode !== undefined && input.linkMode !== null && provider !== "linkedin") return "Havola rejimi faqat LinkedIn uchun";
+  if ((input.xThread === true || input.xThreadNumbering === true) && provider !== "x") return "Zanjir (thread) rejimi faqat X uchun";
   return null;
 }
 
@@ -44,6 +56,8 @@ export function draftFields(input: DraftInput): Partial<typeof distributions.$in
   if (input.text !== undefined) f.text = input.text === null || input.text.trim() === "" ? null : input.text;
   if (input.imageChoice !== undefined) f.imageChoice = input.imageChoice;
   if (input.linkMode !== undefined) f.linkMode = input.linkMode;
+  if (input.xThread !== undefined) f.xThread = input.xThread;
+  if (input.xThreadNumbering !== undefined) f.xThreadNumbering = input.xThreadNumbering;
   return f;
 }
 
@@ -96,6 +110,7 @@ export async function saveDraft(actor: Actor, postId: string, provider: Provider
   if (!["draft", "failed", "scheduled"].includes(row.status)) {
     return fail("conflict", row.status === "sending" ? "Hozir yuborilmoqda — tahrirlab bo'lmaydi" : "Avval «tekshirish kerak» holatini hal qiling");
   }
+  if (hasPostedThreadParts(row) && (input.text !== undefined || input.xThread !== undefined || input.xThreadNumbering !== undefined)) return fail("conflict", THREAD_FROZEN_MESSAGE);
   // Rejalashtirilgan tarqatishning matni o'zgarsa, "muzlatilgan" matn ham yangi ko'rsatilgan matnga yangilanadi.
   let frozen: Partial<typeof distributions.$inferInsert> = {};
   if (row.status === "scheduled" && provider !== "github") {
@@ -140,7 +155,10 @@ async function queue(
   if (existing && !["draft", "failed", "scheduled"].includes(existing.status)) {
     return fail("conflict", existing.status === "sending" ? "Hozir yuborilmoqda" : "Natijasi noma'lum yuborish bor — avval uni hal qiling (tekshirish kerak)");
   }
-  const plan = await resolvePlan(postId, provider, { overrides: toOverrides(input), row: existing });
+  // Zanjirning bir qismi allaqachon yuborilgan: matn/rejim muzlatilgan qiymatlardan olinadi (kiritilgani e'tiborsiz), davom etadi.
+  const resumeThread = hasPostedThreadParts(existing);
+  if (resumeThread) input = { imageChoice: input.imageChoice, versionId: input.versionId, again: true };
+  const plan = await resolvePlan(postId, provider, { overrides: resumeThread ? { text: existing?.renderedText ?? null, ...(input.imageChoice !== undefined ? { imageChoice: input.imageChoice } : {}) } : toOverrides(input), row: existing });
   if (!plan) return fail("not_found", "Post topilmadi");
   if (plan.errorCount > 0) return failChecks(plan);
   if (provider !== "github" && !input.again) {
@@ -189,6 +207,8 @@ export function toOverrides(input: DraftInput): PlanOverrides {
   if (input.text !== undefined) o.text = input.text === null || input.text.trim() === "" ? null : input.text;
   if (input.imageChoice !== undefined) o.imageChoice = input.imageChoice;
   if (input.linkMode !== undefined) o.linkMode = input.linkMode;
+  if (input.xThread !== undefined) o.xThread = input.xThread;
+  if (input.xThreadNumbering !== undefined) o.xThreadNumbering = input.xThreadNumbering;
   return o;
 }
 
@@ -232,7 +252,8 @@ export async function retry(actor: Actor, id: string): Promise<ServiceResult<Dis
 }
 
 async function requeue(actor: Actor, row: DistributionRow, action: string, summary: string): Promise<ServiceResult<DistributionItemDto>> {
-  const plan = await resolvePlan(row.postId, row.provider as ProviderId, { row });
+  const resumeThread = hasPostedThreadParts(row);
+  const plan = await resolvePlan(row.postId, row.provider as ProviderId, { row, ...(resumeThread ? { overrides: { text: row.renderedText } } : {}) });
   if (!plan) return fail("not_found", "Post topilmadi");
   if (plan.errorCount > 0) return failChecks(plan);
   const now = distNow();
@@ -242,7 +263,7 @@ async function requeue(actor: Actor, row: DistributionRow, action: string, summa
       status: "scheduled",
       // Egasi boshlagan qayta urinish: yuboriladigan matn aynan hozir ko'rsatilgan (saqlangan tahrir bilan) matn. Avtomatik qayta urinish
       // (runner) bu yerdan o'tmaydi va avval muzlatilgan matnni saqlaydi. GitHub bloki har safar qayta yig'iladi.
-      renderedText: row.provider === "github" ? null : plan.text,
+      renderedText: row.provider === "github" ? null : resumeThread ? row.renderedText : plan.text,
       scheduledAt: now,
       nextAttemptAt: null,
       attempts: 0,
@@ -302,13 +323,27 @@ export async function removeFromPlatform(actor: Actor, id: string): Promise<Serv
   if (!provider.capabilities.delete) return fail("unprocessable", provider.capabilities.notes?.delete ?? "Bu platforma postni API orqali o'chirishni qo'llamaydi");
   let account = await getActiveAccount(row.provider as ProviderId);
   if (!account) return fail("unprocessable", "Akkaunt ulanmagan — avval ulang");
+  // Zanjir (X): barcha tvitlar TESKARI tartibda (oxirgi javobdan birinchisiga) o'chiriladi. Har bir muvaffaqiyatli o'chirishdan keyin
+  // qolgan id'lar saqlanadi: xato bo'lsa keyingi urinish faqat qolganlarini o'chiradi. Ro'yxat bo'sh bo'lsa — faqat `externalId`.
+  const ids = row.threadIds && row.threadIds.length > 0 ? [...row.threadIds] : [row.externalId];
   try {
     account = await ensureFreshAccount(account);
-    await provider.remove({ deps: providerDeps(), account: toConnected(account) }, row.externalId);
+    const ctx = { deps: providerDeps(), account: toConnected(account) };
+    for (let i = ids.length - 1; i >= 0; i--) {
+      try {
+        await provider.remove(ctx, ids[i] as string);
+      } catch (error: unknown) {
+        // Tvit allaqachon yo'q (qo'lda o'chirilgan): davom etamiz.
+        if (!(isDistributionError(error) && error.status === 404)) throw error;
+      }
+      ids.pop();
+      if (row.threadIds && row.threadIds.length > 0) await db.update(distributions).set({ threadIds: [...ids] }).where(and(eq(distributions.id, id), eq(distributions.status, "sent")));
+    }
   } catch (error: unknown) {
     const safe = safeErrorMessage(error, account ? [toConnected(account).accessToken] : []);
-    await recordAuditSafe(actor, auditEntry("distribution.remove_failed", row, "olib tashlash muvaffaqiyatsiz", { kind: safe.kind }));
-    return fail("unprocessable", `Olib tashlab bo'lmadi: ${safe.message}`);
+    await recordAuditSafe(actor, auditEntry("distribution.remove_failed", row, "olib tashlash muvaffaqiyatsiz", { kind: safe.kind, remaining: ids.length }));
+    const partialNote = row.threadIds && row.threadIds.length > 1 && ids.length < row.threadIds.length ? ` (zanjirdan ${row.threadIds.length - ids.length} ta tvit o'chirildi, ${ids.length} ta qoldi — qayta urinsangiz qolganlari o'chiriladi)` : "";
+    return fail("unprocessable", `Olib tashlab bo'lmadi: ${safe.message}${partialNote}`);
   }
   const now = distNow();
   const [updated] = await db

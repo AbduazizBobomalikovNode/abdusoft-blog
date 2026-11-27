@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DISTRIBUTION_STATUS_LABELS, type DistributionAccountDto, type DistributionItemDto } from "@blog/shared";
-import { counterView, groupChecks, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, purgeDistributionWarning, statusPill, textForSave, tokenLine, trashedItemActions, trashedVisibleItems } from "./distribution-ui";
+import { DISTRIBUTION_STATUS_LABELS, splitXThread, type DistributionAccountDto, type DistributionItemDto } from "@blog/shared";
+import { counterView, threadCounterView, groupChecks, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, purgeDistributionWarning, statusPill, textForSave, tokenLine, trashedItemActions, trashedVisibleItems } from "./distribution-ui";
 
 const item = (over: Partial<DistributionItemDto> = {}): DistributionItemDto => ({
-  id: "i", postId: "p", provider: "x", status: "draft", text: null, sentText: null, imageChoice: "auto", linkMode: null, scheduledAt: null, nextAttemptAt: null,
+  id: "i", postId: "p", provider: "x", status: "draft", text: null, sentText: null, imageChoice: "auto", linkMode: null, xThread: false, xThreadNumbering: false, threadPosted: 0, scheduledAt: null, nextAttemptAt: null,
   attempts: 0, lastErrorKind: null, lastErrorMessage: null, externalId: null, externalUrl: null, step: null, canResume: false, versionId: null, planDelayMinutes: null, planMaterializedAt: null, createdBy: null, createdVia: "web",
   sentAt: null, removedAt: null, createdAt: "2026-11-26T10:00:00Z", updatedAt: "2026-11-26T10:00:00Z", ...over,
 });
@@ -142,5 +142,26 @@ describe("warning before permanently deleting a post that was sent to networks",
     expect(w).toMatch(/olib tashlab bo'lmaydi/);
     expect(purgeDistributionWarning([mk("linkedin", "scheduled"), mk("x", "cancelled", { removedAt: "2026-11-01T00:00:00Z" }), mk("x", "failed")], channels)).toBeNull();
     expect(purgeDistributionWarning([], channels)).toBeNull();
+  });
+});
+
+describe("threadCounterView", () => {
+  it("shows the tweet count and the longest part", () => {
+    const v = threadCounterView(splitXThread("Birinchi\n---\nIkkinchi"));
+    expect(v).toMatchObject({ level: "ok", label: "2 ta tvit · eng uzuni 8/280" });
+  });
+  it("flags a part over the limit as '2-si 291/280'", () => {
+    const split = splitXThread("a\n---\n" + "x".repeat(291));
+    // avtomatik bo'linadi, shuning uchun qo'lda oshgan holatni modellashtiramiz
+    const over = { ...split, parts: split.parts.map((p, i) => (i === 1 ? { ...p, weight: 291, over: true } : p)), anyOver: true };
+    expect(threadCounterView(over)).toMatchObject({ level: "over", className: "text-destructive" });
+    expect(threadCounterView(over).label).toContain("2-si 291/280");
+  });
+  it("too many parts is an error", () => {
+    const text = Array.from({ length: 16 }, (_, i) => `t${i}`).join("\n---\n");
+    expect(threadCounterView(splitXThread(text))).toMatchObject({ level: "over", label: "16 ta tvit (ko'pi bilan 15)" });
+  });
+  it("empty text -> 0 ta tvit", () => {
+    expect(threadCounterView(splitXThread(""))).toMatchObject({ label: "0 ta tvit" });
   });
 });

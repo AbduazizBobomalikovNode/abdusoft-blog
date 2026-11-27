@@ -619,6 +619,12 @@ export const distributions = pgTable(
      * "Saytga chiqqach N daqiqadan keyin" rejasi (0..10080): post chop etilganda `chop etilgan vaqt + N daqiqa`ga aylanadi (`scheduled_at`).
      * `null` — reja yo'q. Reja qatorning o'zida saqlanadi (faol qator + `version_id`/matn/rasm tanlovi); holatlar enum'i o'zgarmagan.
      */
+    /** Faqat X: "zanjir" (thread) rejimi — matn `---` satrlari va avtomatik bo'lish bilan ketma-ket javob tvitlariga bo'linadi. Standart: bitta tvit. */
+    xThread: boolean("x_thread").notNull().default(false),
+    /** Faqat X zanjiri: har bir tvitga " i/n" qo'shiladi (vazni hisobga olinadi). */
+    xThreadNumbering: boolean("x_thread_numbering").notNull().default(false),
+    /** Zanjirning platformaga YUBORILGAN tvit id'lari (tartib bilan). Har tvitdan keyin saqlanadi: qayta urinish keyingi qismdan davom etadi; olib tashlashda hammasi o'chiriladi. */
+    threadIds: jsonb("thread_ids").$type<string[]>(),
     planDelayMinutes: integer("plan_delay_minutes"),
     /** Reja haqiqiy `scheduled_at`ga aylantirilgan (yoki xato bilan yopilgan) vaqt; `null` — hali chop etilmagan (kutmoqda). Idempotentlik belgisi. */
     planMaterializedAt: timestamp("plan_materialized_at", { withTimezone: true }),

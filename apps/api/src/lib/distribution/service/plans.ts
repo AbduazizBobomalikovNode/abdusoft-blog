@@ -255,6 +255,8 @@ export async function revertPlansForPost(postId: string, now: Date = distNow()):
         isNotNull(distributions.planDelayMinutes),
         isNotNull(distributions.planMaterializedAt),
         isNull(distributions.sentAt),
+        // Zanjirning bir qismi allaqachon platformada bo'lsa — qoralamaga qaytarilmaydi (yuborilgan tvitlar yo'qolib qolmasin).
+        isNull(distributions.threadIds),
         sql`(${distributions.status} = 'scheduled' or (${distributions.status} = 'failed' and ${distributions.lastErrorKind} in ('plan_invalid', 'internal') and ${distributions.attempts} = 0))`,
       ),
     )

@@ -1,4 +1,4 @@
-import type { ChannelCheck, DistributionImageChoice, DistributionLinkMode, DistributionPreviewResponse } from "@blog/shared";
+import { splitXThread, X_THREAD_MAX_PARTS, type ChannelCheck, DistributionImageChoice, DistributionLinkMode, DistributionPreviewResponse } from "@blog/shared";
 import { check } from "../checks.js";
 import { HostClient, asRecord, str } from "../http.js";
 import { GITHUB_HOSTS, contentsUrl, githubHeaders, renderReadmeList } from "../providers/github.js";
@@ -21,6 +21,8 @@ export interface PlanOverrides {
   text?: string | null;
   imageChoice?: DistributionImageChoice;
   linkMode?: DistributionLinkMode | null;
+  xThread?: boolean;
+  xThreadNumbering?: boolean;
 }
 
 export interface ResolvedPlan {
@@ -34,6 +36,9 @@ export interface ResolvedPlan {
   edited: boolean;
   imageChoice: DistributionImageChoice;
   linkMode: DistributionLinkMode | null;
+  /** Faqat X: zanjir rejimi (boshqa kanallarda doim false). */
+  xThread: boolean;
+  xThreadNumbering: boolean;
   image: SocialImageResult | null;
   imageUrl: string | undefined;
   checks: ChannelCheck[];
@@ -78,6 +83,8 @@ export async function resolvePlan(postId: string, providerId: ProviderId, opts: 
   const o = opts.overrides ?? {};
   const imageChoice = o.imageChoice ?? (row?.imageChoice as DistributionImageChoice | undefined) ?? "auto";
   const linkMode: DistributionLinkMode | null = providerId === "linkedin" ? (o.linkMode ?? (row?.linkMode as DistributionLinkMode | null) ?? "article") : null;
+  const xThread = providerId === "x" && (o.xThread ?? row?.xThread ?? false);
+  const xThreadNumbering = providerId === "x" && (o.xThreadNumbering ?? row?.xThreadNumbering ?? false);
   const checks: ChannelCheck[] = [];
 
   const isGithub = providerId === "github";
@@ -140,6 +147,7 @@ export async function resolvePlan(postId: string, providerId: ProviderId, opts: 
     ...(imageMeta ? { image: imageMeta } : {}),
     ...(imageUrl ? { imageUrl } : {}),
     ...(linkMode ? { linkMode } : {}),
+    ...(providerId === "x" ? { xThread: { enabled: xThread, numbering: xThreadNumbering } } : {}),
     ...(currentReadme !== undefined ? { currentReadme } : {}),
   };
   checks.push(...provider.preflight(input));
@@ -148,7 +156,7 @@ export async function resolvePlan(postId: string, providerId: ProviderId, opts: 
   }
   const errorCount = checks.filter((c) => c.status === "error").length;
   const warnCount = checks.filter((c) => c.status === "warn").length;
-  return { post, provider, providerId, row, account, text, defaultText, edited, imageChoice, linkMode, image, imageUrl, checks, errorCount, warnCount };
+  return { post, provider, providerId, row, account, text, defaultText, edited, imageChoice, linkMode, xThread, xThreadNumbering, image, imageUrl, checks, errorCount, warnCount };
 }
 
 export async function buildPreview(postId: string, providerId: ProviderId, opts: { overrides?: PlanOverrides; live?: boolean } = {}): Promise<DistributionPreviewResponse | null> {
@@ -180,6 +188,10 @@ export async function buildPreview(postId: string, providerId: ProviderId, opts:
     },
     imageChoice: plan.imageChoice,
     linkMode: plan.linkMode,
+    xThread: plan.xThread,
+    xThreadNumbering: plan.xThreadNumbering,
+    threadParts: plan.xThread ? splitXThread(plan.text, { numbering: plan.xThreadNumbering }).parts : null,
+    threadMaxParts: plan.xThread ? X_THREAD_MAX_PARTS : null,
     checks: plan.checks,
     canSend: plan.errorCount === 0,
     errorCount: plan.errorCount,

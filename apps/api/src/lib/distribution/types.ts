@@ -151,6 +151,8 @@ export interface PreflightInput {
   linkMode?: "article" | "text";
   /** GitHub: README'ning joriy matni (caller o'qiydi) — markerlar bor-yo'qligini tekshirish uchun. */
   currentReadme?: string;
+  /** X: zanjir (thread) rejimi — yoqilgan bo'lsa matn bitta tvit emas, `splitXThread` bo'laklari sifatida tekshiriladi. Boshqalar e'tiborsiz qoldiradi. */
+  xThread?: { enabled: boolean; numbering: boolean };
 }
 
 export interface PublishInput {
@@ -167,11 +169,20 @@ export interface PublishInput {
    * qayta ishlatadi, ikkinchisini yaratmaydi. `outcome_unknown` dan keyin davom ettirishdan oldin platformani tekshiring.
    */
   resume?: PartialRefs;
+  /**
+   * X zanjiri (faqat `x` provider): tayyor tvit bo'laklari (`splitXThread`, raqamlash allaqachon matnda). `posted` — oldingi urinishlarda
+   * YUBORILGAN tvit id'lari (tartib bilan): provider ularni QAYTA yubormaydi, keyingi bo'lakdan davom etadi. `onProgress` har bir
+   * muvaffaqiyatli tvitdan keyin (yangi id ro'yxati bilan) chaqiriladi — chaqiruvchi uni darhol saqlaydi.
+   */
+  thread?: { parts: readonly string[]; posted: readonly string[]; onProgress?: (postedIds: readonly string[]) => Promise<void> };
 }
 
 export interface PublishResult {
+  /** Zanjirda — BIRINCHI tvit id'si. */
   externalId: string;
   url: string | null;
+  /** Faqat X zanjiri: barcha tvit id'lari (tartib bilan; `externalId` = birinchisi). */
+  threadIds?: string[];
 }
 
 export interface ProviderContext {

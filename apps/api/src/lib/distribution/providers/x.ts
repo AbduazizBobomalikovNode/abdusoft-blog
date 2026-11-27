@@ -1,4 +1,4 @@
-import type { ChannelCheck } from "@blog/shared";
+import { X_THREAD_MAX_PARTS, hasThreadSeparator, splitXThread, type ChannelCheck } from "@blog/shared";
 import { DistributionError } from "../errors.js";
 import { asRecord, formBody, HostClient, realSleep, str, type HttpResponse, type ProviderDeps } from "../http.js";
 import { assertPublicHttpsUrl, check, fmtBytes, textCheck } from "../checks.js";
@@ -80,8 +80,12 @@ export function buildXTokenRequest(creds: ClientCredentials, params: Record<stri
   return { headers, body: formBody({ ...params, ...(basic ? {} : { client_id: creds.clientId }) }) };
 }
 
-export function buildXTweetBody(text: string, mediaId?: string): Record<string, unknown> {
-  return mediaId ? { text, media: { media_ids: [mediaId] } } : { text };
+export function buildXTweetBody(text: string, mediaId?: string, replyToId?: string): Record<string, unknown> {
+  const body: Record<string, unknown> = { text };
+  if (mediaId) body.media = { media_ids: [mediaId] };
+  // Zanjir: har keyingi tvit oldingisiga javob (X API v2: `reply.in_reply_to_tweet_id`).
+  if (replyToId) body.reply = { in_reply_to_tweet_id: replyToId };
+  return body;
 }
 
 export function buildXMediaUploadBody(bytes: Uint8Array): Record<string, unknown> {
@@ -97,6 +101,27 @@ function renderText(post: DistributionPost, opts: RenderOptions = {}): string {
     X_TEXT_MAX,
     xWeightedLength,
   );
+}
+
+/** Zanjir tekshiruvlari: bo'laklar soni (<= `X_THREAD_MAX_PARTS`) va har bir bo'lak <= 280 vazn. Tarmoqsiz. */
+export function threadChecks(text: string, numbering: boolean): ChannelCheck[] {
+  const split = splitXThread(text, { numbering, limit: X_TEXT_MAX, maxParts: X_THREAD_MAX_PARTS });
+  if (split.count === 0) return [check({ id: "text.empty", group: "text", status: "error", title: "Matn", message: "Matn bo'sh" })];
+  const out: ChannelCheck[] = [
+    check({
+      id: "x.thread.count",
+      group: "text",
+      status: split.tooMany ? "error" : "ok",
+      title: "Zanjir",
+      message: split.tooMany ? `${split.count} ta tvit — ko'pi bilan ${split.maxParts} ta bo'lishi mumkin; qisqartiring` : `${split.count} ta tvit${split.numbered ? " (raqamlangan)" : ""}`,
+      value: `${split.count} ta`,
+      limit: `${split.maxParts} ta`,
+    }),
+  ];
+  split.parts.forEach((p, i) => {
+    if (p.over) out.push(check({ id: `x.thread.part.${i + 1}`, group: "text", status: "error", title: `${i + 1}-tvit uzunligi`, message: `${p.weight - X_TEXT_MAX} birlikka oshib ketgan — qisqartiring yoki «---» bilan bo'ling`, value: `${p.weight} birlik`, limit: `${X_TEXT_MAX} birlik` }));
+  });
+  return out;
 }
 
 export function createXProvider(): DistributionProvider {
@@ -158,6 +183,63 @@ export function createXProvider(): DistributionProvider {
     };
   }
 
+  /**
+   * Zanjir: 1-tvit (rasm bilan, faqat shunda), keyingilari oldingisiga `reply.in_reply_to_tweet_id` bilan. Har bir muvaffaqiyatli tvitdan
+   * KEYIN `onProgress` (id ro'yxati) — chaqiruvchi uni darhol saqlaydi: qayta urinish `posted` dan davom etadi va oldingi tvitlarni
+   * HECH QACHON qayta yubormaydi. Tvit so'rovi `create` rejimida: timeout/uzilish/5xx -> `outcome_unknown` (qayta urinilmaydi).
+   */
+  async function publishThread(
+    http: HostClient,
+    ref: ReturnType<typeof refine>,
+    auth: Record<string, string>,
+    thread: NonNullable<PublishInput["thread"]>,
+    mediaId: string | undefined,
+    username: string | undefined,
+  ): Promise<PublishResult> {
+    const ids = [...thread.posted];
+    if (thread.parts.length === 0) throw new DistributionError({ kind: "validation_rejected", message: "Zanjir bo'sh" });
+    for (let i = ids.length; i < thread.parts.length; i++) {
+      const partText = thread.parts[i] as string;
+      try {
+        const res = await http.request({
+          method: "POST",
+          url: X_TWEETS_URL,
+          headers: { ...auth, "Content-Type": "application/json" },
+          body: JSON.stringify(buildXTweetBody(partText, i === 0 ? mediaId : undefined, i > 0 ? ids[i - 1] : undefined)),
+          mode: "create",
+        });
+        if (res.status < 200 || res.status >= 300) throw http.fail(res, "create", ref);
+        const id = str(asRecord(asRecord(res.json).data).id);
+        if (!id) throw new DistributionError({ kind: "outcome_unknown", status: res.status, message: "X post id qaytarmadi — qayta urinmang, profilni tekshiring" });
+        ids.push(id);
+      } catch (e) {
+        if (!(e instanceof DistributionError)) throw e;
+        const where = `zanjir: ${ids.length} ta tvit yuborilgan, ${i + 1}-tvitda to'xtadi (jami ${thread.parts.length})`;
+        throw new DistributionError({
+          kind: e.kind,
+          message: `${e.message} (${where})`,
+          status: e.status,
+          platformMessage: e.platformMessage,
+          retryAt: e.retryAt,
+          step: "publish",
+          // Birinchi tvit hali yaratilmagan bo'lsa — yuklangan rasm qayta ishlatiladi; keyingilarida rasm kerak emas.
+          partial: ids.length === 0 && mediaId ? { mediaId } : undefined,
+          reason: e.reason,
+        });
+      }
+      if (thread.onProgress) {
+        try {
+          await thread.onProgress([...ids]);
+        } catch {
+          // Tvit platformada bor, lekin id saqlanmadi: avtomatik davom etilsa dublikat bo'ladi -> "natija noma'lum" (odam tekshiradi), id'lar xabarda.
+          throw new DistributionError({ kind: "outcome_unknown", step: "publish", message: `Zanjir: ${ids.length} ta tvit yuborildi, lekin holat saqlanmadi (id: ${ids.join(", ")}) — platformada tekshiring` });
+        }
+      }
+    }
+    const first = ids[0] as string;
+    return { externalId: first, url: `https://x.com/${username ?? "i"}/status/${first}`, threadIds: ids };
+  }
+
   const provider: DistributionProvider = {
     id: "x",
     capabilities: { text: true, link: true, image: true, edit: false, delete: true, nativeScheduling: false },
@@ -216,7 +298,10 @@ export function createXProvider(): DistributionProvider {
 
     preflight(input: PreflightInput): ChannelCheck[] {
       const text = input.text ?? renderText(input.post);
-      const out: ChannelCheck[] = [textCheck({ text, used: xWeightedLength(text), limit: X_TEXT_MAX, unitLabel: "birlik" })];
+      const out: ChannelCheck[] = input.xThread?.enabled ? threadChecks(text, input.xThread.numbering) : [textCheck({ text, used: xWeightedLength(text), limit: X_TEXT_MAX, unitLabel: "birlik" })];
+      if (!input.xThread?.enabled && hasThreadSeparator(text)) {
+        out.push(check({ id: "x.thread.separator", group: "text", status: "warn", title: "Zanjir ajratgichi", message: "Matnda «---» satri bor, lekin zanjir (thread) rejimi o'chiq — bitta tvitda shunday qoladi" }));
+      }
       if (findUrls(text).length > 0) {
         out.push(
           check({
@@ -247,7 +332,7 @@ export function createXProvider(): DistributionProvider {
       const auth = { Authorization: `Bearer ${account.accessToken}` };
       let mediaId: string | undefined = input.resume?.mediaId;
 
-      if (input.image && !mediaId) {
+      if (input.image && !mediaId && !(input.thread && input.thread.posted.length > 0)) {
         const up = await http.request({
           method: "POST",
           url: X_MEDIA_UPLOAD_URL,
@@ -273,6 +358,9 @@ export function createXProvider(): DistributionProvider {
         if (info.state === "failed") throw new DistributionError({ kind: "validation_rejected", step: "poll", message: "X rasmni qayta ishlay olmadi" });
         if (info.state === "pending" || info.state === "in_progress") throw new DistributionError({ kind: "transient", step: "poll", partial, message: "X rasm qayta ishlashi tugamadi — keyinroq urining (resume.mediaId bilan)" });
       }
+
+      const thread = input.thread;
+      if (thread) return publishThread(http, ref, auth, thread, mediaId, account.username);
 
       const partial = mediaId ? { mediaId } : undefined;
       try {

@@ -139,6 +139,24 @@ describe("read tools", () => {
     for (const t of Object.values(sup.TOKENS)) expect(r.text).not.toContain(t);
     expect(r.text).not.toMatch(/accessToken|refreshToken|clientSecret/);
   });
+  it("preview_distribution / send_distribution: x_thread returns the tweet parts; send stores the mode; default stays a single tweet", async () => {
+    const post = await fx.insertPost();
+    await fx.insertAccount("x", NOW);
+    const text = "Birinchi\n---\nIkkinchi";
+    const single = await ok("preview_distribution", { post_id: post.id, channel: "x", text: "Oddiy" });
+    expect(single).toMatchObject({ xThread: false });
+    expect(single.threadParts).toBeUndefined();
+    const j = await ok("preview_distribution", { post_id: post.id, channel: "x", text, x_thread: true, x_thread_numbering: true });
+    expect(j).toMatchObject({ xThread: true, xThreadNumbering: true, threadPartCount: 2, threadMaxParts: 15, canSend: true });
+    expect(j.threadParts.map((p: Json) => p.text)).toEqual(["Birinchi 1/2", "Ikkinchi 2/2"]);
+    expect(j.untrustedFields).toContain("threadParts[].text");
+    const d = await ok("send_distribution", { post_id: post.id, channel: "x", expected_updated_at: post.updatedAt.toISOString(), text, x_thread: true, dry_run: true });
+    expect(d.threadPartCount).toBe(2);
+    const sent = await ok("send_distribution", { post_id: post.id, channel: "x", expected_updated_at: post.updatedAt.toISOString(), text, x_thread: true, x_thread_numbering: true });
+    expect(sent.distribution).toMatchObject({ xThread: true, xThreadNumbering: true, threadPosted: 0 });
+    expect(mock.calls).toHaveLength(0);
+  });
+
   it("preview_distribution: text, platform-counted length, image, checks; read-only (nothing saved, no platform call)", async () => {
     const post = await fx.insertPost();
     await fx.insertAccount("x", NOW);

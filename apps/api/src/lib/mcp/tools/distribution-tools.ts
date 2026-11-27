@@ -27,6 +27,8 @@ const PUBLIC_DELETE = { readOnlyHint: false, destructiveHint: true, idempotentHi
 const channelField = z.enum(DISTRIBUTION_PROVIDERS).describe("Channel: linkedin | x | threads | instagram | github (the GitHub profile README block).");
 const imageField = z.enum(["auto", "cover", "og", "none"]).optional().describe("Image: auto = the post's cover, otherwise the site's generated Open Graph image; cover; og; none.");
 const linkModeField = z.enum(["article", "text"]).optional().describe("LinkedIn only: 'article' (link card with the cover image, default) or 'text' (text with the link).");
+const xThreadField = z.boolean().optional().describe("X only: post the text as a THREAD (a chain of reply tweets) instead of one tweet. Parts are split on lines containing only `---`, and any part still over 280 weighted characters is auto-split at paragraph/sentence/word boundaries (never inside a URL or word-grapheme); at most 15 tweets. Default false = one tweet (the 280 limit applies).");
+const xThreadNumberingField = z.boolean().optional().describe("X thread only: append \" 1/n\" to every tweet (counted in the 280 weight). Default false.");
 const textField = z.string().max(20_000).optional().describe("The exact text to post. Omit to use the channel's default template (or the saved hand-edited text). Not used for github.");
 
 const PUBLIC_WARNING =
@@ -38,8 +40,10 @@ function item(d: DistributionItemDto): Record<string, unknown> {
   return rest;
 }
 
-function draftOf(args: { text?: string | undefined; image?: "auto" | "cover" | "og" | "none" | undefined; link_mode?: "article" | "text" | undefined }): DraftInput {
+function draftOf(args: { text?: string | undefined; image?: "auto" | "cover" | "og" | "none" | undefined; link_mode?: "article" | "text" | undefined; x_thread?: boolean | undefined; x_thread_numbering?: boolean | undefined }): DraftInput {
   return {
+    ...(args.x_thread !== undefined ? { xThread: args.x_thread } : {}),
+    ...(args.x_thread_numbering !== undefined ? { xThreadNumbering: args.x_thread_numbering } : {}),
     ...(args.text !== undefined ? { text: args.text } : {}),
     ...(args.image !== undefined ? { imageChoice: args.image } : {}),
     ...(args.link_mode !== undefined ? { linkMode: args.link_mode } : {}),
@@ -91,7 +95,7 @@ export const previewDistributionTool = defineTool({
   description:
     U + "Show exactly what would be posted to one channel for one post: the text (saved hand-edited text, your override, or the channel's default template), its length counted the platform's way against the limit, the image that would be used, and the preflight checklist (ok/warn/error) in the same shape as the Telegram checks. Read-only; nothing is saved or sent and no social platform is contacted.",
   scope: "blog:read",
-  inputSchema: { post_id: uuidField("post id"), channel: channelField, text: textField, image: imageField, link_mode: linkModeField },
+  inputSchema: { post_id: uuidField("post id"), channel: channelField, text: textField, image: imageField, link_mode: linkModeField, x_thread: xThreadField, x_thread_numbering: xThreadNumberingField },
   annotations: READ_ONLY,
   kind: "read",
   async handler(args) {
@@ -110,13 +114,14 @@ export const previewDistributionTool = defineTool({
         image: { source: preview.image.source, width: preview.image.width, height: preview.image.height, error: preview.image.error },
         imageChoice: preview.imageChoice,
         linkMode: preview.linkMode,
+        ...(preview.provider === "x" ? { xThread: preview.xThread, xThreadNumbering: preview.xThreadNumbering, ...(preview.threadParts ? { threadParts: preview.threadParts.map((p, i) => ({ n: i + 1, text: p.text, weight: p.weight, ...(p.over ? { over: true } : {}) })), threadPartCount: preview.threadParts.length, threadMaxParts: preview.threadMaxParts } : {}) } : {}),
         canSend: preview.canSend,
         errors: preview.errorCount,
         warnings: preview.warnCount,
         checks: preview.checks.map((c) => ({ status: c.status, group: c.group, title: c.title, message: c.message, ...(c.value !== null ? { value: c.value } : {}), ...(c.limit !== null ? { limit: c.limit } : {}) })),
         distribution: preview.distribution ? item(preview.distribution) : null,
         previouslySent: preview.previouslySent ? { sentAt: preview.previouslySent.sentAt, url: preview.previouslySent.externalUrl } : null,
-        ...untrusted(["post.title", "text", "defaultText", "checks[].value", "previouslySent.url", "distribution.text", "distribution.lastErrorMessage"]),
+        ...untrusted(["post.title", "text", "defaultText", "threadParts[].text", "checks[].value", "previouslySent.url", "distribution.text", "distribution.lastErrorMessage"]),
       },
       shrink: [{ key: "defaultText", mode: "drop", note: "defaultText was dropped to fit." }],
     };
@@ -167,6 +172,8 @@ export const saveDistributionTextTool = defineTool({
     reset_text: z.boolean().optional().describe("Remove the hand-edited text and use the default template again."),
     image: imageField,
     link_mode: linkModeField,
+    x_thread: xThreadField,
+    x_thread_numbering: xThreadNumberingField,
     dry_run: dryRunField,
   },
   annotations: LOCAL_WRITE,
@@ -177,7 +184,7 @@ export const saveDistributionTextTool = defineTool({
     if (args.dry_run) {
       const preview = await buildPreview(args.post_id, args.channel as ProviderId, { overrides: draft });
       if (!preview) throw new ToolError("not_found", "No post with this id.");
-      return { data: { ok: true, dryRun: true, summary: "Dry run: the draft would be saved; nothing was sent.", canSend: preview.canSend, length: preview.length, limit: preview.limit, failingChecks: preview.checks.filter((c) => c.status !== "ok").map((c) => ({ status: c.status, message: c.message })) } };
+      return { data: { ok: true, dryRun: true, summary: "Dry run: the draft would be saved; nothing was sent.", canSend: preview.canSend, length: preview.length, limit: preview.limit, ...(preview.threadParts ? { threadPartCount: preview.threadParts.length } : {}), failingChecks: preview.checks.filter((c) => c.status !== "ok").map((c) => ({ status: c.status, message: c.message })) } };
     }
     const saved = unwrap(await saveDraft(ctx.actor, args.post_id, args.channel as ProviderId, draft));
     return { data: { ok: true, summary: "Draft saved. Nothing was sent.", distribution: item(saved), ...untrusted(["distribution.text"]) } };
@@ -191,6 +198,8 @@ async function sendOrSchedule(args: {
   text?: string | undefined;
   image?: "auto" | "cover" | "og" | "none" | undefined;
   link_mode?: "article" | "text" | undefined;
+  x_thread?: boolean | undefined;
+  x_thread_numbering?: boolean | undefined;
   again?: boolean | undefined;
   scheduled_at?: string | undefined;
   version_id?: string | undefined;
@@ -217,10 +226,11 @@ async function sendOrSchedule(args: {
         text: preview.text,
         length: preview.length,
         limit: preview.limit,
+        ...(preview.threadParts ? { threadParts: preview.threadParts.map((p, i) => ({ n: i + 1, text: p.text, weight: p.weight, ...(p.over ? { over: true } : {}) })), threadPartCount: preview.threadParts.length } : {}),
         image: { source: preview.image.source, error: preview.image.error },
         failingChecks: preview.checks.filter((c) => c.status !== "ok").map((c) => ({ status: c.status, message: c.message })),
         post: postBlock(post),
-        ...untrusted(["post.title", "text"]),
+        ...untrusted(["post.title", "text", "threadParts[].text"]),
       },
     };
   }
@@ -254,6 +264,8 @@ const sendFields = {
   text: textField,
   image: imageField,
   link_mode: linkModeField,
+  x_thread: xThreadField,
+  x_thread_numbering: xThreadNumberingField,
   version_id: z.string().uuid().optional().describe("Optional: the named version (list_distribution_versions) this text came from. It is only recorded on the distribution; what is posted is still exactly `text` (pass the version's text yourself) or the default template."),
   again: z.boolean().optional().describe("Allow sending even though this post was already sent to this channel (creates a duplicate on purpose). Default false."),
   idempotency_key: idempotencyKeyField,
@@ -371,6 +383,8 @@ export const setDistributionPlanTool = defineTool({
     text: textField,
     image_choice: imageField,
     link_mode: linkModeField,
+    x_thread: xThreadField,
+    x_thread_numbering: xThreadNumberingField,
     dry_run: dryRunField,
   },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -380,7 +394,7 @@ export const setDistributionPlanTool = defineTool({
     const post = await loadPostAnyState(args.post_id);
     if (!post || post.deletedAt) throw new ToolError("not_found", "No live post with this id.", "Use list_posts to find the post.");
     if (args.dry_run) {
-      const summary = await checkPlan(args.post_id, channel, draftOf({ text: args.text, image: args.image_choice, link_mode: args.link_mode }));
+      const summary = await checkPlan(args.post_id, channel, draftOf({ text: args.text, image: args.image_choice, link_mode: args.link_mode, x_thread: args.x_thread, x_thread_numbering: args.x_thread_numbering }));
       const publishedNow = post.status === "published";
       return {
         data: {
@@ -397,7 +411,7 @@ export const setDistributionPlanTool = defineTool({
     const result = await setPlan(ctx.actor, args.post_id, channel, {
       delayMinutes: args.delay_minutes,
       ...(args.version_id ? { versionId: args.version_id } : {}),
-      ...draftOf({ text: args.text, image: args.image_choice, link_mode: args.link_mode }),
+      ...draftOf({ text: args.text, image: args.image_choice, link_mode: args.link_mode, x_thread: args.x_thread, x_thread_numbering: args.x_thread_numbering }),
     });
     if (!result.ok) {
       throw new ToolError(

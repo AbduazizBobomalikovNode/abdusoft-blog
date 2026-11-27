@@ -26,6 +26,8 @@ const DraftBody = z
     text: z.string().max(20_000).nullable().optional(),
     imageChoice: ImageChoice.optional(),
     linkMode: z.enum(["article", "text"]).nullable().optional(),
+    xThread: z.boolean().optional(),
+    xThreadNumbering: z.boolean().optional(),
   })
   .strict();
 const SendBody = DraftBody.extend({ again: z.boolean().optional(), versionId: z.string().regex(UUID_RE).optional() }).strict();

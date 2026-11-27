@@ -12,7 +12,7 @@ export type { SocialPreviewModel } from "./types";
 
 /** Provayderga mos kartani tanlaydi. Matn mahalliy holatdan keladi — har bir tugma bosilishida qayta chiziladi. */
 export function SocialPreview({ model }: { model: SocialPreviewModel }) {
-  const over = model.limit !== null ? measureSocialText(model.provider, model.text) - model.limit : 0;
+  const over = model.limit !== null && !model.thread ? measureSocialText(model.provider, model.text) - model.limit : 0;
   return (
     <div className="flex flex-col gap-2" data-testid="social-preview">
       {model.provider === "linkedin" ? <LinkedInPreviewCard model={model} /> : null}
