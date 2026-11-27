@@ -6,6 +6,9 @@
 
 ### O'zbekcha
 
+**Hujjat: tarqatish holati**
+- LinkedIn, Threads, Instagram va GitHub README haqiqiy hisobda tekshirilgan (2026-11); X, X zanjiri va «saytga chiqqach» rejasi hali haqiqiy akkauntda sinalmagan
+
 **Tarqatish: X zanjiri (thread)**
 - X kanalida ixtiyoriy «Zanjir (thread)»: matn `---` satrlari bo'yicha va 280 dan oshsa gap/so'z chegarasida (URL va grafema bo'linmaydi) javob tvitlariga bo'linadi; ixtiyoriy « 1/n» raqamlash (vazni hisobga olinadi); ko'pi bilan 15 tvit. Standart — bitta tvit (xatti-harakat o'zgarmagan)
 - Yuborish: 1-tvit (rasm shunda), keyingilari oldingisiga javob; har tvitdan keyin id saqlanadi — xatodan keyin qayta urinish qolgan qismdan davom etadi va oldingilarini qayta yubormaydi; noaniq natija — «tekshirish kerak». «Platformadan olib tashlash» barcha tvitlarni teskari tartibda o'chiradi
@@ -42,6 +45,9 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Docs: distribution status**
+- LinkedIn, Threads, Instagram and GitHub README are verified on real accounts (2026-11); X, X threads and the "after the site goes live" plan are not yet exercised against a real account
 
 **Distribution: X threads**
 - Optional "Thread" for the X channel: the text is split on `---` lines and, if over 280, at sentence/word boundaries (never inside a URL or grapheme) into reply tweets; optional " 1/n" numbering (counted in the weight); at most 15 tweets. Default is one tweet (behaviour unchanged)
