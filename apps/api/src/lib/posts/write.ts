@@ -276,19 +276,23 @@ export async function updatePost(
     }
   }
   if (data.channelPlan !== undefined) {
+    // Reja qo'yish/o'zgartirish chop etilganda kanalga yuborishni ishga tushiradi — `set_channel_plan` bilan bir xil huquq (`channels:send`). Tozalash (null) ruxsatsiz ham mumkin.
+    if (data.channelPlan !== null && !actorMayTouchChannel(actor)) {
+      return fail("forbidden", "Kanalga yuborish rejasini qo'yish uchun 'channels:send' ruxsati kerak");
+    }
     if (data.channelPlan === null) {
       update.channelPlan = null;
       update.channelSendAt = null;
     } else {
-      if (post.status !== "scheduled") {
-        return fail("conflict", "Kanal rejasi faqat rejalashtirilgan postga o'rnatiladi");
+      // Chop etilmagan post (qoralama / ko'rib chiqishda / rejalashtirilgan; shu jumladan qoralamaga qaytarilgan) — reja saqlanadi,
+      // post chop etilganda `channel_send_at` hisoblanadi. Chop etilgan postda aniq vaqt alohida yo'ldan (`PUT /channel/schedule`) o'rnatiladi.
+      if (post.status !== "scheduled" && post.status !== "draft" && post.status !== "in_review") {
+        return fail("conflict", "Kanal rejasi faqat chop etilmagan postga o'rnatiladi");
       }
-      // Aniq vaqt: kanal vaqti (yangi yoki mavjud) rejalashtirilgan chop etish vaqtidan oldin bo'lmasin.
+      // Aniq vaqt: kanal vaqti rejalashtirilgan chop etish vaqtidan oldin bo'lmasin; rejalashtirilmagan postda — kelajakda bo'lsin.
       const effectiveScheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : post.scheduledAt;
-      if (effectiveScheduledAt) {
-        const timeError = checkAbsoluteTime(data.channelPlan, effectiveScheduledAt);
-        if (timeError) return fail("bad_request", timeError);
-      }
+      const timeError = checkAbsoluteTime(data.channelPlan, post.status === "scheduled" && effectiveScheduledAt ? effectiveScheduledAt : new Date());
+      if (timeError) return fail("bad_request", timeError);
       const prepared = await preparePlan(id, data.channelPlan);
       if (!prepared.ok) return prepared;
       update.channelPlan = prepared.data;

@@ -17,6 +17,7 @@ import { buildChannelPost, MAX_CHANNEL_MEDIA } from "./channel-post.js";
 import { getPreparedImage } from "./channel-media.js";
 import { collectPostImages, loadVersion, versionHardLimit } from "./channel-versions.js";
 import { computeChannelPreflightFor } from "./channel-preflight.js";
+import { clearChannelError } from "./channel-last-error.js";
 
 /**
  * "Kanalga yuborish" dialogi (admin panel) va Telegram tasdiqlash oqimi
@@ -482,6 +483,8 @@ async function sendComputedLocked(
     // Eski xabarlarning muhokama guruhidagi forward'lari yaroqsiz — yangi xabar uchun bog'lanish qaytadan o'rnatiladi.
     ...(oldIds.length > 0 ? { discussionChatId: null, discussionMessageId: null } : {}),
   });
+  // Muvaffaqiyatli yuborish (qo'lda ham, ishchi ham) — oldingi urinish xatosi endi dolzarb emas.
+  await clearChannelError(postId);
   // Yangi xabar yuborilib, havola saqlangandan KEYIN eskisini o'chiramiz.
   const oldMessagesNotDeleted = oldIds.length > 0 ? await deleteChannelMessageIds(channelId, oldIds) : 0;
 

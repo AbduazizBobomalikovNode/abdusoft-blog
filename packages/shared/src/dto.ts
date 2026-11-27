@@ -525,6 +525,8 @@ export const ChannelStatusSchema = z.object({
   sentAt: z.string().nullable(),
   messageIds: z.array(z.number()),
   attempts: z.number().int(),
+  /** Oxirgi muvaffaqiyatsiz yuborish urinishi (qisqa, tozalangan matn); muvaffaqiyatli yuborishda `null`. */
+  lastError: z.object({ message: z.string(), at: z.string().nullable() }).nullable().default(null),
 });
 export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
 
@@ -538,6 +540,14 @@ export const PostConflictResponseSchema = z.object({
   via: z.string().nullable(),
 });
 export type PostConflictResponse = z.infer<typeof PostConflictResponseSchema>;
+
+/** Chop etishda saqlangan Telegram rejasi nima bo'lgani: yo'q / navbatga qo'yildi (`at`) / tashlandi (sababi bilan). */
+export const ChannelPublishOutcomeSchema = z.union([
+  z.object({ state: z.literal("none") }),
+  z.object({ state: z.literal("armed"), at: z.string() }),
+  z.object({ state: z.literal("dropped"), reason: z.enum(["past_time", "already_sent", "no_permission", "invalid"]) }),
+]);
+export type ChannelPublishOutcome = z.infer<typeof ChannelPublishOutcomeSchema>;
 
 export const PublishPostBodySchema = z.object({
   /** `true` — chop etilgach belgilangan versiyani kanalga ham yuborish (Telegraph'dan keyin). */
@@ -713,7 +723,7 @@ export type UpdatePostResponse = z.infer<typeof UpdatePostResponseSchema>;
 
 export const SchedulePostBodySchema = z.object({
   scheduledAt: z.string(),
-  /** `null`/yo'q — kanalga yuborilmaydi. */
+  /** Yo'q (berilmagan) — saqlangan Telegram rejasi QOLADI; `null` — reja o'chiriladi. */
   channelPlan: ChannelPlanSchema.nullable().optional(),
   expectedUpdatedAt: ExpectedUpdatedAtSchema.optional(),
 });

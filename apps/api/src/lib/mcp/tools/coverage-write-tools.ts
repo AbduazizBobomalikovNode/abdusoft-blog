@@ -223,9 +223,9 @@ export const setChannelPlanTool = defineTool({
   name: "set_channel_plan",
   title: "Plan the channel send of a post",
   description:
-    U + "Plan a Telegram channel send in ONE of two ways. (1) delay_minutes: for a SCHEDULED post, send delay_minutes after it is published. " +
+    U + "Plan a Telegram channel send in ONE of two ways. (1) delay_minutes: for a post that is NOT published yet (draft, in review or scheduled), send delay_minutes after the post goes live. The plan SURVIVES unpublish (like the other channels' plans) and is recalculated from the actual publish time whenever the post is published again (scheduler, approve_post or publish_post); if the post was already sent to the channel when it is published, the plan is dropped instead (no second send). " +
     "(2) send_at (ISO 8601 with timezone, e.g. 2026-12-01T14:30:00+05:00): send at that exact time. For a PUBLISHED post send_at must be in the future (max 1 year) and the post must not already be sent to the channel; " +
-    "for a SCHEDULED post send_at must not be earlier than its publish time (a manual publish keeps a future send_at). Drafts / in-review posts are refused: schedule them first with schedule_post. " +
+    "for a SCHEDULED post send_at must not be earlier than its publish time (a publish keeps a future send_at); on a draft / in-review post send_at must simply be in the future. A send_at that is already in the past when the post is published manually is dropped (no surprise immediate send); the scheduler keeps it and sends at once. " +
     "Give exactly one of delay_minutes / send_at. What is sent: the marked version (use_marked=true, default), or mode+variant, or version_id. The Telegram preflight must pass (it also runs again at send time). " +
     "Nothing is sent now; the server sends it automatically at the due time, so this is a public action later. dry_run=true only reports the preflight. Cancel with cancel_channel_plan. expected_updated_at is REQUIRED.",
   scope: "channels:send",
@@ -247,8 +247,9 @@ export const setChannelPlanTool = defineTool({
     const absolute = args.send_at !== undefined;
     if (absolute === (args.delay_minutes !== undefined)) throw new ToolError("invalid_input", "Give exactly one of delay_minutes or send_at.");
     const timing = absolute ? { delayMinutes: 0, sendAt: new Date(args.send_at!).toISOString() } : { delayMinutes: args.delay_minutes! };
-    if (absolute ? post.status !== "scheduled" && post.status !== "published" : post.status !== "scheduled") {
-      throw new ToolError("conflict", absolute ? "send_at works on a scheduled or published post." : "A delay plan can only be set on a scheduled post.", "Schedule it first with schedule_post.");
+    const unpublished = post.status === "draft" || post.status === "in_review" || post.status === "scheduled";
+    if (absolute ? !unpublished && post.status !== "published" : !unpublished) {
+      throw new ToolError("conflict", absolute ? "send_at works on a draft, in-review, scheduled or published post." : "A delay plan can only be set on a post that is not published yet (draft, in review or scheduled).", post.status === "published" ? "On a published post use send_at (exact time), or send it now with send_to_channel." : "Unarchive it first with unpublish_post.");
     }
     let plan: ChannelPlan;
     if (args.version_id || args.mode || args.variant) {
@@ -270,7 +271,7 @@ export const setChannelPlanTool = defineTool({
     } else {
       await unwrapPost(await updatePost(ctx.actor, post.id, { channelPlan: plan, expectedUpdatedAt: args.expected_updated_at }, { audit: { action: "post.channel_plan_set", summary: "Kanalga yuborish rejasi o'rnatildi", meta: absolute ? { sendAt: timing.sendAt } : { delayMinutes: args.delay_minutes } } }), post.id);
     }
-    const summary = absolute ? `The post will be sent to the channel at ${timing.sendAt}.` : `The post will be sent to the channel ${args.delay_minutes} minute(s) after it is published.`;
+    const summary = absolute ? `The post will be sent to the channel at ${timing.sendAt}.` : `The post will be sent to the channel ${args.delay_minutes} minute(s) after it is published (the plan is kept if the post is unpublished and recalculated on the next publish).`;
     return { data: { ok: true, summary, post: postBlock((await loadPostAnyState(post.id)) ?? post), ...untrusted(["post.title"]) } };
   },
 });
@@ -278,7 +279,7 @@ export const setChannelPlanTool = defineTool({
 export const cancelChannelPlanTool = defineTool({
   name: "cancel_channel_plan",
   title: "Cancel a planned channel send",
-  description: "Remove the planned Telegram channel send of a post (a delay plan on a scheduled post, or an exact-time send_at plan on a scheduled or published post). A schedule itself stays. Nothing is sent or deleted; refused while the send is running right now. expected_updated_at is REQUIRED.",
+  description: "Remove the planned Telegram channel send of a post (a delay plan or exact-time send_at plan on a draft, in-review, scheduled or published post - including a plan kept after unpublish). A schedule itself stays. Also clears the shown last send error. Nothing is sent or deleted; refused while the send is running right now. Plans are NOT removed by unpublish (only by archive or by this tool). expected_updated_at is REQUIRED.",
   scope: "channels:send",
   limit: "channel",
   inputSchema: { id: postId, expected_updated_at: expectedUpdatedAtField },

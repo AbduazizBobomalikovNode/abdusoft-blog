@@ -9,6 +9,7 @@ import { summarizePreflightErrors } from "./channel-preflight.js";
 import { resolveChoiceForSend } from "./channel-choice.js";
 import { escapeHtml } from "./format.js";
 import { awaitPostSync } from "./publish.js";
+import { recordChannelError } from "./channel-last-error.js";
 
 /** Rejalashtirilgan kanalga yuborish — nechta urinishdan keyin to'xtatiladi. */
 export const MAX_CHANNEL_PLAN_ATTEMPTS = 5;
@@ -146,6 +147,7 @@ export async function runChannelPlanFor(id: string, now: Date = new Date()): Pro
 
     if (result.ok) {
       await clearPlan(id);
+      await db.update(posts).set({ channelLastError: null, channelLastErrorAt: null }).where(eq(posts.id, id));
       const link = result.messageUrl ? `\n${escapeHtml(result.messageUrl)}` : "";
       const notes = [
         noMark ? "Belgilangan versiya yo'q edi — standart ko'rinish yuborildi." : null,
@@ -190,15 +192,19 @@ async function handleFailure(
   reason: string,
   now: Date,
 ): Promise<boolean> {
+  // Har bir muvaffaqiyatsiz urinish (oxirgisi ham) panelda ko'rinadi; qayta urinishlar soni va xabarnoma o'zgarmaydi.
+  // Yuborish paytida post qoralamaga qaytarilgan bo'lsa (`not_published` va shunga o'xshash) — bu haqiqiy yuborish xatosi emas, yozilmaydi.
+  await recordChannelError(postId, reason, now, { onlyIfPublished: true });
   if (attempts >= MAX_CHANNEL_PLAN_ATTEMPTS) {
     await clearPlan(postId);
     await notifyAdmin(`⚠️ Kanalga yuborilmadi: ${escapeHtml(title)} — ${escapeHtml(reason)}`);
     return false;
   }
-  // Keyingi tick'da qayta uriniladi (faqat reja hali bekor qilinmagan bo'lsa).
+  // Keyingi tick'da qayta uriniladi (faqat reja hali bekor qilinmagan, post hamon chop etilgan VA `channel_send_at` hamon NULL bo'lsa:
+  // yuborish paytida qoralamaga qaytarilib qayta chop etilgan postning yangi navbat vaqti ustiga yozilmaydi).
   await db
     .update(posts)
     .set({ channelPlan: { ...plan, attempts }, channelSendAt: now })
-    .where(and(eq(posts.id, postId), isNotNull(posts.channelPlan)));
+    .where(and(eq(posts.id, postId), eq(posts.status, "published"), isNotNull(posts.channelPlan), isNull(posts.channelSendAt)));
   return true;
 }

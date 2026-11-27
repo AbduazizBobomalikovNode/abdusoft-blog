@@ -122,6 +122,17 @@ describe("a connection without channels:send never touches the Telegram channel"
     expect((await refOf(p.id))?.channelMessageId).toBeTruthy();
   });
 
+  it("schedule_post with channel_after_minutes is refused without channels:send, in dry_run too", async () => {
+    const p = await publishedPost("Reja ruxsatsiz", false);
+    for (const dry_run of [true, false]) {
+      const r = await callAs(narrow, "schedule_post", { id: p.id, expected_updated_at: p.token, scheduled_at: new Date(Date.now() + 3_600_000).toISOString(), channel_after_minutes: 5, dry_run });
+      expect(r.isError, `dry_run=${dry_run}`).toBe(true);
+      expect(r.json.error.code).toBe("insufficient_scope");
+      expect(r.json.error.requiredScope).toBe("channels:send");
+    }
+    expect((await postOf(p.id)).status).toBe("published");
+  });
+
   it.each([
     ["unpublish_post", {}, "draft"],
     ["archive_post", {}, "archived"],

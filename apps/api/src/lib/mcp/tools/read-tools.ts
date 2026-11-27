@@ -187,7 +187,7 @@ export const getPost = defineTool({
   name: "get_post",
   title: "Get a post",
   description:
-    U + "Read one post in full: metadata, settings, tags, review state, Telegram channel status and its content. " +
+    U + "Read one post in full: metadata, settings, tags, review state, Telegram channel status and its content. The 'channel' block shows the saved Telegram plan (it survives unpublish and is recalculated when the post goes live again), the queued send time, and 'lastError' ({message, at}) - the last FAILED channel send attempt, cleared by a successful send. " +
     "'updatedBy' and 'updatedVia' (web panel, telegram, scheduler, assistant...) say who/what changed it last. " +
     (config.MCP_WRITE_TOOLS_ENABLED
       ? "'updatedAt' is the concurrency token that every edit tool requires (expected_updated_at) - pass it back unchanged. " +
@@ -204,16 +204,16 @@ export const getPost = defineTool({
   async handler(args, ctx) {
     const id = await resolvePostId(args);
     const detail = unwrap(await getPostDetail(ctx.actor, id), { notFound: NOT_FOUND_POST });
-    const { contentJson, channelPlan, channelSendAt, channelChoice, telegram, reviewNote, submittedAt, reviewedBy, reviewedAt, ...post } = detail;
+    const { contentJson, channelPlan, channelSendAt, channelLastError, channelChoice, telegram, reviewNote, submittedAt, reviewedBy, reviewedAt, ...post } = detail;
     return {
       data: {
         post: {
           ...post,
           review: { note: reviewNote, submittedAt, reviewedBy, reviewedAt },
-          channel: { plan: channelPlan, sendAt: channelSendAt, choice: channelChoice, telegram },
+          channel: { plan: channelPlan, sendAt: channelSendAt, lastError: channelLastError, choice: channelChoice, telegram },
         },
         ...contentFor(contentJson, resolveInclude(args.include)),
-        ...untrusted(["content", "document", "post.title", "post.excerpt", "post.review.note"]),
+        ...untrusted(["content", "document", "post.title", "post.excerpt", "post.review.note", "post.channel.lastError.message"]),
       },
       shrink: [
         { key: "document", mode: "drop", note: "The structured 'document' was omitted because the post is very large; call get_post with include='text' or read revisions." },

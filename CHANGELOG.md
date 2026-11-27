@@ -6,6 +6,14 @@
 
 ### O'zbekcha
 
+**Telegram: reja chop etishdan chiqarilganda saqlanadi + oxirgi yuborish xatosi**
+- Telegram rejasi boshqa kanallar kabi: «Qoralamaga qaytarish» rejani o'chirmaydi (faqat navbat vaqti olinadi); post qayta chiqqanda kechikish HAQIQIY chop etish paytidan qayta hisoblanadi. Arxivlash rejani o'chiradi. Kanalga allaqachon yuborilgan postda har qanday chop etish rejani tozalaydi (ikki marta yuborilmaydi).
+- O'ZGARISH: qo'lda yoki tasdiqlash bilan BIRINCHI chop etishda «saytga chiqqach N daqiqa» rejasi endi bekor qilinmaydi — chop etilgan vaqtdan N daqiqa keyin yuboriladi (boshqa kanallar bilan bir xil). O'tib ketgan aniq vaqt qo'lda chop etishda avvalgidek tashlanadi; scheduler kech qolsa darhol yuboradi.
+- Qoralama / ko'rib chiqishdagi postga ham reja qo'yiladi (avtosaqlanadi); `schedule_post` reja bermasa saqlangan reja yo'qolmaydi. Veb: «Nashr» kartasi va Telegram panelida yangi izoh.
+- Oxirgi yuborish xatosi: har bir muvaffaqiyatsiz urinishda (qo'lda yuborishda ham) tozalangan qisqa matn saqlanadi, muvaffaqiyatli yuborishda tozalanadi. `GET /channel/status` → `lastError`; Claude `get_post` → `channel.lastError`; panelda qizil qator va qizil yorliq nuqtasi. Qayta urinishlar va xabarnomalar o'zgarmagan.
+- Ruxsat: reja qo'yish/o'zgartirish `channels:send` talab qiladi; ruxsatsiz aktyor chop etganda saqlangan reja ishga tushmaydi (tashlanadi). `publish`/`approve` javobi va Claude `publish_post`/`approve_post` (dry-run ham) `channel` qaytaradi (`armed`/`dropped`+sabab); veb toast ko'rsatadi.
+- Additiv migratsiya `0024`: `posts.channel_last_error`, `posts.channel_last_error_at`. Claude vositalari tavsifi (`set_channel_plan`, `cancel_channel_plan`, `publish_post`, `unpublish_post`, `archive_post`) yangilandi.
+
 **Telegram: aniq vaqtda yuborish («Aniq vaqt») va yagona holat**
 - Telegram rejasi endi boshqa tarmoqlar kabi «Saytga chiqqach | Aniq vaqt» tanlovi bilan: tanlangan vaqtda kanalga yuboriladi. Yuborishni mavjud ishchi (`runDueChannelSends`) bajaradi — yangi supurgi yo'q; yuborish paytida Telegram cheklovlari qayta tekshiriladi va ikki marta yuborilmaydi. Additiv: migratsiya yo'q (`channel_plan` jsonb'iga ixtiyoriy `sendAt`, `delayMinutes` bu holda 0)
 - Qoidalar: chop etilgan postda vaqt kelajakda va ko'pi bilan 1 yil; rejalashtirilgan postda vaqt post saytga chiqishidan oldin bo'lmasligi kerak (chop etilganda saqlanadi, kech qolsa darhol yuboriladi); qoralama/ko'rib chiqishda faqat «Rejalashtirish» bilan birga tekshiriladi. Qo'lda chop etish kelajakdagi aniq vaqtli rejani SAQLAYDI (kechikishli reja avvalgidek bekor), chop etishdan chiqarish rejani tozalaydi (o'zgarmagan). Allaqachon kanalga yuborilgan postga reja qo'yilmaydi (rad), hozir yuborilayotganida o'zgartirib bo'lmaydi
@@ -55,6 +63,14 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Telegram: plan survives unpublish + last send error**
+- The Telegram plan now behaves like the other channels: unpublishing to draft keeps the plan (only the queued time is removed) and the delay is recalculated from the REAL publish time when the post goes live again. Archiving clears it. If the post was already sent to the channel, any publish clears the plan (no second send).
+- CHANGE: on the FIRST manual or approve publish, an "N minutes after the site goes live" plan is no longer dropped - it sends N minutes after that publish (same as the other channels). A past exact time is still dropped on manual publish; the scheduler still sends a late one at once.
+- Drafts / in-review posts can hold a plan too (autosaved); `schedule_post` without a plan no longer wipes a saved one. Web: new note in the "Nashr" card and the Telegram panel.
+- Last send error: every failed attempt (manual sends too) stores a short sanitized message, cleared by a successful send. `GET /channel/status` -> `lastError`; Claude `get_post` -> `channel.lastError`; red line and red tab dot in the panel. Retries and notifications unchanged.
+- Permission: setting or changing a plan needs `channels:send`; an actor without it publishing does not arm the saved plan (it is dropped). `publish`/`approve` responses and Claude `publish_post`/`approve_post` (also dry-run) return `channel` (`armed`/`dropped` + reason); the web shows a toast.
+- Additive migration `0024`: `posts.channel_last_error`, `posts.channel_last_error_at`. Claude tool descriptions (`set_channel_plan`, `cancel_channel_plan`, `publish_post`, `unpublish_post`, `archive_post`) updated.
 
 **Telegram: exact-time send ("Aniq vaqt") and one status**
 - The Telegram plan now has the same "After the site goes live | Exact time" choice as the other networks: the post is sent to the channel at the chosen time. The existing worker (`runDueChannelSends`) does the sending - no new sweeper; Telegram limits are re-checked at send time and a post is never sent twice. Additive: no migration (optional `sendAt` inside the `channel_plan` jsonb, `delayMinutes` is 0 then)

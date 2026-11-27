@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelPlan, ChannelStatus, ResolvedChannelChoice } from "@blog/shared";
-import { absoluteTimeError, canEditSendAt, formatChannelAt, isoToLocalInput, planTiming, planWithDelay, planWithSendAt, telegramDotTone, telegramStatusLine, createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
+import { absoluteTimeError, canEditSendAt, formatChannelAt, isoToLocalInput, planTiming, planWithDelay, planWithSendAt, channelPublishNotice, telegramDotTone, telegramErrorLine, telegramStatusLine, TELEGRAM_PLAN_NOTE, createInFlightGuard, sendGate, previewSelectionOf, telegramDefaultSelection, telegramPanelMode, telegramPlanEditable, telegramPlanLine, telegramPlanStorageHint, telegramTabSummary } from "./distribution-telegram";
 
 const choice = (over: Partial<ResolvedChannelChoice> = {}) =>
   ({ choice: { kind: "auto", mode: "media", variant: "m" }, label: "Rasmli · O'rtacha", mode: "media", visibleLength: 812, limit: 1024, passes: true, ...over }) as ResolvedChannelChoice;
@@ -41,8 +41,12 @@ describe("telegram panel helpers", () => {
     for (const st of ["published", "archived"]) expect(telegramPlanEditable(st)).toBe(false);
   });
   it("says where the plan is stored", () => {
-    expect(telegramPlanStorageHint("scheduled")).toContain("avtomatik");
-    expect(telegramPlanStorageHint("draft")).toContain("rejalashtirilganda");
+    for (const st of ["draft", "in_review", "scheduled"]) {
+      expect(telegramPlanStorageHint(st)).toContain("avtomatik saqlanadi");
+      expect(telegramPlanStorageHint(st)).toContain("qoralamaga qaytarilsa reja saqlanib qoladi");
+    }
+    expect(telegramPlanStorageHint("published")).toBe("");
+    expect(TELEGRAM_PLAN_NOTE).toContain("qo'lda ham");
   });
   it("falls back to a standard preview when nothing is marked (never empty)", () => {
     expect(telegramDefaultSelection(null)).toEqual({ mode: "media", variant: "m" });
@@ -76,7 +80,7 @@ describe("in-flight guard", () => {
 
 const AT = new Date(2026, 10, 28, 14, 30).toISOString();
 const NOW = new Date(2026, 10, 20, 9, 0);
-const status = (over: Partial<ChannelStatus> = {}): ChannelStatus => ({ state: "none", plan: null, sendAt: null, sentAt: null, messageIds: [], attempts: 0, ...over });
+const status = (over: Partial<ChannelStatus> = {}): ChannelStatus => ({ state: "none", plan: null, sendAt: null, sentAt: null, messageIds: [], attempts: 0, lastError: null, ...over });
 
 describe("absolute channel time helpers", () => {
   it("formats local date and time (year only when different)", () => {
@@ -136,5 +140,36 @@ describe("absolute channel time helpers", () => {
     expect(canEditSendAt(lingering)).toBe(false);
     expect(telegramStatusLine(lingering, NOW)).toContain("kutayotgan reja qolgan");
     expect(telegramDotTone(lingering)).toBe("sent");
+  });
+});
+
+describe("last send error", () => {
+  const err = { message: "Bad Request: chat not found", at: AT };
+  it("error line: message, time, retry hint only while something is pending", () => {
+    expect(telegramErrorLine(null)).toBeNull();
+    expect(telegramErrorLine(status(), NOW)).toBeNull();
+    expect(telegramErrorLine(status({ lastError: err }), NOW)).toBe("Oxirgi urinish muvaffaqiyatsiz (28.11 14:30): Bad Request: chat not found");
+    expect(telegramErrorLine(status({ state: "planned", lastError: err }), NOW)).toContain("qayta uriniladi");
+    expect(telegramErrorLine(status({ lastError: { message: "x", at: null } }), NOW)).toBe("Oxirgi urinish muvaffaqiyatsiz: x");
+  });
+  it("red dot only when the last attempt failed and nothing is pending", () => {
+    expect(telegramDotTone(status({ lastError: err }))).toBe("failed");
+    expect(telegramDotTone(status({ state: "planned", lastError: err }))).toBe("planned");
+    expect(telegramDotTone(status({ state: "sending", lastError: err }))).toBe("sending");
+    expect(telegramDotTone(status({ state: "sent", sentAt: AT }))).toBe("sent");
+    expect(telegramDotTone(status())).toBeNull();
+  });
+});
+
+describe("channelPublishNotice", () => {
+  it("armed -> info with the time; dropped -> warning with the reason; none -> null", () => {
+    expect(channelPublishNotice(undefined)).toBeNull();
+    expect(channelPublishNotice({ state: "none" })).toBeNull();
+    expect(channelPublishNotice({ state: "armed", at: AT }, NOW)).toEqual({ tone: "info", text: "Telegram rejasi ishga tushdi: kanalga 28.11 14:30 da yuboriladi" });
+    for (const [reason, part] of [["past_time", "o'tib ketgan"], ["already_sent", "allaqachon yuborilgan"], ["no_permission", "ruxsati yo'q"], ["invalid", "yaroqsiz"]] as const) {
+      const n = channelPublishNotice({ state: "dropped", reason });
+      expect(n?.tone).toBe("warning");
+      expect(n?.text).toContain(part);
+    }
   });
 });

@@ -3,6 +3,8 @@ import { recordAuditSafe } from "../lib/audit.js";
 import type { Actor } from "../lib/posts/types.js";
 import { getChannelInfo } from "./channel-info.js";
 import { sendMarkedChoiceNow } from "./channel-plan.js";
+import { recordChannelError } from "./channel-last-error.js";
+import { summarizePreflightErrors } from "./channel-preflight.js";
 import {
   computeChannelPost,
   computeChannelVersionPost,
@@ -68,6 +70,7 @@ export async function sendToChannelAudited(
         : await sendPostToChannel(postId, request.mode, request.variant, { replaceExisting: request.replaceExisting });
   } catch (error) {
     // Yuborish yiqildi: avvalgi xabar (almashtirishda) o'zgarmagan holda qoladi — buni jurnalga yozamiz va xatoni qayta tashlaymiz.
+    await recordChannelError(postId, error);
     await recordAuditSafe(actor, {
       action: "post.channel_send_failed",
       entityType: "post",
@@ -79,6 +82,7 @@ export async function sendToChannelAudited(
   }
 
   if (!result.ok && result.reason === "preflight_failed") {
+    await recordChannelError(postId, `Telegram cheklovlari: ${result.preflight ? summarizePreflightErrors(result.preflight) : "tekshiruv o'tmadi"}`);
     await recordAuditSafe(actor, {
       action: "post.channel_send_failed",
       entityType: "post",

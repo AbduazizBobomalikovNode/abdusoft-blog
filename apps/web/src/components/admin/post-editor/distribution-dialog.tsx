@@ -34,8 +34,8 @@ function errMsg(e: unknown, fallback: string): string {
 
 const STATUS_DOT: Record<string, string> = { sent: "bg-emerald-500", failed: "bg-destructive", needs_checking: "bg-amber-500", scheduled: "bg-sky-500", sending: "bg-sky-500", draft: "bg-muted-foreground", cancelled: "bg-muted-foreground/40" };
 
-const TELEGRAM_DOT: Record<"planned" | "sending" | "sent", string> = { planned: "bg-violet-500", sending: "bg-sky-500", sent: "bg-emerald-500" };
-const TELEGRAM_DOT_TITLE: Record<"planned" | "sending" | "sent", string> = { planned: "Telegram: kanalga yuborish rejalashtirilgan", sending: "Telegram: yuborilmoqda", sent: "Telegram: kanalga yuborilgan" };
+const TELEGRAM_DOT: Record<"planned" | "sending" | "sent" | "failed", string> = { planned: "bg-violet-500", sending: "bg-sky-500", sent: "bg-emerald-500", failed: "bg-red-500" };
+const TELEGRAM_DOT_TITLE: Record<"planned" | "sending" | "sent" | "failed", string> = { planned: "Telegram: kanalga yuborish rejalashtirilgan", sending: "Telegram: yuborilmoqda", sent: "Telegram: kanalga yuborilgan", failed: "Telegram: oxirgi yuborish urinishi muvaffaqiyatsiz" };
 
 const selectClass = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 

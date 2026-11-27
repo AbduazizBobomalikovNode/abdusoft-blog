@@ -313,15 +313,22 @@ describe("channel plan validation, permissions and cleanup", () => {
     expect((await loadPost(id)).channelPlan).toBeNull();
   });
 
-  it("PATCH cannot set a plan on a non-scheduled post (409)", async () => {
+  it("PATCH sets a plan on an unpublished (draft) post, but not on a published or archived one (409)", async () => {
     const id = await createPost({ withMedia: false });
     const res = await send("PATCH", `/admin/posts/${id}`, admin.cookie, {
-      channelPlan: { mode: "text", variant: "m", delayMinutes: 0 },
+      channelPlan: { mode: "text", variant: "m", delayMinutes: 15 },
     });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+    const row = await loadPost(id);
+    expect(row.channelPlan).toMatchObject({ mode: "text", variant: "m", delayMinutes: 15 });
+    expect(row.channelSendAt).toBeNull();
+    await db.update(posts).set({ status: "published", publishedAt: new Date() }).where(eq(posts.id, id));
+    expect((await send("PATCH", `/admin/posts/${id}`, admin.cookie, { channelPlan: { mode: "text", variant: "m", delayMinutes: 0 } })).status).toBe(409);
+    await db.update(posts).set({ status: "archived" }).where(eq(posts.id, id));
+    expect((await send("PATCH", `/admin/posts/${id}`, admin.cookie, { channelPlan: { mode: "text", variant: "m", delayMinutes: 0 } })).status).toBe(409);
   });
 
-  it("un-scheduling (scheduledAt: null) clears the plan; unpublish clears a pending channel_send_at", async () => {
+  it("un-scheduling (scheduledAt: null) clears the plan; unpublish KEEPS the plan but removes the queued channel_send_at", async () => {
     const id = await createPost({ withMedia: false });
     await schedule(id, { mode: "text", variant: "m", delayMinutes: 60 }, new Date(Date.now() + 3600_000).toISOString());
     await send("PATCH", `/admin/posts/${id}`, admin.cookie, { scheduledAt: null });
@@ -334,7 +341,7 @@ describe("channel plan validation, permissions and cleanup", () => {
     const res = await send("POST", `/admin/posts/${id2}/unpublish`, admin.cookie);
     expect(res.status).toBe(200);
     const row = await loadPost(id2);
-    expect(row.channelPlan).toBeNull();
+    expect(row.channelPlan).toMatchObject({ mode: "text", variant: "m", delayMinutes: 60 });
     expect(row.channelSendAt).toBeNull();
   });
 

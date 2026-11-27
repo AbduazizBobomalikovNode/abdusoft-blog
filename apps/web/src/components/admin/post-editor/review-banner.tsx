@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import type { AdminPostStatus, ResolvedChannelChoice } from "@blog/shared";
+import { channelPublishNotice } from "@/lib/distribution-telegram";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,6 +85,8 @@ export function AdminReviewActions({
       else if (send?.state === "failed") toast.error(`Post chop etildi, lekin kanalga yuborilmadi: ${send.error ?? "noma'lum xato"}`);
       else if (send?.state === "pending") toast.success("Post chop etildi — kanalga yuborilmoqda, natija admin chatiga keladi");
       else toast.success("Post chop etildi");
+      const notice = send ? null : channelPublishNotice(result.channel);
+      if (notice) (notice.tone === "warning" ? toast.warning : toast.info)(notice.text);
       setApproveOpen(false);
     } catch (error) {
       if (!isConflictFailure(error)) toast.error(errorMessage(error, "Chop etishda xatolik"));

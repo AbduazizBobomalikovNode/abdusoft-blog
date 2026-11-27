@@ -58,6 +58,8 @@ import { extractOutline, type OutlineItem } from "@blog/shared";
 import { isHintText } from "@blog/shared";
 import { site } from "@/lib/site";
 import { formatTime } from "@/lib/format";
+import { canPlanForPost } from "@/lib/distribution-plan";
+import { channelPublishNotice } from "@/lib/distribution-telegram";
 
 function toDatetimeLocal(iso: string | null): string {
   if (!iso) return "";
@@ -133,8 +135,9 @@ function PostEditorInner({
   const [submitting, setSubmitting] = useState(false);
   const [scheduledAtLocal, setScheduledAtLocal] = useState(toDatetimeLocal(post.scheduledAt));
   const [scheduling, setScheduling] = useState(false);
-  // Faqat rejalashtirilgan postda server tomonda saqlanadi — boshqa holatda "rejalashtirish" bosilganda yuboriladi.
-  const [channelPlan, setChannelPlan] = useState<ChannelPlan | null>(post.status === "scheduled" ? post.channelPlan : null);
+  // Chop etilmagan postda (qoralama / ko'rib chiqishda / rejalashtirilgan — shu jumladan qoralamaga qaytarilgan) reja serverda saqlanadi
+  // va avtosaqlanadi; chop etilgan postda reja bloki ko'rsatilmaydi.
+  const [channelPlan, setChannelPlan] = useState<ChannelPlan | null>(canPlanForPost(post.status) ? post.channelPlan : null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [telegram, setTelegram] = useState<TelegramRef | null>(post.telegram);
   const [telegramChannel, setTelegramChannel] = useState<string | null>(null);
@@ -182,7 +185,7 @@ function PostEditorInner({
       tagSlugs: post.tags.map((t) => t.slug),
       contentJson: post.contentJson,
       ...(isStaff ? {} : { settings: post.settings, pinned: post.pinned }),
-      ...(!isStaff && post.status === "scheduled" ? { channelPlan: post.channelPlan } : {}),
+      ...(!isStaff && canPlanForPost(post.status) ? { channelPlan: post.channelPlan } : {}),
     },
     initialManaged: { status: post.status, scheduledAt: post.scheduledAt, publishedAt: post.publishedAt },
     onStale: () => void handleLoadLatest({ quiet: true }),
@@ -474,6 +477,8 @@ function PostEditorInner({
       else if (send?.state === "failed") toast.error(`Post chop etildi, lekin kanalga yuborilmadi: ${send.error ?? "noma'lum xato"}`);
       else if (send?.state === "pending") toast.success("Post chop etildi — kanalga yuborilmoqda, natija admin chatiga keladi");
       else toast.success("Post chop etildi");
+      const notice = send ? null : channelPublishNotice(result.channel);
+      if (notice) (notice.tone === "warning" ? toast.warning : toast.info)(notice.text);
     } catch (error) {
       if (!handledAsConflict(error)) toast.error(errorMessage(error, "Chop etishda xatolik"));
     }
@@ -483,7 +488,13 @@ function PostEditorInner({
     try {
       const result = await engine.runTransition((token) => adminApi.unpublishPost(post.id, { expectedUpdatedAt: token }));
       setStatus(result.status);
-      setChannelPlan(null); // server ham rejani tozalaydi
+      // Server Telegram rejasini SAQLAYDI — muharrir holatini serverdan qayta o'qiymiz (aks holda keyingi "Rejalashtirish" eski/bo'sh rejani yuborib yuboradi).
+      try {
+        const fresh = await adminApi.getPost(post.id);
+        setChannelPlan(fresh.channelPlan ?? null);
+      } catch (error) {
+        toast.warning(errorMessage(error, "Telegram rejasini qayta yuklab bo'lmadi — sahifani yangilang"));
+      }
       toast.success("Post qoralamaga qaytarildi");
     } catch (error) {
       if (!handledAsConflict(error)) toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
@@ -695,8 +706,8 @@ function PostEditorInner({
     onChannelPlanBlockingChange: setChannelPlanBlocked,
     onChannelPlanChange: (plan: ChannelPlan | null) => {
       setChannelPlan(plan);
-      // Allaqachon rejalashtirilgan postda o'zgarish avtosaqlash orqali serverga boradi (faqat admin).
-      if (status === "scheduled") queueSave({ channelPlan: plan });
+      // Chop etilmagan postda (qoralama / ko'rib chiqishda / rejalashtirilgan) o'zgarish avtosaqlash orqali serverga boradi (faqat admin).
+      if (!isStaff && canPlanForPost(status)) queueSave({ channelPlan: plan });
     },
     onCancelSchedule: () => void handleUnpublish(),
     telegram,

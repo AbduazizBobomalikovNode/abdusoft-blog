@@ -571,7 +571,7 @@ export const adminPostsRoute = new Hono()
     if (!result.ok) return errorResponse(c, result.error);
 
     const channelSend = wants.sendToChannel ? await queueChannelSend(id) : undefined;
-    return c.json({ ...toLifecycleSummary(result.data), ...(channelSend ? { channelSend } : {}) });
+    return c.json({ ...toLifecycleSummary(result.data), channel: result.data.channel, ...(channelSend ? { channelSend } : {}) });
   })
   .post("/:id/request-changes", async (c) => {
     const actor = actorOf(c);
