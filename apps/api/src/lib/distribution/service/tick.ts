@@ -3,6 +3,7 @@ import { db } from "../../../db/index.js";
 import { distributionOauthStates } from "../../../db/schema.js";
 import { runTokenReminders, runTokenRefreshes } from "./accounts.js";
 import { distNow } from "./env.js";
+import { materializeDuePlans } from "./plans.js";
 import { recoverInterruptedDistributions, runDueDistributions } from "./runner.js";
 
 /**
@@ -20,11 +21,12 @@ export interface TickResult {
   refreshed: number;
   reminders: number;
   ran: number;
+  planned: number;
 }
 
 /** Har daqiqa: tiklash, token yangilash, eslatmalar, vaqti kelgan yuborishlar. Har biri alohida try/catch. */
 export async function runDistributionTick(now: Date = distNow()): Promise<TickResult> {
-  const out: TickResult = { recovered: 0, refreshed: 0, reminders: 0, ran: 0 };
+  const out: TickResult = { recovered: 0, refreshed: 0, reminders: 0, ran: 0, planned: 0 };
   const guard = async (label: string, fn: () => Promise<void>) => {
     try {
       await fn();
@@ -36,6 +38,7 @@ export async function runDistributionTick(now: Date = distNow()): Promise<TickRe
   await guard("states", async () => void (await db.delete(distributionOauthStates).where(lt(distributionOauthStates.expiresAt, now))));
   await guard("refresh", async () => void (out.refreshed = await runTokenRefreshes(now)));
   await guard("reminders", async () => void (out.reminders = await runTokenReminders(now)));
+  await guard("plans", async () => void (out.planned = await materializeDuePlans(now)));
   await guard("send", async () => void (out.ran = await runDueDistributions(now)));
   return out;
 }

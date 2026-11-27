@@ -52,6 +52,8 @@ export function toItemDto(row: DistributionRow): DistributionItemDto {
     externalUrl: row.externalUrl,
     step: row.step,
     versionId: row.versionId,
+    planDelayMinutes: row.planDelayMinutes,
+    planMaterializedAt: row.planMaterializedAt?.toISOString() ?? null,
     canResume: Boolean(row.partial && Object.keys(row.partial).length > 0),
     createdBy: row.createdBy,
     createdVia: row.createdVia,

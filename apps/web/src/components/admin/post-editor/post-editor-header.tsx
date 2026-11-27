@@ -19,6 +19,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { distributionAvailableFor } from "@/lib/distribution-plan";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -244,6 +245,7 @@ export function PostEditorHeader({
   const blocked = hasBlockingIssue(checklist);
   const [sendToChannel, setSendToChannel] = useState(false);
   const published = status === "published";
+  const distributionAvailable = distributionAvailableFor(status);
   const channelLabel = published ? "Kanalga yuborish" : "Kanal versiyasi";
   const channelDisabled = status === "archived";
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -379,7 +381,7 @@ export function PostEditorHeader({
           </AlertDialog>
         )}
 
-        {onOpenDistribution && published ? (
+        {onOpenDistribution && distributionAvailable ? (
           <Button variant="outline" size="sm" className="max-md:hidden" onClick={onOpenDistribution} data-testid="open-distribution">
             <Share2 className="size-4" />
             Tarqatish
@@ -418,7 +420,7 @@ export function PostEditorHeader({
                 Tarix
               </DropdownMenuItem>
             ) : null}
-            {onOpenDistribution && published ? (
+            {onOpenDistribution && distributionAvailable ? (
               <DropdownMenuItem className="min-h-11 md:hidden" onSelect={onOpenDistribution}>
                 <Share2 />
                 Tarqatish

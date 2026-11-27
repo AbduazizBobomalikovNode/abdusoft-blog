@@ -38,7 +38,12 @@ export type DistributionErrorKindDto =
   | "outcome_unknown"
   | "refresh_ambiguous"
   | "not_supported"
+  | "plan_invalid"
   | "internal";
+
+/** Nisbiy reja: post chop etilgach necha daqiqadan keyin yuboriladi (Telegram `ChannelPlan.delayMinutes` bilan bir xil oraliq). */
+export const DISTRIBUTION_PLAN_MAX_DELAY_MINUTES = 10080;
+export const DISTRIBUTION_PLAN_PRESETS: readonly number[] = [0, 15, 60, 180, 1440];
 
 export type DistributionImageChoice = "auto" | "cover" | "og" | "none";
 export const DISTRIBUTION_IMAGE_CHOICES: readonly DistributionImageChoice[] = ["auto", "cover", "og", "none"];
@@ -150,6 +155,10 @@ export interface DistributionItemDto {
   canResume: boolean;
   /** Yuborish/rejalashtirishda ishlatilgan nomli versiya (bo'lmasa yoki versiya o'chirilgan bo'lsa null). */
   versionId: string | null;
+  /** "Saytga chiqqach N daqiqadan keyin" rejasi (0..10080); reja yo'q bo'lsa null. */
+  planDelayMinutes: number | null;
+  /** Reja haqiqiy vaqtga aylantirilgan (yoki xato bilan yopilgan) payt; null — post hali chop etilmagan, reja kutmoqda. */
+  planMaterializedAt: string | null;
   createdBy: string | null;
   createdVia: string;
   sentAt: string | null;
@@ -162,6 +171,15 @@ export interface DistributionItemDto {
 export const DISTRIBUTION_VERSION_MAX_PER_CHANNEL = 10;
 export const DISTRIBUTION_VERSION_NAME_MAX = 80;
 export const DISTRIBUTION_VERSION_TEXT_MAX = 20_000;
+
+/** `PUT /admin/distribution/posts/:postId/:provider/plan` tanasi. Matn/rasm/rejim — `draft` bilan bir xil. */
+export interface SetDistributionPlanBody {
+  delayMinutes: number;
+  versionId?: string;
+  text?: string | null;
+  imageChoice?: DistributionImageChoice;
+  linkMode?: DistributionLinkMode | null;
+}
 
 export interface DistributionVersionDto {
   id: string;

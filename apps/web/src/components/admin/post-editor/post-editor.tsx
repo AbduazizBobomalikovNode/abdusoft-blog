@@ -143,6 +143,8 @@ function PostEditorInner({
   // "Tarqatish" kirish nuqtasi: `/admin/me` (`distributionEnabled`) bo'yicha — alohida 404 so'rovi yo'q. Xodimga hech qachon.
   const distributionOn = useDistributionEnabled() && !isStaff;
   const [distributionOpen, setDistributionOpen] = useState(false);
+  // Dialog yopilganda "Nashr" kartasidagi reja xulosasi qayta yuklanadi.
+  const [distributionRefresh, setDistributionRefresh] = useState(0);
   const [channelPlanBlocked, setChannelPlanBlocked] = useState(false);
   const [channelChoice, setChannelChoice] = useState<ResolvedChannelChoice | null>(post.channelChoice);
   const [starterDismissed, setStarterDismissed] = useState(false);
@@ -696,6 +698,7 @@ function PostEditorInner({
     onRefreshTelegraph: () => void handleRefreshTelegraph(),
     refreshingTelegraph,
     onOpenChannelSend: () => setChannelSendOpen(true),
+    ...(distributionOn ? { distributionPlans: { onOpen: () => setDistributionOpen(true), refreshKey: distributionRefresh } } : {}),
     channelChoice,
   };
 
@@ -841,7 +844,7 @@ function PostEditorInner({
         onChoiceChange={setChannelChoice}
       />
 
-      {distributionOn ? <DistributionDialog postId={post.id} open={distributionOpen} onOpenChange={setDistributionOpen} /> : null}
+      {distributionOn ? <DistributionDialog postId={post.id} postStatus={status} open={distributionOpen} onOpenChange={(o) => { setDistributionOpen(o); if (!o) setDistributionRefresh((n) => n + 1); }} /> : null}
 
       {conflict ? (
         <ConflictBanner

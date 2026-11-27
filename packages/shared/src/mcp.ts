@@ -92,9 +92,9 @@ export const MCP_SCOPES: readonly McpScopeInfo[] = [
     group: "publish",
     label: "Ijtimoiy tarmoqlarga post chiqarish",
     description:
-      "Postni LinkedIn, X, Threads, Instagram'da ommaviy e'lon qilish yoki rejalashtirish, matnini va nomli versiyalarini saqlash, qayta urinish, bekor qilish va yuborilgan postni tarmoqdan o'chirish. Telegram kanal ruxsatidan alohida.",
+      "Postni LinkedIn, X, Threads, Instagram'da ommaviy e'lon qilish yoki rejalashtirish, matnini va nomli versiyalarini saqlash, «saytga chiqqach N daqiqadan keyin» rejasini qo'yish, qayta urinish, bekor qilish va yuborilgan postni tarmoqdan o'chirish. Telegram kanal ruxsatidan alohida.",
     english:
-      "Post to the owner's public social accounts (LinkedIn, X, Threads, Instagram, GitHub profile README): send or schedule a distribution, save its text and named versions, retry, cancel, and remove a sent post from the platform. Separate from the Telegram channel permission. Only grantable when social distribution is enabled.",
+      "Post to the owner's public social accounts (LinkedIn, X, Threads, Instagram, GitHub profile README): send or schedule a distribution (or plan one for N minutes after the post is published), save its text and named versions, retry, cancel, and remove a sent post from the platform. Separate from the Telegram channel permission. Only grantable when social distribution is enabled.",
   },
   {
     id: "comments:moderate",

@@ -59,6 +59,7 @@ export const ERROR_KIND_TEXT: Record<DistributionErrorKindDto, string> = {
   outcome_unknown: "Natija noma'lum — post chiqqan bo'lishi mumkin, platformada tekshiring",
   refresh_ambiguous: "Token yangilash natijasi noma'lum — keyingi urinish ham xato bersa, qayta ulang",
   not_supported: "Bu amal platformada qo'llanmaydi",
+  plan_invalid: "«Saytga chiqqach» rejasi bajarilmadi — post chop etilganda tekshiruv o'tmadi",
   internal: "Kutilmagan xato",
 };
 
@@ -167,7 +168,7 @@ export const IMAGE_CHOICE_LABEL = { auto: "Avto (muqova, bo'lmasa sayt rasmi)", 
 export const LINK_MODE_LABEL = { article: "Maqola kartasi (rasm bilan)", text: "Matn + havola" } as const;
 
 export const NO_AUTO_POST_NOTICE =
-  "Maqola chop etilganda hech narsa AVTOMATIK yuborilmaydi. Post faqat siz «Yuborish» yoki «Rejalashtirish»ni bosganingizdagina (yoki yordamchingiz aniq buyruq berganda) yuboriladi.";
+  "Maqola chop etilganda hech narsa o'zi YUBORILMAYDI. Post faqat siz «Yuborish», «Rejalashtirish» yoki «Saytga chiqqach» rejasini qo'ygandagina (yoki yordamchingiz aniq buyruq berganda) yuboriladi.";
 
 export type EditorState = { text: string; edited: boolean };
 

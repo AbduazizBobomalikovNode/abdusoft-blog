@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import type { DistributionChannelDto, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId, DistributionVersionDto } from "@blog/shared";
+import type { AdminPostStatus, DistributionChannelDto, DistributionItemDto, DistributionPostResponse, DistributionPreviewResponse, DistributionProviderId, DistributionVersionDto } from "@blog/shared";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,6 +16,7 @@ import {
   ERROR_KIND_TEXT, IMAGE_CHOICE_LABEL, LINK_MODE_LABEL, NO_AUTO_POST_NOTICE, TONE_CLASS, UNIT_LABEL,
   counterView, isFutureEnough, isHttpsUrl, itemActions, localInputToIso, minScheduleInput, own, statusPill, textForSave, tokenLine,
 } from "@/lib/distribution-ui";
+import { DISTRIBUTION_PLAN_MAX_DELAY_MINUTES, DISTRIBUTION_PLAN_PRESETS, PLAN_STATE_LABEL, canPlanForPost, clampDelay, delayText, isPresetDelay, isWaitingPlan, planPhrase, planStateOf } from "@/lib/distribution-plan";
 import { initialVersionId, isVersionDirty, markPrimary, removeVersion, replaceVersion, versionsOf, type VersionSaveState } from "@/lib/distribution-versions";
 import { DistributionVersionStrip } from "./distribution-version-strip";
 import { TrashedPanel } from "./distribution-trashed-panel";
@@ -27,6 +28,8 @@ import { cn } from "cn";
 function errMsg(e: unknown, fallback: string): string {
   return e instanceof AdminApiError ? e.message : fallback;
 }
+
+const PRESET_LABEL: Record<number, string> = { 0: "Darhol", 15: "15 daq", 60: "1 soat", 180: "3 soat", 1440: "1 kun" };
 
 const STATUS_DOT: Record<string, string> = { sent: "bg-emerald-500", failed: "bg-destructive", needs_checking: "bg-amber-500", scheduled: "bg-sky-500", sending: "bg-sky-500", draft: "bg-muted-foreground", cancelled: "bg-muted-foreground/40" };
 
@@ -53,11 +56,18 @@ function Checklist({ checks }: { checks: DistributionPreviewResponse["checks"] }
   );
 }
 
-function ChannelPanel({ postId, channel, item, initialVersions, onChanged }: { postId: string; channel: DistributionChannelDto; item: DistributionItemDto | null; initialVersions: DistributionVersionDto[]; onChanged: () => Promise<void> }) {
+function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onChanged }: { postId: string; postStatus: AdminPostStatus; channel: DistributionChannelDto; item: DistributionItemDto | null; initialVersions: DistributionVersionDto[]; onChanged: () => Promise<void> }) {
   const provider = channel.id as DistributionProviderId;
   const caps = channel.capabilities;
   const isGithub = provider === "github";
-  const actions = itemActions(item, channel.ready, caps);
+  const postPublished = postStatus === "published";
+  const baseActions = itemActions(item, channel.ready, caps);
+  // Chop etilmagan postda darhol yuborish/aniq vaqt yo'q (server ham rad etadi): faqat "Saytga chiqqach" rejasi.
+  const actions = postPublished ? baseActions : { ...baseActions, send: false, schedule: false, sendAgain: false };
+  const canPlan = !postPublished && canPlanForPost(postStatus) && baseActions.edit && (item === null || item.status === "draft");
+  const planState = planStateOf(item);
+  const [delay, setDelay] = useState(() => item?.planDelayMinutes ?? 15);
+  const [customDelay, setCustomDelay] = useState(() => !isPresetDelay(item?.planDelayMinutes ?? 15));
   const [versions, setVersions] = useState<DistributionVersionDto[]>(() => (isGithub ? [] : versionsOf(initialVersions, provider)));
   // Dialog asosiy versiyada ochiladi (bo'lsa va qator tahrirlanadigan bo'lsa); aks holda avvalgidek "Standart".
   const [selectedId, setSelectedId] = useState<string | null>(() => (isGithub ? null : initialVersionId(versions, item, actions.edit)));
@@ -171,6 +181,9 @@ function ChannelPanel({ postId, channel, item, initialVersions, onChanged }: { p
 
   const counter = counterView(provider, text, caps?.textMax ?? null);
   const blocked = !preview || preview.errorCount > 0 || (!isGithub && counter.level === "over");
+  // Reja uchun "post chop etilgan" tekshiruvi kutilmagan emas (hali chop etilmagan) — yuborish paytida baribir qayta tekshiriladi.
+  const shownChecks = preview ? (postPublished ? preview.checks : preview.checks.filter((c) => c.id !== "dist.published")) : [];
+  const planBlocked = !preview || shownChecks.some((c) => c.status === "error") || (!isGithub && counter.level === "over");
 
   async function run<T>(fn: () => Promise<T>, ok: string) {
     setBusy(true);
@@ -235,6 +248,11 @@ function ChannelPanel({ postId, channel, item, initialVersions, onChanged }: { p
         </div>
       ) : null}
 
+      {planState !== "none" && item?.planDelayMinutes != null ? (
+        <p className="rounded-lg bg-violet-500/10 px-3 py-2 text-sm" data-testid="dist-plan-state">
+          Reja: <b>{planPhrase(item.planDelayMinutes)}</b> · {PLAN_STATE_LABEL[planState]}
+        </p>
+      ) : null}
       {item?.status === "scheduled" && item.scheduledAt ? <p className="text-sm">Rejalashtirilgan: <b>{formatDateTime(item.scheduledAt)}</b></p> : null}
       {item?.status === "sent" ? (
         <p className="text-sm">
@@ -296,7 +314,7 @@ function ChannelPanel({ postId, channel, item, initialVersions, onChanged }: { p
       {preview ? (
         <div className="flex flex-col gap-1.5">
           <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Tekshiruv</h4>
-          <Checklist checks={preview.checks} />
+          <Checklist checks={shownChecks} />
         </div>
       ) : <div className="h-16 animate-pulse rounded-md bg-muted" aria-busy />}
 
@@ -323,6 +341,33 @@ function ChannelPanel({ postId, channel, item, initialVersions, onChanged }: { p
 
       {/* Amallar */}
       <div className="flex flex-col gap-3 border-t border-border pt-3">
+        {actions.schedule || canPlan ? (
+          <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label="Rejalashtirish rejimi" data-testid="dist-mode-toggle">
+            <span className={cn("rounded-md px-2.5 py-1 text-xs font-medium", !postPublished ? "bg-background shadow-sm" : "cursor-not-allowed text-muted-foreground/60")} title={postPublished ? "Post chop etilgan — «Aniq vaqt» ishlating" : undefined} aria-pressed={!postPublished} data-testid="dist-mode-relative">Saytga chiqqach</span>
+            <span className={cn("rounded-md px-2.5 py-1 text-xs font-medium", postPublished ? "bg-background shadow-sm" : "cursor-not-allowed text-muted-foreground/60")} title={postPublished ? undefined : "Aniq vaqt post chop etilgandan keyin ochiladi"} aria-pressed={postPublished} data-testid="dist-mode-absolute">Aniq vaqt</span>
+          </div>
+        ) : null}
+        {canPlan ? (
+          <div className="flex flex-col gap-2" data-testid="dist-plan-editor">
+            <Label className="text-xs">Post chop etilgach necha daqiqadan keyin yuborilsin</Label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {DISTRIBUTION_PLAN_PRESETS.map((m) => (
+                <Button key={m} type="button" size="sm" variant={!customDelay && delay === m ? "default" : "outline"} disabled={busy} onClick={() => { setDelay(m); setCustomDelay(false); }}>{PRESET_LABEL[m] ?? delayText(m)}</Button>
+              ))}
+              <Button type="button" size="sm" variant={customDelay ? "default" : "outline"} disabled={busy} onClick={() => setCustomDelay(true)}>Boshqa</Button>
+              {customDelay ? (
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Input type="number" min={0} max={DISTRIBUTION_PLAN_MAX_DELAY_MINUTES} step={1} value={delay} onChange={(e) => setDelay(clampDelay(e.target.value))} className="w-24" aria-label="Kechikish (daqiqa)" /> daq
+                </span>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground">Post saytga chiqqach <b>{delayText(delay)}</b>{delay === 0 ? "" : " o'tib"} yuboriladi{delay === 0 ? " (keyingi daqiqada)" : ""}. Matn shu paytdagi tanlangan versiyadan olinadi va o&apos;sha paytda qayta tekshiriladi; o&apos;tmasa «Xato» bo&apos;ladi.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" disabled={busy || planBlocked} onClick={() => void run(() => adminApi.distributionSetPlan(postId, provider, { ...queueBody(), delayMinutes: delay }), "Reja saqlandi")}>{item?.planDelayMinutes != null ? "Rejani yangilash" : "Rejani saqlash"}</Button>
+              {item?.planDelayMinutes != null ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(() => adminApi.distributionClearPlan(postId, provider), "Reja olib tashlandi")}>Rejani olib tashlash</Button> : null}
+            </div>
+          </div>
+        ) : null}
         {actions.schedule ? (
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex flex-col gap-1">
@@ -376,7 +421,7 @@ function ChannelPanel({ postId, channel, item, initialVersions, onChanged }: { p
 }
 
 /** Post tahrirlagichidagi "Tarqatish" dialogi (Telegram yuborish dialogi yonida). Faqat bayroq yoqilganda ochiladi. */
-export function DistributionDialog({ postId, open, onOpenChange }: { postId: string; open: boolean; onOpenChange: (o: boolean) => void }) {
+export function DistributionDialog({ postId, open, onOpenChange, postStatus = "published" }: { postId: string; open: boolean; onOpenChange: (o: boolean) => void; postStatus?: AdminPostStatus }) {
   const [data, setData] = useState<DistributionPostResponse | null>(null);
   const [active, setActive] = useState<DistributionProviderId>("linkedin");
 
@@ -420,12 +465,12 @@ export function DistributionDialog({ postId, open, onOpenChange }: { postId: str
                   <button key={c.id} type="button" role="tab" aria-selected={active === c.id} onClick={() => setActive(c.id as DistributionProviderId)}
                     className={cn("flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium", active === c.id ? "bg-background shadow-sm" : "text-muted-foreground")}>
                     {c.name.replace(/ \(.*\)/, "")}
-                    <span className={cn("size-1.5 rounded-full", it ? own(STATUS_DOT, it.status, "bg-muted-foreground") : c.ready ? "bg-muted-foreground/30" : "bg-transparent")} />
+                    <span className={cn("size-1.5 rounded-full", isWaitingPlan(it) ? "bg-violet-500" : it ? own(STATUS_DOT, it.status, "bg-muted-foreground") : c.ready ? "bg-muted-foreground/30" : "bg-transparent")} title={isWaitingPlan(it) ? "Reja: post chop etilishini kutmoqda" : undefined} data-testid={isWaitingPlan(it) ? "dist-tab-plan-dot" : undefined} />
                   </button>
                 );
               })}
             </div>
-            {channel ? <ChannelPanel key={`${channel.id}-${itemFor(channel.id)?.id ?? "new"}-${itemFor(channel.id)?.status ?? ""}`} postId={postId} channel={channel} item={itemFor(channel.id)} initialVersions={data.versions ?? []} onChanged={load} /> : null}
+            {channel ? <ChannelPanel key={`${channel.id}-${itemFor(channel.id)?.id ?? "new"}-${itemFor(channel.id)?.status ?? ""}-${postStatus}`} postId={postId} postStatus={postStatus} channel={channel} item={itemFor(channel.id)} initialVersions={data.versions ?? []} onChanged={load} /> : null}
           </>
         )}
       </DialogContent>
