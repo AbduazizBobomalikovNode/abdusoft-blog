@@ -7,7 +7,7 @@ import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import { Settings2 } from "lucide-react";
 import { toast } from "sonner";
-import { docStats, slugify, type AdminPostDetail, type AdminPostStatus, type ChannelPlan, type DocStats, type Me, type PostSettings, type ResolvedChannelChoice, type TagWithCount, type TelegramRef } from "@blog/shared";
+import { docStats, slugify, type AdminPostDetail, type AdminPostStatus, type ChannelPlan, type DocStats, type Me, type PostMainVideo, type PostSettings, type ResolvedChannelChoice, type TagWithCount, type TelegramRef } from "@blog/shared";
 import { DraftBanner } from "@/components/admin/editor/draft-banner";
 import { EditorToolbar } from "@/components/admin/editor/editor-toolbar";
 import { OPEN_SHORTCUTS_EVENT } from "@/components/admin/editor/events";
@@ -524,14 +524,17 @@ function PostEditorInner({
   }
 
   const [mainVideoJobId, setMainVideoJobId] = useState<string | null>(post.mainVideo?.jobId ?? null);
+  const [mainVideo, setMainVideo] = useState<PostMainVideo | null>(post.mainVideo ?? null);
+  const [videoOpen, setVideoOpen] = useState(false);
 
   /** Asosiy videoni o'rnatish/olib tashlash: avtosaqlash bilan bir xil token zanjiri (`runTransition`) — keyingi avtosaqlash konfliktga tushmaydi. */
   const mainVideoControl: MainVideoControl = {
     jobId: mainVideoJobId,
-    set: async (jobId) => {
+    set: async (jobId, video) => {
       try {
         await engine.runTransition((token) => adminApi.updatePost(post.id, token ? { mainVideoJobId: jobId, expectedUpdatedAt: token } : { mainVideoJobId: jobId }));
         setMainVideoJobId(jobId);
+        setMainVideo(jobId === null ? null : (video ?? null));
         return true;
       } catch (error) {
         if (handledAsConflict(error)) return false;
@@ -539,6 +542,14 @@ function PostEditorInner({
       }
     },
   };
+
+  async function handleRemoveMainVideo() {
+    try {
+      if (await mainVideoControl.set(null)) toast.success("Asosiy video olib tashlandi");
+    } catch (error) {
+      toast.error(errorMessage(error, "Amalni bajarib bo'lmadi"));
+    }
+  }
 
   async function handleExcerptAuto() {
     try {
@@ -628,6 +639,7 @@ function PostEditorInner({
   const canRestoreRevision = !readOnly && (!isStaff || status === "draft" || status === "changes_requested");
 
   const settingsProps = {
+    ...(!isStaff && mainVideo ? { mainVideo, onRemoveMainVideo: handleRemoveMainVideo, onOpenVideo: () => setVideoOpen(true) } : {}),
     status,
     publishedAt: post.publishedAt,
     updatedAt: lastSavedAt ?? post.updatedAt,
@@ -852,7 +864,7 @@ function PostEditorInner({
         onRestore={handleRestoreRevision}
       />
 
-      {!isStaff ? <VideoPanel postId={post.id} mainVideo={mainVideoControl} /> : null}
+      {!isStaff ? <VideoPanel postId={post.id} mainVideo={mainVideoControl} open={videoOpen} onOpenChange={setVideoOpen} /> : null}
 
       {isStaff ? <StaffReviewBanner status={status} reviewNote={reviewNote} /> : null}
       {!isStaff && status === "in_review" ? (

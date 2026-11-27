@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Clapperboard, Copy, Download, Loader2, Star, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import type { MotionJob, MotionJobDetail } from "@blog/shared";
+import type { MotionJob, MotionJobDetail, PostMainVideo } from "@blog/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AdminApiError, adminApi } from "@/lib/admin-client";
@@ -27,8 +27,24 @@ export type MainVideoControl = {
   /** Hozirgi asosiy video ishi (`null` — yo'q). */
   jobId: string | null;
   /** `true` — saqlandi; `false` — konflikt sifatida muharrir o'zi ko'rsatdi. Boshqa xatolar tashlanadi. */
-  set: (jobId: string | null) => Promise<boolean>;
+  set: (jobId: string | null, video?: PostMainVideo) => Promise<boolean>;
 };
+
+/** Tayyor render ishidan asosiy video kartasi uchun ma'lumot (mp4 + birinchi ko'rik kadri); mp4 yo'q bo'lsa `null`. */
+export function mainVideoFromJob(job: MotionJob): PostMainVideo | null {
+  const mp4 = job.assets.find((a) => a.kind === "mp4");
+  if (!mp4) return null;
+  const still = job.assets.find((a) => a.kind === "still");
+  return {
+    jobId: job.id,
+    url: mp4.url,
+    posterUrl: still?.url ?? null,
+    width: mp4.width && mp4.width > 0 ? Math.round(mp4.width) : 1280,
+    height: mp4.height && mp4.height > 0 ? Math.round(mp4.height) : 720,
+    seconds: mp4.seconds ?? job.durationSeconds,
+    mime: "video/mp4",
+  };
+}
 
 function JobCard({ job, onChanged, mainVideo }: { job: MotionJob; onChanged: () => void; mainVideo?: MainVideoControl }) {
   const [busy, setBusy] = useState(false);
@@ -54,7 +70,7 @@ function JobCard({ job, onChanged, mainVideo }: { job: MotionJob; onChanged: () 
   const isMain = mainVideo !== undefined && mainVideo.jobId === job.id;
   const toggleMain = (next: string | null, done: string) =>
     run(async () => {
-      if (!(await mainVideo!.set(next))) throw new HandledElsewhere();
+      if (!(await mainVideo!.set(next, next ? (mainVideoFromJob(job) ?? undefined) : undefined))) throw new HandledElsewhere();
     }, done);
 
   async function toggleJson() {
@@ -162,10 +178,26 @@ function JobCard({ job, onChanged, mainVideo }: { job: MotionJob; onChanged: () 
 }
 
 /** Postdagi video ishlari: holat, ko'rik kadrlari, yuklab olish/havola, asosiy video qilish, bekor qilish va o'chirish. Storyboard'ni yordamchi (Claude) yozadi. */
-export function VideoPanel({ postId, mainVideo }: { postId: string; mainVideo?: MainVideoControl }) {
+export function VideoPanel({
+  postId,
+  mainVideo,
+  open: openProp,
+  onOpenChange,
+}: {
+  postId: string;
+  mainVideo?: MainVideoControl;
+  /** Ixtiyoriy: dialog holatini tashqaridan boshqarish (berilmasa o'zi boshqaradi). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   // Yoqilganmi: `/admin/me` (`videoEnabled`) bo'yicha — alohida so'rov yo'q.
   const enabled = useVideoEnabled();
-  const [open, setOpen] = useState(false);
+  const [innerOpen, setInnerOpen] = useState(false);
+  const open = openProp ?? innerOpen;
+  const setOpen = (next: boolean) => {
+    setInnerOpen(next);
+    onOpenChange?.(next);
+  };
   const [jobs, setJobs] = useState<MotionJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 

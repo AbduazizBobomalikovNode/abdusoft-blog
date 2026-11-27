@@ -1,6 +1,6 @@
 "use client";
 
-import type { AdminPostStatus, ChannelPlan, PostSettings, ResolvedChannelChoice, TagWithCount, TelegramRef } from "@blog/shared";
+import type { AdminPostStatus, ChannelPlan, PostMainVideo, PostSettings, ResolvedChannelChoice, TagWithCount, TelegramRef } from "@blog/shared";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
 import { SETTING_SWITCHES } from "@/components/admin/post-settings-fields";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { formatDateTime } from "@/lib/format";
 import { ChannelChoiceSummary } from "./channel-choice-summary";
 import { ChannelPlanFields } from "./channel-plan-fields";
 import { CoverImagePicker } from "./cover-image-picker";
+import { MainVideoCard } from "./main-video-card";
 import { TagMultiselect } from "./tag-multiselect";
 
 // "Interaktivlik" kartasida ko'rsatiladigan sozlamalar — Telegram bilan bog'liq
@@ -71,6 +72,10 @@ export interface PostEditorSettingsProps {
   updatedAt?: string;
   /** "Aziz" yoki "Aziz · Yordamchi ulagich" — oxirgi o'zgartirgan (manba veb panel bo'lmasa ko'rsatiladi); ixtiyoriy. */
   lastChangeBy?: string | null;
+  /** Asosiy video (bo'lsa — muqova ostida kichik karta ko'rsatiladi); ixtiyoriy. */
+  mainVideo?: PostMainVideo | null;
+  onRemoveMainVideo?: () => void | Promise<void>;
+  onOpenVideo?: () => void;
 }
 
 function SettingsCard({
@@ -155,6 +160,9 @@ export function PostEditorSettings({
   publishedAt,
   updatedAt,
   lastChangeBy = null,
+  mainVideo = null,
+  onRemoveMainVideo,
+  onOpenVideo,
 }: PostEditorSettingsProps) {
   const interactivitySwitches = SETTING_SWITCHES.filter((item) => INTERACTIVITY_KEYS.includes(item.key));
   const telegramSwitches = SETTING_SWITCHES.filter((item) => TELEGRAM_SETTING_KEYS.includes(item.key));
@@ -212,6 +220,8 @@ export function PostEditorSettings({
           <Label>Muqova rasm</Label>
           <CoverImagePicker coverUrl={coverUrl} onChange={onCoverChange} />
         </div>
+
+        {mainVideo && onRemoveMainVideo && onOpenVideo ? <MainVideoCard video={mainVideo} fallbackPosterUrl={coverUrl} onRemove={onRemoveMainVideo} onOpenVideo={onOpenVideo} /> : null}
 
         <div className="flex flex-col gap-2" data-editor-field="excerpt">
           <div className="flex items-center justify-between">
