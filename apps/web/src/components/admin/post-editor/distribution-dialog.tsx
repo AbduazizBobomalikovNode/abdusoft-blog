@@ -21,6 +21,7 @@ import { initialVersionId, isVersionDirty, markPrimary, removeVersion, replaceVe
 import { DistributionVersionStrip } from "./distribution-version-strip";
 import { TrashedPanel } from "./distribution-trashed-panel";
 import { SocialPreview } from "./social-preview";
+import { DistributionTelegramPanel, type DistributionTelegramInfo } from "./distribution-telegram-panel";
 import { domainOf } from "./social-preview/text";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "cn";
@@ -421,7 +422,7 @@ function ChannelPanel({ postId, postStatus, channel, item, initialVersions, onCh
 }
 
 /** Post tahrirlagichidagi "Tarqatish" dialogi (Telegram yuborish dialogi yonida). Faqat bayroq yoqilganda ochiladi. */
-export function DistributionDialog({ postId, open, onOpenChange, postStatus = "published" }: { postId: string; open: boolean; onOpenChange: (o: boolean) => void; postStatus?: AdminPostStatus }) {
+export function DistributionDialog({ postId, open, onOpenChange, postStatus = "published", telegram, onOpenTelegram }: { postId: string; open: boolean; onOpenChange: (o: boolean) => void; postStatus?: AdminPostStatus; /** Ixtiyoriy: Telegram yorlig'i xulosasi va oynasini ochish (berilmasa eski matn qoladi). */ telegram?: DistributionTelegramInfo; onOpenTelegram?: () => void }) {
   const [data, setData] = useState<DistributionPostResponse | null>(null);
   const [active, setActive] = useState<DistributionProviderId>("linkedin");
 
@@ -470,7 +471,9 @@ export function DistributionDialog({ postId, open, onOpenChange, postStatus = "p
                 );
               })}
             </div>
-            {channel ? <ChannelPanel key={`${channel.id}-${itemFor(channel.id)?.id ?? "new"}-${itemFor(channel.id)?.status ?? ""}-${postStatus}`} postId={postId} postStatus={postStatus} channel={channel} item={itemFor(channel.id)} initialVersions={data.versions ?? []} onChanged={load} /> : null}
+            {channel?.readOnly && channel.id === "telegram" && telegram && onOpenTelegram ? (
+              <DistributionTelegramPanel postId={postId} info={telegram} onOpenTelegram={() => { onOpenChange(false); onOpenTelegram(); }} />
+            ) : channel ? <ChannelPanel key={`${channel.id}-${itemFor(channel.id)?.id ?? "new"}-${itemFor(channel.id)?.status ?? ""}-${postStatus}`} postId={postId} postStatus={postStatus} channel={channel} item={itemFor(channel.id)} initialVersions={data.versions ?? []} onChanged={load} /> : null}
           </>
         )}
       </DialogContent>

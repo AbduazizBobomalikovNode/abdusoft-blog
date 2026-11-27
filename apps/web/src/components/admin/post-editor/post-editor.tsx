@@ -844,7 +844,7 @@ function PostEditorInner({
         onChoiceChange={setChannelChoice}
       />
 
-      {distributionOn ? <DistributionDialog postId={post.id} postStatus={status} open={distributionOpen} onOpenChange={(o) => { setDistributionOpen(o); if (!o) setDistributionRefresh((n) => n + 1); }} /> : null}
+      {distributionOn ? <DistributionDialog postId={post.id} postStatus={status} open={distributionOpen} onOpenChange={(o) => { setDistributionOpen(o); if (!o) setDistributionRefresh((n) => n + 1); }} telegram={{ choice: channelChoice, plan: channelPlan, sent: Boolean(telegram?.channelMessageId), sentUrl: channelUrl, channelHandle: telegramChannel }} onOpenTelegram={() => setChannelSendOpen(true)} /> : null}
 
       {conflict ? (
         <ConflictBanner

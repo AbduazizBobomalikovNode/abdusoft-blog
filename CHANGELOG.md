@@ -6,6 +6,9 @@
 
 ### O'zbekcha
 
+**Tarqatish: Telegram yorlig'i endi foydali**
+- Dialogdagi Telegram yorlig'ida: tanlangan versiya (belgi, uzunlik, cheklov), kanal rejasi («saytga chiqqach 15 daq»), yuborilgan bo'lsa holat va havola, belgilangan versiyaning Telegram ko'rinishi va «Telegram oynasini ochish» tugmasi (Tarqatish yopiladi, Telegram oynasi ochiladi). Faqat veb: API, yuborish va Claude vositalari o'zgarmagan
+
 **Tarqatish: "saytga chiqqach N daqiqadan keyin" rejasi (Telegram rejasi kabi)**
 - Har bir tarmoq uchun post hali qoralama/ko'rib chiqishda/rejalashtirilgan bo'lganda ham reja qo'yiladi: «Saytga chiqqach» (0/15 daq/1 soat/3 soat/1 kun yoki o'zingiz, 0–10080 daqiqa) yoki avvalgi «Aniq vaqt» (faqat chop etilgan postda, o'zgarmagan). Tabda kutayotgan reja nuqtasi, post tahrirlagichining «Nashr» kartasida barcha tarmoq rejalari ro'yxati («LinkedIn · chiqqach 15 daq · kutmoqda») va «Tarqatishni ochish» tugmasi
 - Post chop etilganda (qo'lda, tasdiqlash, scheduler, Telegram buyrug'i, konnektor) har bir reja «chop etilgan vaqt + N daqiqa»ga rejalashtiriladi, matn shu paytdagi tanlangan versiyadan olinadi va `schedule` bilan bir xil tekshiruvdan o'tadi; o'tmasa qator «Xato» (sababi ko'rinadi). Takroriy chop etishda ikki marta yuborilmaydi; chop etishdan chiqarilsa hali ketmaganlari qoralamaga qaytadi va reja saqlanadi
@@ -33,6 +36,9 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Distribution: the Telegram tab is now useful**
+- The dialog's Telegram tab shows the chosen version (mark, length, limits), the channel plan ("after the site goes live 15 min"), sent status and link, the Telegram preview of the chosen version, and an "open Telegram window" button (closes Tarqatish, opens the Telegram dialog). Web only: API, sending and Claude tools unchanged
 
 **Distribution: "N minutes after the site goes live" plan (like the Telegram plan)**
 - Per network, a plan can be set while the post is still a draft / in review / scheduled: "Saytga chiqqach" (0/15 min/1 h/3 h/1 day or custom, 0-10080 minutes) or the existing "Aniq vaqt" (published posts only, unchanged). A waiting-plan dot on the tab; the post editor's "Nashr" card lists every network plan ("LinkedIn · after 15 min · waiting") with an "open Tarqatish" button
