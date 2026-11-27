@@ -15,8 +15,11 @@
 - Veb: zanjir va raqamlash tugmalari, jonli ko'rinishda bog'lovchi chiziqli tvitlar zanjiri va «3 ta tvit · 2-si 291/280» hisoblagichi. Claude: `x_thread` / `x_thread_numbering` (preview, save, send, schedule, set plan), javobda `threadParts`
 - Additiv migratsiya `0023`: `distributions.x_thread`, `x_thread_numbering`, `thread_ids`. Haqiqiy X akkauntida hali sinalmagan (testlar mock)
 
-**Tarqatish: Telegram yorlig'i endi foydali**
-- Dialogdagi Telegram yorlig'ida: tanlangan versiya (belgi, uzunlik, cheklov), kanal rejasi («saytga chiqqach 15 daq»), yuborilgan bo'lsa holat va havola, belgilangan versiyaning Telegram ko'rinishi va «Telegram oynasini ochish» tugmasi (Tarqatish yopiladi, Telegram oynasi ochiladi). Faqat veb: API, yuborish va Claude vositalari o'zgarmagan
+**Tarqatish: Telegram — hammasi bitta oynada**
+- «Tarqatish» dialogidagi Telegram yorlig'i endi to'liq panel (boshqa tarmoqlar bilan bir xil maket): versiya tanlash va «⭐ Asosiy», maxsus versiya tahrirlagichi, o'ngda jonli Telegram ko'rinishi (belgi bo'lmasa ham standart ko'rinish), Telegram cheklovlari ro'yxati, «Kanalga yuborish»/«Qayta yuborish» (avvalgi tasdiq bilan) va «Saytga chiqqach» rejasi. Alohida «Telegram oynasi»ga o'tish tugmasi olib tashlandi; `ChannelSendDialog` boshqa joylarda (taklif/tayyorlash, postlar ro'yxati) avvalgidek ishlaydi
+- «Saytga chiqqach N daqiqa» tanlagichi (`DelayPlanPicker`: Darhol/15 daq/1 soat/3 soat/1 kun yoki 0–10080 daqiqa) endi BITTA komponent — barcha tarmoq panellari va Telegram bir xil ishlatadi. Telegram uchun aniq vaqt hozircha yo'q (keyingi bosqichda), reja faqat chop etishdan oldin qo'yiladi
+- Post sozlamalaridagi «Nashr» kartasida Telegram reja bloki o'rniga bir qatorli xulosa va «Tarqatishda sozlash» tugmasi (dialog Telegram yorlig'ida ochiladi); Telegram cheklovlari tekshiruvi va «Rejalashtirish»ni bloklash avvalgidek. Tarqatish o'chiq bo'lsa eski blok qoladi
+- Tuzatishlar: LinkedIn/Instagram matni ostidagi yolg'iz «belgi» yozuvi o'rniga «123 belgi qoldi»; X/Threads ko'rinishidagi takroriy bo'sh React kalitlari. Faqat veb: API, ma'lumotlar bazasi va Claude vositalari o'zgarmagan
 
 **Tarqatish: "saytga chiqqach N daqiqadan keyin" rejasi (Telegram rejasi kabi)**
 - Har bir tarmoq uchun post hali qoralama/ko'rib chiqishda/rejalashtirilgan bo'lganda ham reja qo'yiladi: «Saytga chiqqach» (0/15 daq/1 soat/3 soat/1 kun yoki o'zingiz, 0–10080 daqiqa) yoki avvalgi «Aniq vaqt» (faqat chop etilgan postda, o'zgarmagan). Tabda kutayotgan reja nuqtasi, post tahrirlagichining «Nashr» kartasida barcha tarmoq rejalari ro'yxati («LinkedIn · chiqqach 15 daq · kutmoqda») va «Tarqatishni ochish» tugmasi
@@ -55,8 +58,11 @@
 - Web: thread and numbering toggles, a live chain of stacked tweets with a connector line and a "3 ta tvit · 2-si 291/280" counter. Claude: `x_thread` / `x_thread_numbering` (preview, save, send, schedule, set plan), `threadParts` in the output
 - Additive migration `0023`: `distributions.x_thread`, `x_thread_numbering`, `thread_ids`. Not yet tried on a real X account (tests mock the network)
 
-**Distribution: the Telegram tab is now useful**
-- The dialog's Telegram tab shows the chosen version (mark, length, limits), the channel plan ("after the site goes live 15 min"), sent status and link, the Telegram preview of the chosen version, and an "open Telegram window" button (closes Tarqatish, opens the Telegram dialog). Web only: API, sending and Claude tools unchanged
+**Distribution: Telegram, all in one dialog**
+- The Telegram tab in the Tarqatish dialog is now a full panel with the same layout as the other networks: version choice and "⭐ Primary", the custom-version editor, a live Telegram preview on the right (a standard preview even when no version is marked), the Telegram limits checklist, "Send to channel"/"Send again" (same confirm as before) and the "after the site goes live" plan. The separate "open Telegram window" button is gone; `ChannelSendDialog` keeps working at its other entry points (suggest/prepare, posts list)
+- The "N minutes after the site goes live" picker (`DelayPlanPicker`: Now/15 min/1 h/3 h/1 day or 0-10080 minutes) is now ONE component shared by every network panel and Telegram. Telegram has no exact-time mode yet (next stage); its plan can only be set before publishing
+- In the post settings "Publish" card the Telegram plan block is replaced by a one-line summary and a "Configure in Tarqatish" button (opens the dialog on the Telegram tab); the Telegram limits check and the "Schedule" blocking work as before. With Tarqatish off the old block stays
+- Fixes: the lone "belgi" label under the LinkedIn/Instagram text is now "123 belgi qoldi" (characters left); duplicate empty React keys in the X/Threads previews. Web only: API, database and Claude tools unchanged
 
 **Distribution: "N minutes after the site goes live" plan (like the Telegram plan)**
 - Per network, a plan can be set while the post is still a draft / in review / scheduled: "Saytga chiqqach" (0/15 min/1 h/3 h/1 day or custom, 0-10080 minutes) or the existing "Aniq vaqt" (published posts only, unchanged). A waiting-plan dot on the tab; the post editor's "Nashr" card lists every network plan ("LinkedIn · after 15 min · waiting") with an "open Tarqatish" button
