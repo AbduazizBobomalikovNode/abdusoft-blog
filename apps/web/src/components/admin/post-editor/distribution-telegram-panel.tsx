@@ -2,12 +2,13 @@
 
 import { useEffect } from "react";
 import { ExternalLink } from "lucide-react";
-import type { AdminPostStatus, ChannelPlan, ResolvedChannelChoice } from "@blog/shared";
+import type { AdminPostStatus, ChannelPlan, ChannelStatus, ResolvedChannelChoice } from "@blog/shared";
 import { Button } from "@/components/ui/button";
-import { FLUSH_SAVED_HINT, sendGate, telegramPanelMode, telegramPlanEditable, telegramPlanStorageHint, telegramTabSummary } from "@/lib/distribution-telegram";
+import { FLUSH_SAVED_HINT, sendGate, telegramStatusLine, telegramPanelMode, telegramPlanEditable, telegramPlanStorageHint, telegramTabSummary } from "@/lib/distribution-telegram";
 import { ChannelPlanFields } from "./channel-plan-fields";
 import { TelegramPreviewCard } from "./channel-preview";
 import { toSelection, useChannelSend } from "./channel-send-controller";
+import { TelegramSendAt } from "./telegram-send-at";
 import { ChannelCheckStep, ChannelEditStep, ChannelSendAlerts, ChannelVersionStep } from "./channel-send-steps";
 
 export interface DistributionTelegramInfo {
@@ -22,6 +23,10 @@ export interface DistributionTelegramInfo {
   onPlanChange?: (plan: ChannelPlan | null) => void;
   /** Ixtiyoriy: belgilangan versiya o'zgarganda (muharrir xulosasi yangilanadi). */
   onChoiceChange?: (choice: ResolvedChannelChoice | null) => void;
+  /** Ixtiyoriy: serverdagi Telegram holati (`GET /channel/status`) — berilsa holat qatori va (chop etilgan postda) "Aniq vaqt" bloki chiqadi. */
+  status?: ChannelStatus | null;
+  /** Ixtiyoriy: holat o'zgargach (reja qo'yildi/bekor qilindi) qayta yuklash. */
+  onStatusRefresh?: () => void;
 }
 
 /**
@@ -62,7 +67,7 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
     <div className="grid shrink-0 gap-5 lg:grid-cols-2" data-testid="dist-telegram-panel">
       <div className="flex min-w-0 flex-col gap-4">
         <p className="text-xs text-muted-foreground">
-          {summary.sent}
+          {info.status !== undefined ? telegramStatusLine(info.status) : summary.sent}
           {info.sentUrl ? (
             <a href={info.sentUrl} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 underline">Postni ochish <ExternalLink className="size-3" /></a>
           ) : null}
@@ -97,6 +102,10 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
           </div>
         ) : null}
 
+        {sendMode && info.status !== undefined && info.onStatusRefresh ? (
+          <TelegramSendAt postId={postId} status={info.status} onChanged={info.onStatusRefresh} />
+        ) : null}
+
         {planEditable && info.onPlanChange ? (
           <section className="flex flex-col gap-2 border-t border-border pt-3" data-testid="dist-telegram-plan">
             <h3 className="text-sm font-semibold">Telegram rejasi · saytga chiqqach</h3>
@@ -106,9 +115,10 @@ export function DistributionTelegramPanel({ postId, postStatus, info }: { postId
               onChange={info.onPlanChange}
               scheduledAtLocal={info.scheduledAtLocal ?? ""}
               markedChoice={c.versions ? c.markedChoice : info.choice}
+              allowAbsolute
             />
             <p className="text-xs text-muted-foreground">
-              {telegramPlanStorageHint(postStatus)} Telegram uchun faqat «Saytga chiqqach» rejimi bor — aniq vaqt keyingi bosqichda.
+              {telegramPlanStorageHint(postStatus)} «Aniq vaqt» tanlansa, post chiqqach ham o&apos;sha paytgacha kutiladi.
             </p>
           </section>
         ) : null}

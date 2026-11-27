@@ -37,6 +37,9 @@ export const ADMIN_ROUTE_TOOLS: Readonly<Record<string, readonly string[]>> = {
   "DELETE /admin/posts/:id/channel/versions/:vid": ["delete_channel_version"],
   "PUT /admin/posts/:id/channel/choice": ["set_channel_choice"],
   "DELETE /admin/posts/:id/channel/choice": ["clear_channel_choice"],
+  "GET /admin/posts/:id/channel/status": ["get_post"], // plan (kechikish/aniq vaqt) + sendAt get_post'ning `channel` blokida
+  "PUT /admin/posts/:id/channel/schedule": ["set_channel_plan"],
+  "DELETE /admin/posts/:id/channel/schedule": ["cancel_channel_plan"],
   "POST /admin/posts/:id/channel/send": ["send_to_channel"],
   "POST /admin/posts/:id/channel/resync-caption": ["resync_channel_caption"],
   // media va teglar
