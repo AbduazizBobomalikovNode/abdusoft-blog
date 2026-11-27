@@ -6,6 +6,12 @@
 
 ### O'zbekcha
 
+**Tarqatish: "saytga chiqqach N daqiqadan keyin" rejasi (Telegram rejasi kabi)**
+- Har bir tarmoq uchun post hali qoralama/ko'rib chiqishda/rejalashtirilgan bo'lganda ham reja qo'yiladi: «Saytga chiqqach» (0/15 daq/1 soat/3 soat/1 kun yoki o'zingiz, 0–10080 daqiqa) yoki avvalgi «Aniq vaqt» (faqat chop etilgan postda, o'zgarmagan). Tabda kutayotgan reja nuqtasi, post tahrirlagichining «Nashr» kartasida barcha tarmoq rejalari ro'yxati («LinkedIn · chiqqach 15 daq · kutmoqda») va «Tarqatishni ochish» tugmasi
+- Post chop etilganda (qo'lda, tasdiqlash, scheduler, Telegram buyrug'i, konnektor) har bir reja «chop etilgan vaqt + N daqiqa»ga rejalashtiriladi, matn shu paytdagi tanlangan versiyadan olinadi va `schedule` bilan bir xil tekshiruvdan o'tadi; o'tmasa qator «Xato» (sababi ko'rinadi). Takroriy chop etishda ikki marta yuborilmaydi; chop etishdan chiqarilsa hali ketmaganlari qoralamaga qaytadi va reja saqlanadi
+- Claude konnektori: `set_distribution_plan`, `clear_distribution_plan` (`social:post`); ro'yxat/holat javoblarida `planDelayMinutes`
+- Telegram rejasi o'zgarmagan. Additiv migratsiya `0022`: `distributions.plan_delay_minutes`, `distributions.plan_materialized_at` (nullable)
+
 **Tarqatish: nomli versiyalar (har bir tarmoq uchun, "asosiy" belgisi bilan)**
 - LinkedIn, X, Threads, Instagram: har bir post+kanal uchun 10 tagacha nomli matn versiyasi, bittasi «Asosiy»; dialog asosiy versiyada ochiladi. Matn ustida versiyalar qatori («Standart» + versiyalar + «Yangi versiya»), nomini o'zgartirish, «Asosiy qilish», o'chirish; tahrir 800 ms dan keyin o'zi saqlanadi; oldindan ko'rish tahrirlagichni kuzatadi
 - Claude konnektori: `list_distribution_versions`, `create_distribution_version`, `update_distribution_version`, `delete_distribution_version`, `set_distribution_primary` (`social:post`); `send_distribution`/`schedule_distribution` ixtiyoriy `version_id` qabul qiladi
@@ -27,6 +33,12 @@
 - Yangi nullable ustun `posts.main_video` (additiv migratsiya `0020`); asosiy video qilingan ish o'chirilmaydi
 
 ### English
+
+**Distribution: "N minutes after the site goes live" plan (like the Telegram plan)**
+- Per network, a plan can be set while the post is still a draft / in review / scheduled: "Saytga chiqqach" (0/15 min/1 h/3 h/1 day or custom, 0-10080 minutes) or the existing "Aniq vaqt" (published posts only, unchanged). A waiting-plan dot on the tab; the post editor's "Nashr" card lists every network plan ("LinkedIn · after 15 min · waiting") with an "open Tarqatish" button
+- When the post is published (manual, approve, scheduler, Telegram command, connector) each plan is scheduled at "publish time + N minutes", the text comes from the selected version at that moment and goes through the same checks as `schedule`; if they fail the row becomes "Xato" with the reason. Republishing never sends twice; unpublishing returns not-yet-sent items to draft and keeps the plan
+- Claude connector: `set_distribution_plan`, `clear_distribution_plan` (`social:post`); list/status output includes `planDelayMinutes`
+- The Telegram plan is unchanged. Additive migration `0022`: `distributions.plan_delay_minutes`, `distributions.plan_materialized_at` (nullable)
 
 **Distribution: named versions per network, with a "primary" mark**
 - LinkedIn, X, Threads, Instagram: up to 10 named text versions per post + channel, one of them "Asosiy" (primary); the dialog opens on the primary one. A strip above the text ("Standart" + versions + "Yangi versiya"), rename, "Asosiy qilish", delete; edits autosave after 800 ms; the live preview keeps following the editor
